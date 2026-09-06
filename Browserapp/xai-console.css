@@ -1059,6 +1059,18 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions {
   border-top: 1px solid var(--xai-border-subtle);
   box-shadow: none;
 }
+
+/* Remove the heavy top rule and clip card surfaces to their rounded corners. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+  box-shadow: none;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor {
+  background: var(--xai-warm);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+  overflow: hidden;
+  background: var(--xai-white);
+}
 html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions button {
   flex: 0 0 auto;
   min-width: 96px;
