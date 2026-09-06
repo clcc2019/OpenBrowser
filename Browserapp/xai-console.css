@@ -1981,3 +1981,9 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-save-state[data
   html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-action-buttons button,
   html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head button { min-height: 44px; }
 }
+
+/* Final editor chrome overrides: remove the top rule entirely. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+  box-shadow: none !important;
+  border-top: 0 !important;
+}
