@@ -2124,3 +2124,22 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor:not(.active) {
 html[data-ui-theme="merge-gateway"] #view-profile-editor.active {
   display: block !important;
 }
+
+/* Keep every editor category on the same warm canvas; only controls and the
+   summary card use white surfaces. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor .advanced-card,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .privacy-grid {
+  background: transparent !important;
+  border-color: var(--xai-border-subtle) !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .advanced-card {
+  border-bottom: 1px solid var(--xai-border-subtle);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .segmented {
+  background: rgb(10 10 10 / 4%) !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button.active {
+  color: var(--xai-inverse) !important;
+  background: var(--xai-ink-console) !important;
+  border-color: var(--xai-ink-console) !important;
+}
