@@ -2116,3 +2116,11 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions button 
     box-shadow: none;
   }
 }
+
+/* Preserve view switching: the editor is visible only when explicitly active. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor:not(.active) {
+  display: none !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor.active {
+  display: block !important;
+}
