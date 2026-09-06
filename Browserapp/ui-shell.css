@@ -1859,3 +1859,12 @@ button.mini-btn {
   margin: 0;
   cursor: pointer;
 }
+
+/* Full-width responsive content: let the workspace expand with the window. */
+html, body { min-width: 0; }
+.app-shell, .content, .content > main, .content > header, .view {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+}
+.content > main { box-sizing: border-box; }
