@@ -1458,6 +1458,55 @@ html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini.da
   border-color: var(--xai-danger);
 }
 
+/* Profile editor redesign: each tab reads as a focused work surface. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+  box-shadow: inset 0 3px 0 var(--xai-ink-console);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
+  box-shadow: 0 4px 14px -12px rgb(9 9 9 / 35%);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--xai-space-6);
+  background: var(--xai-warm);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+  padding: var(--xai-space-6);
+  background: var(--xai-white);
+  border: 1px solid var(--xai-border);
+  border-radius: var(--xai-radius-card);
+  box-shadow: var(--xai-shadow-card);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active > h3 {
+  display: block;
+  margin: 0 0 var(--xai-space-5);
+  padding-bottom: var(--xai-space-3);
+  color: var(--xai-ink-console);
+  border-bottom: 1px solid var(--xai-border-subtle);
+  font: 500 20px/27px var(--xai-font-display);
+  letter-spacing: -.3px;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary {
+  border: 1px solid var(--xai-border);
+  box-shadow: var(--xai-shadow-card);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form input:hover,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form select:hover,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form textarea:hover {
+  border-color: var(--xai-border-hover);
+}
+
+@media (max-width: 1024px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+    gap: var(--xai-space-4);
+    background: var(--xai-white);
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+    padding: var(--xai-space-5);
+    box-shadow: none;
+  }
+}
+
 html[data-ui-theme="merge-gateway"] #view-api-mcp .rpa-row {
   align-items: center; gap: var(--xai-space-2); margin-bottom: var(--xai-space-3);
 }
