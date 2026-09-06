@@ -1987,3 +1987,9 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
   box-shadow: none !important;
   border-top: 0 !important;
 }
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
+  top: calc(var(--titlebar-content-offset, 0px) + var(--editor-head-stack, 64px)) !important;
+  z-index: 11 !important;
+  background: var(--xai-warm) !important;
+  border-bottom: 1px solid var(--xai-border-subtle) !important;
+}
