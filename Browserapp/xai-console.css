@@ -1423,6 +1423,41 @@ html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini {
   white-space: nowrap;
 }
 
+/* Profile list refinement: a clear control rail and steadier row rhythm. */
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar {
+  align-items: center;
+  padding: var(--xai-space-2) 0 var(--xai-space-3);
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--xai-border-subtle);
+}
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--xai-warm) !important;
+  color: var(--xai-secondary);
+  letter-spacing: .01em;
+}
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr {
+  transition: background-color var(--xai-duration-fast) var(--xai-ease-standard);
+}
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr:hover td {
+  background: var(--xai-fill-soft);
+}
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card td.col-profile-id {
+  color: var(--xai-secondary);
+  font-size: 11px !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: var(--xai-shadow-button);
+}
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini.danger:hover:not(:disabled) {
+  color: var(--xai-inverse);
+  background: var(--xai-danger);
+  border-color: var(--xai-danger);
+}
+
 html[data-ui-theme="merge-gateway"] #view-api-mcp .rpa-row {
   align-items: center; gap: var(--xai-space-2); margin-bottom: var(--xai-space-3);
 }
