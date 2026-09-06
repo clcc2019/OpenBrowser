@@ -1996,3 +1996,12 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
 html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
   top: 0 !important;
 }
+html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+  padding-bottom: 0 !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions {
+  margin-bottom: 0 !important;
+}
+html[data-ui-theme="merge-gateway"] body:has(#view-profile-editor.active) main {
+  padding-bottom: 0 !important;
+}
