@@ -1,7 +1,7 @@
 {
   "name": "openbrowser",
   "productName": "OpenBrowser",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "OpenBrowser：本地浏览器环境、扩展与窗口同步管理器",
   "main": "main.js",
   "private": true,
@@ -20,6 +20,7 @@
     "selftest:startup": "node browser-startup-diagnostic-selftest.js",
     "selftest:cloud": "node automation/cloud-sync-security-selftest.js",
     "selftest:localapi": "node automation/local-api-profile-selftest.js",
+    "selftest:mcp": "node automation/mcp-control-selftest.js",
     "selftest:profiles": "node profile-workflow-selftest.js",
     "selftest:viewport": "node viewport-resize-selftest.js",
     "log:startup": "node scripts/read-startup-log.js",
@@ -34,11 +35,14 @@
     "selftest:themes": "node theme-nes-light-selftest.js && node theme-retro-desktop-selftest.js",
     "selftest:fplog": "node fingerprint-log-growth-selftest.js",
     "selftest:syncslave": "node sync-slave-isolation-selftest.js",
+    "selftest:lifecycle": "node lifecycle-selftest.js",
+    "selftest:fullscreen": "node fullscreen-window-sync-selftest.js",
     "selftest:hooks": "node fingerprint-native-hooks-selftest.js",
     "selftest:persona": "node device-persona-selftest.js",
     "selftest:devprofile": "node device-profile-wiring-selftest.js",
     "selftest:fonts": "node font-persona-selftest.js",
-    "selftest:artifacts": "node env-artifact-cache-selftest.js"
+    "selftest:artifacts": "node env-artifact-cache-selftest.js",
+    "selftest:apikey": "node automation/api-key-store-selftest.js"
   },
   "devDependencies": {
     "desktop-shell": "npm:electron@43.1.1",

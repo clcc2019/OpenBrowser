@@ -21,6 +21,10 @@ function makeEngineStub() {
   engine.profiles = new Map();
   engine.networkInfo = new Map();
   engine.running = new Map();
+  engine.starting = new Map();
+  engine.stopping = new Map();
+  engine.extensions = new Map();
+  engine.assignments = new Map();
   engine.listeners = new Set();
   engine.persist = async () => {};
   engine.emit = () => {};
@@ -34,6 +38,7 @@ function makeEngineStub() {
   engine.prepareProfileProxyForStart = BrowserEngine.prototype.prepareProfileProxyForStart.bind(engine);
   engine.refreshProfileProxy = BrowserEngine.prototype.refreshProfileProxy.bind(engine);
   engine.applyResolvedLocale = BrowserEngine.prototype.applyResolvedLocale.bind(engine);
+  engine.restoreStoredProxyCredentials = BrowserEngine.prototype.restoreStoredProxyCredentials.bind(engine);
   return engine;
 }
 
@@ -237,6 +242,95 @@ async function main() {
   assert.strictEqual(store.get(item.id).lastCheckOk, false);
   assert.strictEqual(store.get(item.id).lastErrorClass, 'auth');
   fs.rmSync(dir, { recursive: true, force: true });
+
+  // UI localStorage redacts proxy auth. Start must restore credentials from engine state
+  // when host:port still match, otherwise Chrome launches without the local auth bridge.
+  const credEngine = makeEngineStub();
+  const stored = credEngine.sanitizeProfile({
+    id: 'prof_proxy_auth_restore',
+    name: 'auth-restore',
+    networkMode: 'proxy',
+    proxy: 'http://user:secret@14.224.225.102:19125',
+  });
+  credEngine.profiles.set(stored.id, stored);
+  const redacted = credEngine.sanitizeProfile({
+    id: stored.id,
+    name: stored.name,
+    networkMode: 'proxy',
+    proxy: 'http://14.224.225.102:19125/',
+  });
+  const restored = credEngine.restoreStoredProxyCredentials(redacted);
+  assert.ok(restored.proxy.includes('user:secret@'), 'redacted UI proxy must restore stored credentials, got ' + restored.proxy);
+  assert.strictEqual(restored.networkMode, 'proxy');
+  const otherHost = credEngine.restoreStoredProxyCredentials(credEngine.sanitizeProfile({
+    id: stored.id,
+    name: stored.name,
+    networkMode: 'proxy',
+    proxy: 'http://10.0.0.1:8080',
+  }));
+  assert.ok(!otherHost.proxy.includes('user:secret@'), 'must not copy credentials onto a different host:port');
+
+  let libraryRaw = 'socks5://library-user:library-pass@library.test:1080';
+  credEngine.proxyStore = {
+    get(id) {
+      return id === 'library-proxy' ? {
+        id,
+        raw: libraryRaw,
+        ipChannel: 'ip-api',
+        refreshUrl: 'https://refresh.invalid/',
+      } : null;
+    },
+  };
+  const linked = credEngine.resolveStoredProxyProfile(credEngine.sanitizeProfile({
+    id: 'prof_proxy_library',
+    name: 'library-linked',
+    networkMode: 'proxy',
+    proxy: 'socks5://library.test:1080',
+    proxy_id: 'library-proxy',
+  }));
+  assert.strictEqual(linked.proxyId, 'library-proxy');
+  assert.strictEqual(linked.proxyMeta.proxyId, 'library-proxy');
+  assert.ok(linked.proxy.includes('library-user:library-pass@'), 'linked start must hydrate latest full credentials');
+
+  credEngine.profiles.set(linked.id, linked);
+  libraryRaw = 'socks5://rotated-user:rotated-pass@rotated-library.test:2080';
+  await credEngine.syncProfiles([{ ...linked }]);
+  const rotatedLinked = credEngine.profiles.get(linked.id);
+  assert.strictEqual(rotatedLinked.proxyId, 'library-proxy');
+  assert.ok(rotatedLinked.proxy.includes('rotated-user:rotated-pass@rotated-library.test:2080'), 'linked sync/start must use current ProxyStore raw');
+
+  await credEngine.syncProfiles([{
+    ...rotatedLinked,
+    proxy: 'http://manual-user:manual-pass@manual-edit.test:8080',
+  }]);
+  const manuallyUnlinked = credEngine.profiles.get(linked.id);
+  assert.strictEqual(manuallyUnlinked.proxyId, null, 'manual proxy edit must clear top-level library association');
+  assert.strictEqual(manuallyUnlinked.proxyMeta.proxyId, null, 'manual proxy edit must clear proxyMeta library association');
+  assert.ok(manuallyUnlinked.proxy.includes('manual-user:manual-pass@manual-edit.test:8080'));
+
+  const directUnlinked = credEngine.sanitizeProfile({
+    ...rotatedLinked,
+    networkMode: 'direct',
+    proxy: 'Direct',
+    proxyId: null,
+    proxy_id: 'stale-snake-id',
+    proxyMeta: { ...linked.proxyMeta, proxyId: 'stale-meta-id', proxy_id: 'stale-meta-snake-id' },
+  });
+  assert.strictEqual(directUnlinked.proxyId, null);
+  assert.strictEqual(directUnlinked.proxyMeta.proxyId, null);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(directUnlinked, 'proxy_id'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(directUnlinked.proxyMeta, 'proxy_id'), false);
+
+  const deletedLibraryFallback = credEngine.resolveStoredProxyProfile(credEngine.sanitizeProfile({
+    id: 'prof_deleted_library',
+    name: 'deleted-library',
+    networkMode: 'proxy',
+    proxy: 'http://manual-user:manual-pass@manual.test:8080',
+    proxyLibraryId: 'deleted-proxy',
+  }));
+  assert.strictEqual(deletedLibraryFallback.proxyId, null);
+  assert.strictEqual(deletedLibraryFallback.proxyMeta.proxyId, null);
+  assert.ok(deletedLibraryFallback.proxy.includes('manual-user:manual-pass@'));
 
   // --- renderer wiring integrity ---
   const renderer = fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8');

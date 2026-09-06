@@ -49,10 +49,22 @@ function mulberry32(a) {
 // WebGL vendor/renderer presets + optional GPUAdapterInfo
 const WEBGL_PRESETS = {
   windows: [
-    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
-    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen9' } },
-    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4090 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ada' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4080 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ada' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ada' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
     { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'ampere' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 2060 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
+    { vendor: 'Google Inc. (NVIDIA)', renderer: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'nvidia', architecture: 'turing' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'alchemist' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen12' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 770 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen12' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'intel', architecture: 'gen9' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 7900 XTX Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-3' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6800 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-2' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-2' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
   ],
   macos: [
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1, OpenGL 4.1)', gpu: { vendor: 'apple', architecture: 'common-3' } },
@@ -721,10 +733,10 @@ function buildFingerprint(profile = {}) {
       gpu: devicePersona.webgl.gpu || webglPreset.gpu,
     };
   }
-  const webglGpu = (fpIn.webgpu && typeof fpIn.webgpu === 'object')
+  const webglGpu = ((fpIn.webgpu && typeof fpIn.webgpu === 'object') || fpIn.gpuVendor || fpIn.gpuArchitecture)
     ? {
-      vendor: String(fpIn.webgpu.vendor || fpIn.gpuVendor || webglPreset.gpu?.vendor || ''),
-      architecture: String(fpIn.webgpu.architecture || fpIn.gpuArchitecture || webglPreset.gpu?.architecture || ''),
+      vendor: String(fpIn.webgpu?.vendor || fpIn.gpuVendor || webglPreset.gpu?.vendor || ''),
+      architecture: String(fpIn.webgpu?.architecture || fpIn.gpuArchitecture || webglPreset.gpu?.architecture || ''),
     }
     : (webglPreset.gpu || null);
 
@@ -823,6 +835,22 @@ function buildFingerprint(profile = {}) {
   const webglRenderer = (webglMetaMode === 'real')
     ? null
     : (webglMetaMode === 'blocked' ? '' : (fpIn.webglRenderer || webglPreset.renderer));
+  if (webglGpu && webglMetaMode !== 'real') {
+    const v = String(webglVendor || webglRenderer || '').toLowerCase();
+    if (v.includes('nvidia') && webglGpu.vendor !== 'nvidia') {
+      webglGpu.vendor = 'nvidia';
+      if (!webglGpu.architecture) webglGpu.architecture = 'ampere';
+    } else if (v.includes('intel') && webglGpu.vendor !== 'intel') {
+      webglGpu.vendor = 'intel';
+      if (!webglGpu.architecture) webglGpu.architecture = 'gen12';
+    } else if ((v.includes('amd') || v.includes('radeon')) && webglGpu.vendor !== 'amd') {
+      webglGpu.vendor = 'amd';
+      if (!webglGpu.architecture) webglGpu.architecture = 'rdna-2';
+    } else if (v.includes('apple') && webglGpu.vendor !== 'apple') {
+      webglGpu.vendor = 'apple';
+      if (!webglGpu.architecture) webglGpu.architecture = 'common-3';
+    }
+  }
   const webgl = {
     mode: webglMode,
     metaMode: webglMetaMode,
@@ -1394,34 +1422,78 @@ function buildInjectionScript(fp) {
   // --- screen ---
   try {
     const s = CFG.screen || {};
-    for (const [key, value] of Object.entries({
-      width: s.width, height: s.height, availWidth: s.availWidth, availHeight: s.availHeight,
-      availLeft: s.availLeft, availTop: s.availTop,
-      colorDepth: s.colorDepth, pixelDepth: s.pixelDepth,
-    })) {
-      if (value == null) continue;
-      try { Object.defineProperty(Screen.prototype, key, nativeAccessor(key, { configurable: true, get: () => value })); } catch (_) {}
+    const baseScreenWidth = Number(s.width) || 0;
+    const baseScreenHeight = Number(s.height) || 0;
+    const baseAvailWidth = Number(s.availWidth) || baseScreenWidth;
+    const baseAvailHeight = Number(s.availHeight) || (baseScreenHeight ? Math.max(0, baseScreenHeight - 40) : 0);
+
+    const rawWinWidthDesc = Object.getOwnPropertyDescriptor(window, 'innerWidth') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'innerWidth');
+    const rawInnerWidthGet = rawWinWidthDesc?.get ? () => rawWinWidthDesc.get.call(window) : null;
+    const rawWinHeightDesc = Object.getOwnPropertyDescriptor(window, 'innerHeight') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'innerHeight');
+    const rawInnerHeightGet = rawWinHeightDesc?.get ? () => rawWinHeightDesc.get.call(window) : null;
+
+    const rawVisualViewport = window.visualViewport;
+    const rawVisualWidthDesc = rawVisualViewport ? (Object.getOwnPropertyDescriptor(rawVisualViewport, 'width') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(rawVisualViewport), 'width')) : null;
+    const rawVisualWidthGet = rawVisualWidthDesc?.get ? () => rawVisualWidthDesc.get.call(rawVisualViewport) : null;
+    const rawVisualHeightDesc = rawVisualViewport ? (Object.getOwnPropertyDescriptor(rawVisualViewport, 'height') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(rawVisualViewport), 'height')) : null;
+    const rawVisualHeightGet = rawVisualHeightDesc?.get ? () => rawVisualHeightDesc.get.call(rawVisualViewport) : null;
+
+    const liveViewportSize = (axis, fallback) => {
+      try {
+        if (axis === 'width') {
+          if (typeof rawVisualWidthGet === 'function') {
+            const vw = Number(rawVisualWidthGet());
+            if (Number.isFinite(vw) && vw > 0) return Math.round(vw);
+          }
+          if (typeof rawInnerWidthGet === 'function') {
+            const rawW = Number(rawInnerWidthGet());
+            if (Number.isFinite(rawW) && rawW > 0) return Math.round(rawW);
+          }
+        } else {
+          if (typeof rawVisualHeightGet === 'function') {
+            const vh = Number(rawVisualHeightGet());
+            if (Number.isFinite(vh) && vh > 0) return Math.round(vh);
+          }
+          if (typeof rawInnerHeightGet === 'function') {
+            const rawH = Number(rawInnerHeightGet());
+            if (Number.isFinite(rawH) && rawH > 0) return Math.round(rawH);
+          }
+        }
+        const root = document && document.documentElement;
+        const rootVal = axis === 'width' ? Number(root?.clientWidth) : Number(root?.clientHeight);
+        if (Number.isFinite(rootVal) && rootVal > 0) return Math.round(rootVal);
+        const body = document && document.body;
+        const bodyVal = axis === 'width' ? Number(body?.clientWidth) : Number(body?.clientHeight);
+        if (Number.isFinite(bodyVal) && bodyVal > 0) return Math.round(bodyVal);
+      } catch (_) {}
+      return fallback;
+    };
+
+    const dynamicScreen = {
+      width: () => (baseScreenWidth ? Math.max(baseScreenWidth, liveViewportSize('width', baseScreenWidth)) : liveViewportSize('width', 1920)),
+      height: () => (baseScreenHeight ? Math.max(baseScreenHeight, liveViewportSize('height', baseScreenHeight)) : liveViewportSize('height', 1080)),
+      availWidth: () => (baseAvailWidth ? Math.max(baseAvailWidth, liveViewportSize('width', baseAvailWidth)) : liveViewportSize('width', 1920)),
+      availHeight: () => (baseAvailHeight ? Math.max(baseAvailHeight, liveViewportSize('height', baseAvailHeight)) : liveViewportSize('height', 1040)),
+      availLeft: () => s.availLeft ?? 0,
+      availTop: () => s.availTop ?? 0,
+      colorDepth: () => s.colorDepth ?? 24,
+      pixelDepth: () => s.pixelDepth ?? 24,
+    };
+
+    for (const [key, getter] of Object.entries(dynamicScreen)) {
+      try { Object.defineProperty(Screen.prototype, key, nativeAccessor(key, { configurable: true, get: getter })); } catch (_) {}
     }
     try { Object.defineProperty(window, 'devicePixelRatio', nativeAccessor('devicePixelRatio', { configurable: true, get: () => s.devicePixelRatio || 1 })); } catch (_) {}
     for (const [key, value] of Object.entries({ screenX: s.screenX, screenY: s.screenY, screenLeft: s.screenX, screenTop: s.screenY })) {
       try { Object.defineProperty(window, key, nativeAccessor(key, { configurable: true, get: () => value || 0 })); } catch (_) {}
     }
-    // Some native anti-detect kernels pin Window/VisualViewport dimensions to the
-    // fingerprint screen size. CSS layout still resizes, but JS sees the stale value,
-    // breaking responsive sites and leaving fixed-width content after window resize.
-    // Keep screen.* spoofed while exposing the live desktop layout viewport.
-    const liveViewportSize = (axis, fallback) => {
-      try {
-        const root = document && document.documentElement;
-        const value = axis === 'width' ? root?.clientWidth : root?.clientHeight;
-        if (Number(value) > 0) return Number(value);
-      } catch (_) {}
-      return fallback;
-    };
+
     const initialInnerWidth = Number(window.innerWidth) || Number(s.availWidth) || Number(s.width) || 1;
     const initialInnerHeight = Number(window.innerHeight) || Number(s.availHeight) || Number(s.height) || 1;
     try { Object.defineProperty(window, 'innerWidth', nativeAccessor('innerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
     try { Object.defineProperty(window, 'innerHeight', nativeAccessor('innerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
+    try { Object.defineProperty(window, 'outerWidth', nativeAccessor('outerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
+    try { Object.defineProperty(window, 'outerHeight', nativeAccessor('outerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
     try {
       const viewport = window.visualViewport;
       if (viewport) {
@@ -1429,6 +1501,74 @@ function buildInjectionScript(fp) {
         const initialVisualHeight = Number(viewport.height) || initialInnerHeight;
         Object.defineProperty(viewport, 'width', nativeAccessor('width', { configurable: true, get: () => liveViewportSize('width', initialVisualWidth) }));
         Object.defineProperty(viewport, 'height', nativeAccessor('height', { configurable: true, get: () => liveViewportSize('height', initialVisualHeight) }));
+      }
+    } catch (_) {}
+    try {
+      Object.defineProperty(document, 'fullscreenEnabled', nativeAccessor('fullscreenEnabled', { configurable: true, get: () => true }));
+      Object.defineProperty(document, 'webkitFullscreenEnabled', nativeAccessor('webkitFullscreenEnabled', { configurable: true, get: () => true }));
+    } catch (_) {}
+    try {
+      const origReqFs = Element.prototype.requestFullscreen || Element.prototype.webkitRequestFullscreen;
+      if (typeof origReqFs === 'function') {
+        const patchedReqFs = nativeLike(function requestFullscreen(options) {
+          try {
+            const res = origReqFs.call(this, options);
+            if (res && typeof res.catch === 'function') {
+              return res.catch(() => {
+                if (typeof this.webkitRequestFullscreen === 'function' && this.webkitRequestFullscreen !== requestFullscreen) {
+                  try { this.webkitRequestFullscreen(options); } catch (_) {}
+                }
+                return Promise.resolve();
+              });
+            }
+            return res || Promise.resolve();
+          } catch (_) {
+            if (typeof this.webkitRequestFullscreen === 'function' && this.webkitRequestFullscreen !== requestFullscreen) {
+              try { this.webkitRequestFullscreen(options); } catch (_) {}
+            }
+            return Promise.resolve();
+          }
+        }, origReqFs);
+        try { Element.prototype.requestFullscreen = patchedReqFs; } catch (_) {}
+        try { Element.prototype.webkitRequestFullscreen = patchedReqFs; } catch (_) {}
+      }
+    } catch (_) {}
+    try {
+      const ensureIframeFullscreen = (node) => {
+        if (!node || node.nodeType !== 1 || node.tagName !== 'IFRAME') return;
+        try {
+          if (!node.hasAttribute('allowfullscreen')) node.setAttribute('allowfullscreen', 'true');
+          if (!node.hasAttribute('webkitallowfullscreen')) node.setAttribute('webkitallowfullscreen', 'true');
+          const curAllow = node.getAttribute('allow') || '';
+          if (!curAllow.includes('fullscreen')) {
+            node.setAttribute('allow', (curAllow ? curAllow + '; ' : '') + 'fullscreen *; autoplay *');
+          }
+        } catch (_) {}
+      };
+      try {
+        if (typeof document.querySelectorAll === 'function') {
+          document.querySelectorAll('iframe').forEach(ensureIframeFullscreen);
+        }
+      } catch (_) {}
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+          try {
+            document.querySelectorAll('iframe').forEach(ensureIframeFullscreen);
+          } catch (_) {}
+        }, { once: true });
+      }
+      if (typeof MutationObserver === 'function' && document.documentElement) {
+        const observer = new MutationObserver((mutations) => {
+          for (const m of mutations) {
+            for (const n of m.addedNodes) {
+              ensureIframeFullscreen(n);
+              if (n.querySelectorAll) {
+                try { n.querySelectorAll('iframe').forEach(ensureIframeFullscreen); } catch (_) {}
+              }
+            }
+          }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
       }
     } catch (_) {}
   } catch (_) {}
@@ -1564,13 +1704,34 @@ function buildInjectionScript(fp) {
           return result;
         });
       };
+      const patchGetExtension = (proto) => {
+        if (!proto || !proto.getExtension) return;
+        replaceMethod(proto, 'getExtension', (original) => function(name) {
+          if (metaMode === 'blocked' && String(name).toLowerCase() === 'webgl_debug_renderer_info') return null;
+          return original.apply(this, arguments);
+        });
+      };
+      const patchGetSupportedExtensions = (proto) => {
+        if (!proto || !proto.getSupportedExtensions) return;
+        replaceMethod(proto, 'getSupportedExtensions', (original) => function() {
+          const list = original.apply(this, arguments);
+          if (metaMode === 'blocked' && Array.isArray(list)) {
+            return list.filter((ext) => String(ext).toLowerCase() !== 'webgl_debug_renderer_info');
+          }
+          return list;
+        });
+      };
       if (globalThis.WebGLRenderingContext) {
         patchGetParameter(WebGLRenderingContext.prototype);
         patchReadPixels(WebGLRenderingContext.prototype);
+        patchGetExtension(WebGLRenderingContext.prototype);
+        patchGetSupportedExtensions(WebGLRenderingContext.prototype);
       }
       if (globalThis.WebGL2RenderingContext) {
         patchGetParameter(WebGL2RenderingContext.prototype);
         patchReadPixels(WebGL2RenderingContext.prototype);
+        patchGetExtension(WebGL2RenderingContext.prototype);
+        patchGetSupportedExtensions(WebGL2RenderingContext.prototype);
       }
       // Wrap getContext so every GL instance inherits patched getParameter even if
       // prototypes were frozen after first context creation.
@@ -2147,7 +2308,11 @@ function chromeArgsForFingerprint(fp, profile = {}) {
       '--enforce-webrtc-ip-permission-check'
     );
   }
-  if (fp.webgl?.mode === 'blocked') args.push('--disable-webgl', '--disable-webgl2', '--disable-3d-apis');
+  if (fp.webgl?.mode === 'blocked') {
+    args.push('--disable-webgl', '--disable-webgl2', '--disable-3d-apis');
+  } else {
+    args.push('--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-compositing');
+  }
   if (fp.audio?.mode === 'muted' || profile.privacy?.audio === 'muted') args.push('--mute-audio');
   if (fp.doNotTrack === '1' || profile.privacy?.dnt || profile.privacy?.dntMode === 'on') args.push('--do-not-track');
   // Use full BCP47 when present (ja-JP / zh-CN); Chrome accepts --lang=ja-JP

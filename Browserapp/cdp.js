@@ -57,26 +57,64 @@ class PersistentConnection {
   constructor(webSocketUrl, options = {}) {
     this.webSocketUrl = webSocketUrl;
     this.onEvent = typeof options.onEvent === 'function' ? options.onEvent : null;
+    this.onDisconnect = typeof options.onDisconnect === 'function' ? options.onDisconnect : null;
     this.nextId = 1;
     this.pending = new Map();
     this.socket = options.socket || null;
     this.closed = false;
+    this.opened = false;
+    this.disconnectNotified = false;
   }
 
   async open(timeout = 6000) {
     if (typeof WebSocket !== 'function') throw new Error('WebSocket API is unavailable in this host runtime');
+    if (this.closed) throw new Error('CDP persistent connection is closed');
     await new Promise((resolve, reject) => {
       const socket = new WebSocket(this.webSocketUrl);
       this.socket = socket;
-      const timer = setTimeout(() => { try { socket.close(); } catch (_) {} reject(new Error('CDP connection timeout')); }, timeout);
-      socket.addEventListener('open', () => { clearTimeout(timer); resolve(); });
+      let settled = false;
+      const fail = (error, closeSocket = false) => {
+        const value = error instanceof Error ? error : new Error(String(error || 'CDP persistent socket failed'));
+        // Do not leave a disconnected transport available for later commands. A stale
+        // socket would otherwise make those commands wait until their individual timeout.
+        if (this.socket === socket) {
+          this.socket = null;
+          this.closed = true;
+        }
+        const unexpectedDisconnect = this.opened && !this.disconnectNotified;
+        this.opened = false;
+        this.failAll(value);
+        if (unexpectedDisconnect) {
+          this.disconnectNotified = true;
+          try { this.onDisconnect?.(value, this); } catch (_) {}
+        }
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (closeSocket) {
+          try { socket.close(); } catch (_) {}
+        }
+        reject(value);
+      };
+      const timer = setTimeout(() => {
+        fail(new Error('CDP connection timeout'));
+        try { socket.close(); } catch (_) {}
+      }, timeout);
+      socket.addEventListener('open', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.opened = true;
+        resolve();
+      });
       socket.addEventListener('message', (event) => this.handleMessage(event));
       socket.addEventListener('error', () => {
-        clearTimeout(timer);
-        if (!this.closed) this.failAll(new Error('CDP persistent socket error'));
+        const error = new Error('CDP persistent socket error');
+        if (!this.closed) fail(error, true);
       });
       socket.addEventListener('close', () => {
-        if (!this.closed) this.failAll(new Error('CDP persistent socket closed'));
+        const error = new Error('CDP persistent socket closed');
+        if (!this.closed) fail(error);
       });
     });
     return this;
@@ -95,7 +133,7 @@ class PersistentConnection {
       return;
     }
     if (value.method && this.onEvent) {
-      try { this.onEvent(value, this); } catch (_) {}
+      try { Promise.resolve(this.onEvent(value, this)).catch(() => {}); } catch (_) {}
     }
   }
 
@@ -111,8 +149,24 @@ class PersistentConnection {
         reject(new Error(`CDP timeout: ${method}`));
       }, timeout);
       this.pending.set(id, { resolve, reject, timer });
-      try { this.socket.send(JSON.stringify(message)); }
-      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
+      const socket = this.socket;
+      try { socket.send(JSON.stringify(message)); }
+      catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error);
+        if (this.socket === socket) {
+          this.socket = null;
+          this.closed = true;
+          const unexpectedDisconnect = this.opened && !this.disconnectNotified;
+          this.opened = false;
+          this.failAll(error);
+          if (unexpectedDisconnect) {
+            this.disconnectNotified = true;
+            try { this.onDisconnect?.(error, this); } catch (_) {}
+          }
+        }
+      }
     });
   }
 
@@ -127,6 +181,7 @@ class PersistentConnection {
   close() {
     if (this.closed) return;
     this.closed = true;
+    this.opened = false;
     this.failAll(new Error('CDP persistent connection closed'));
     try { this.socket?.close(); } catch (_) {}
     this.socket = null;
@@ -264,41 +319,143 @@ async function reload(port) {
   return { targetId: tab.id };
 }
 
-async function windowForPort(port) {
-  const tab = await firstTab(port);
+async function windowForTarget(port, targetId = null) {
+  const tab = targetId
+    ? (await tabs(port)).find((item) => String(item.id) === String(targetId))
+    : await firstTab(port);
   if (!tab) throw new Error('No page tab is available');
   const socket = await browserSocket(port);
   const result = await call(socket, 'Browser.getWindowForTarget', { targetId: tab.id });
-  return { socket, tab, windowId: result.windowId, bounds: result.bounds };
+  let bounds = result.bounds || {};
+  if ((!bounds || typeof bounds !== 'object' || !Object.keys(bounds).length) && result.windowId !== undefined) {
+    // Older Chromium builds omit bounds from getWindowForTarget. A missing or
+    // unsupported follow-up must not prevent callers from changing state.
+    try { bounds = (await call(socket, 'Browser.getWindowBounds', { windowId: result.windowId })).bounds || {}; } catch (_) {}
+  }
+  return { socket, tab, windowId: result.windowId, bounds: bounds || {} };
 }
 
-async function setWindowState(port, state) {
-  const value = await windowForPort(port);
-  await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: state } });
-  return { windowId: value.windowId, state };
+async function windowForPort(port, targetId = null) {
+  return windowForTarget(port, targetId);
 }
 
-async function setWindowBounds(port, bounds) {
-  const value = await windowForPort(port);
+async function readWindowBounds(socket, windowId, targetId = null) {
+  try {
+    const result = await call(socket, 'Browser.getWindowBounds', { windowId });
+    if (result?.bounds && typeof result.bounds === 'object') return result.bounds;
+  } catch (error) {
+    if (!targetId) throw error;
+  }
+  if (!targetId) return {};
+  const result = await call(socket, 'Browser.getWindowForTarget', { targetId });
+  return result?.bounds || {};
+}
+
+async function waitForWindowState(socket, windowId, expected, options = {}) {
+  const attempts = Math.max(1, Math.min(8, Number(options.attempts) || 3));
+  const delayMs = Math.max(0, Math.min(500, Number(options.delayMs) || 60));
+  let bounds = {};
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    bounds = await readWindowBounds(socket, windowId, options.targetId || null);
+    if (String(bounds.windowState || '').toLowerCase() === expected) return { matched: true, bounds };
+    if (attempt + 1 < attempts && delayMs) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return { matched: false, bounds };
+}
+
+async function setWindowState(port, state, options = {}) {
+  const normalized = String(state || '').toLowerCase();
+  if (!['normal', 'minimized', 'maximized', 'fullscreen'].includes(normalized)) throw new Error(`Invalid browser window state: ${state}`);
+  const value = await windowForPort(port, options.targetId || null);
+  let primaryError = null;
+  try {
+    await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: normalized } });
+  } catch (error) {
+    primaryError = error;
+  }
+  if (!primaryError && options.verify !== true) return { windowId: value.windowId, state: normalized };
+
+  let verified = null;
+  if (!primaryError) {
+    verified = await waitForWindowState(value.socket, value.windowId, normalized, { ...options, targetId: value.tab.id }).catch((error) => {
+      primaryError = error;
+      return null;
+    });
+    if (verified?.matched) return { windowId: value.windowId, state: normalized, bounds: verified.bounds, degraded: false };
+    if (!primaryError && verified && !verified.bounds?.windowState) {
+      return { windowId: value.windowId, state: normalized, bounds: verified.bounds, degraded: false, unverified: true };
+    }
+  }
+
+  const fallback = String(options.fallbackState || '').toLowerCase();
+  if (fallback && fallback !== normalized && ['normal', 'minimized', 'maximized'].includes(fallback)) {
+    try {
+      await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: fallback } });
+      const fallbackState = options.verify === true
+        ? await waitForWindowState(value.socket, value.windowId, fallback, { ...options, targetId: value.tab.id })
+        : { matched: true, bounds: { windowState: fallback } };
+      if (fallbackState.matched) {
+        return {
+          windowId: value.windowId,
+          requestedState: normalized,
+          state: fallback,
+          bounds: fallbackState.bounds,
+          degraded: true,
+          error: String(primaryError?.message || `Window state ${normalized} was not applied`),
+        };
+      }
+    } catch (error) {
+      if (!primaryError) primaryError = error;
+    }
+  }
+
+  const actual = String(verified?.bounds?.windowState || value.bounds?.windowState || '').toLowerCase();
+  const error = primaryError || new Error(`Browser window state did not converge to ${normalized}${actual ? ` (actual: ${actual})` : ''}`);
+  error.code = error.code || 'WINDOW_STATE_NOT_APPLIED';
+  error.requestedState = normalized;
+  error.actualState = actual || null;
+  throw error;
+}
+
+async function setWindowBounds(port, bounds, options = {}) {
+  const value = await windowForPort(port, options.targetId || null);
+  const requestedState = String(bounds?.windowState || '').toLowerCase();
+  if (requestedState && !['normal', 'minimized', 'maximized', 'fullscreen'].includes(requestedState)) throw new Error(`Invalid browser window state: ${bounds.windowState}`);
+  const hasGeometry = ['left', 'top', 'width', 'height'].some((key) => bounds?.[key] !== undefined);
+  if (requestedState && requestedState !== 'normal') {
+    await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: requestedState } });
+    return { windowId: value.windowId, bounds: { windowState: requestedState } };
+  }
+  if (!hasGeometry) {
+    if (requestedState === 'normal') await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } });
+    return { windowId: value.windowId, bounds: requestedState ? { windowState: requestedState } : {} };
+  }
   const next = {
     left: Math.round(Number(bounds.left) || 0),
     top: Math.round(Number(bounds.top) || 0),
     width: Math.max(320, Math.round(Number(bounds.width) || 800)),
     height: Math.max(240, Math.round(Number(bounds.height) || 600)),
   };
-  // Maximized / fullscreen windows ignore position; force normal first, then apply bounds.
-  try { await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } }); } catch (_) {}
+  const forceNormal = options.forceNormal !== false;
+  // Explicit layout commands keep the historical behavior. Background live-sync callers
+  // can opt out so a geometry refresh never collapses fullscreen/maximized windows or
+  // dismisses browser-owned menus merely by re-applying windowState=normal.
+  if (forceNormal || requestedState === 'normal') {
+    try { await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: { windowState: 'normal' } }); } catch (_) {}
+  }
   await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: next });
-  // Some Chromium builds need a second pass after leaving maximized state.
+  // Some Chromium builds need a second pass after leaving maximized state. Passive
+  // synchronization deliberately avoids the retry: even a redundant resize can close a
+  // native menu, picker, or extension popup owned by the browser chrome.
+  if (!forceNormal) return { windowId: value.windowId, bounds: next };
   try {
     const current = await call(value.socket, 'Browser.getWindowBounds', { windowId: value.windowId });
     const actual = current?.bounds || {};
-    if (Math.abs((actual.width || 0) - next.width) > 24 || Math.abs((actual.height || 0) - next.height) > 24
-      || Math.abs((actual.left || 0) - next.left) > 24 || Math.abs((actual.top || 0) - next.top) > 24) {
+    if (actual.windowState === 'maximized' || actual.windowState === 'fullscreen') {
       await call(value.socket, 'Browser.setWindowBounds', { windowId: value.windowId, bounds: next });
     }
   } catch (_) {}
   return { windowId: value.windowId, bounds: next };
 }
 
-module.exports = { json, call, connect, PersistentConnection, targets, tabs, browserSocket, newTab, closeTab, activateTab, firstTab, focusedEditableTab, insertText, clearFocused, navigate, reload, windowForPort, setWindowState, setWindowBounds, __test: { focusedEditableExpression, chooseFocusedEditable, textWasInserted } };
+module.exports = { json, call, connect, PersistentConnection, targets, tabs, browserSocket, newTab, closeTab, activateTab, firstTab, focusedEditableTab, insertText, clearFocused, navigate, reload, windowForTarget, windowForPort, setWindowState, setWindowBounds, __test: { focusedEditableExpression, chooseFocusedEditable, textWasInserted, waitForWindowState } };

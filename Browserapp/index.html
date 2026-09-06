@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN" data-ui-theme="merge-gateway" data-xai-mode="console">
+<html lang="zh-CN" data-ui-theme="pixel-workstation">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
+  <meta name="color-scheme" content="dark">
   <title>OpenBrowser</title>
   <script src="i18n.js?v=20260720-aqua"></script>
   <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
@@ -49,7 +49,7 @@
         </a>
         <span class="app-version-wrap" id="app-version-wrap" role="status" title="正在检查版本…">
           <span class="version-traffic-light" id="version-traffic-light" data-state="checking" aria-hidden="true"></span>
-          <span class="app-version" id="app-version">v1.0.4</span>
+          <span class="app-version" id="app-version">v1.0.5</span>
         </span>
       </div>
     </aside>
@@ -65,10 +65,10 @@
           <div class="theme-picker" id="theme-picker">
             <button class="theme-trigger" id="theme-trigger" type="button" aria-expanded="false" style="min-height: 28px;"><i class="theme-trigger-dot"></i><span data-i18n="header.theme">主题</span></button>
             <div class="theme-popover" id="theme-popover" hidden>
-              <div class="theme-popover-head"><strong data-i18n="theme.title">界面皮肤</strong><span id="theme-current">Merge Gateway</span></div>
+              <div class="theme-popover-head"><strong data-i18n="theme.title">界面皮肤</strong><span id="theme-current" data-i18n="theme.pixel.name">像素工作站</span></div>
               <div class="theme-grid" id="theme-options">
-                <button class="theme-option active" type="button" data-ui-theme-option="merge-gateway" aria-pressed="true"><i></i><span><strong>Merge Gateway</strong><small>xAI Console</small></span></button>
-                <button class="theme-option" type="button" data-ui-theme-option="pixel-workstation" aria-pressed="false"><i></i><span><strong data-i18n="theme.pixel">像素工作站</strong><small data-i18n="theme.pixel.desc">深色像素界面</small></span></button>
+                <button class="theme-option" type="button" data-ui-theme-option="merge-gateway" aria-pressed="false"><i></i><span><strong data-i18n="theme.mergeGateway">Merge Gateway</strong><small data-i18n="theme.mergeGateway.desc">xAI Console</small></span></button>
+                <button class="theme-option active" type="button" data-ui-theme-option="pixel-workstation" aria-pressed="true"><i></i><span><strong data-i18n="theme.pixel">像素工作站</strong><small data-i18n="theme.pixel.desc">深色像素界面</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="nes-light" aria-pressed="false"><i></i><span><strong data-i18n="theme.nes">浅色像素风</strong><small data-i18n="theme.nes.desc">浅色像素界面</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="retro-desktop" aria-pressed="false"><i></i><span><strong data-i18n="theme.retro">复古桌面</strong><small data-i18n="theme.retro.desc">经典系统界面</small></span></button>
                 <button class="theme-option" type="button" data-ui-theme-option="element-admin" aria-pressed="false"><i></i><span><strong data-i18n="theme.native">系统原生</strong><small data-i18n="theme.native.desc">macOS HIG · Windows Fluent</small></span></button>
@@ -90,19 +90,19 @@
         <section class="view active" id="view-profiles">
           <div class="group-chip-row" id="profile-group-chips"></div>
           <div class="toolbar profile-primary-toolbar">
-            <div class="toolbar-left"><button class="primary" id="create-profile"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden></div>
+            <div class="toolbar-left"><button class="primary" id="create-profile"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden><button class="outline" id="renumber-profiles" type="button" title="将所有环境按列表顺序重新编号为 1..N"><i data-lucide="hash"></i><span data-i18n="profiles.renumber">重排编号</span></button></div>
             <label class="search"><i data-lucide="search"></i><input id="profile-search" placeholder="搜索环境 / 分组 / 标签" data-i18n-placeholder="profiles.search"></label>
           </div>
           <div class="profile-selection-bar" id="profile-selection-bar" hidden>
             <strong id="profile-selection-count">已选择 0 个环境</strong>
-            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="copy-selected" type="button" title="复制选中环境的配置，不复制 Cookie 和账号密码"><i data-lucide="copy"></i><span>复制环境</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
+            <div class="selection-actions"><button class="outline" id="start-selected"><i data-lucide="play"></i><span data-i18n="profiles.startSelected">启动选中</span></button><button class="outline" id="stop-selected"><i data-lucide="square"></i><span data-i18n="profiles.stopSelected">停止选中</span></button><button class="outline" id="copy-selected" type="button" title="复制选中环境的配置，不复制 Cookie 和账号密码"><i data-lucide="copy"></i><span>复制环境</span></button><button class="outline" id="batch-edit-preferences" type="button" title="批量修改选中环境的启动页、系统和高级偏好"><i data-lucide="sliders-horizontal"></i><span>批量偏好</span></button><button class="outline" id="batch-update"><i data-lucide="refresh-cw"></i><span data-i18n="profiles.batchNetwork">切换网络/IP</span></button><button class="outline" id="batch-set-direct" type="button" title="将选中环境改为本地直连"><i data-lucide="wifi"></i><span data-i18n="profiles.direct">本地直连</span></button>
               <label class="batch-group-assign"><span data-i18n="profiles.moveGroup">移到分组</span>
                 <select id="batch-assign-group"></select>
               </label>
               <button class="outline icon-apply" type="button" id="batch-assign-group-btn" title="应用分组"><i data-lucide="check"></i><span data-i18n="profiles.apply">应用</span></button><button class="danger" id="delete-selected"><i data-lucide="trash-2"></i><span data-i18n="profiles.batchDelete">批量删除</span></button></div>
           </div>
           <div class="table-card">
-            <table class="profile-table-compact"><thead><tr><th class="col-check"><input type="checkbox" id="select-all-profiles"></th><th class="col-num" data-i18n="profiles.col.num">编号</th><th class="col-profile-id" data-i18n="profiles.col.profileId">Profile ID</th><th class="col-name" data-i18n="profiles.col.name">环境名称</th><th class="col-group" data-i18n="profiles.col.group">分组</th><th class="col-browser" data-i18n="profiles.col.browser">内核</th><th class="col-network" data-i18n="profiles.col.network">网络</th><th class="col-exit" data-i18n="profiles.col.exit">出口</th><th class="col-ext" data-i18n="profiles.col.ext">扩展</th><th class="col-status" data-i18n="profiles.col.status">状态</th><th class="col-actions" data-i18n="profiles.col.actions">操作</th></tr></thead><tbody id="profile-table"></tbody></table>
+            <table class="profile-table-compact"><thead><tr><th class="col-check"><input type="checkbox" id="select-all-profiles"></th><th class="col-num" data-i18n="profiles.col.num">编号</th><th class="col-name" data-i18n="profiles.col.name">环境名称</th><th class="col-group" data-i18n="profiles.col.group">分组</th><th class="col-browser" data-i18n="profiles.col.browser">内核</th><th class="col-network" data-i18n="profiles.col.network">网络</th><th class="col-exit" data-i18n="profiles.col.exit">出口</th><th class="col-ext" data-i18n="profiles.col.ext">扩展</th><th class="col-status" data-i18n="profiles.col.status">状态</th><th class="col-actions" data-i18n="profiles.col.actions">操作</th></tr></thead><tbody id="profile-table"></tbody></table>
             <div class="empty" id="profile-empty" hidden data-i18n="profiles.empty">暂无环境</div>
           </div>
           <div class="profile-pagination toolbar-pagination" id="profile-pagination"><span class="profile-total"><span data-i18n="profiles.totalLabel">总数：</span><strong id="profile-total">0</strong></span><div class="profile-page-nav"><button type="button" id="profile-prev" aria-label="&#19978;&#19968;&#39029;">&#8249;</button><label><input id="profile-page" type="number" min="1" value="1" aria-label="&#24403;&#21069;&#39029;"> / <span id="profile-pages">1</span></label><button type="button" id="profile-next" aria-label="&#19979;&#19968;&#39029;">&#8250;</button></div><label class="profile-page-size"><select id="profile-page-size" aria-label="&#27599;&#39029;&#25968;&#37327;"><option value="10">10&#26465;/&#39029;</option><option value="20">20&#26465;/&#39029;</option><option value="50">50&#26465;/&#39029;</option><option value="100">100&#26465;/&#39029;</option></select></label></div>
@@ -131,19 +131,19 @@
         <section class="view" id="view-profile-editor">
           <div class="profile-editor-head">
             <button class="editor-back" id="editor-back" type="button">‹ 返回</button>
-            <div><h2>编辑环境 <span id="editor-profile-id"></span></h2><p>平台账号 · 代理 · 指纹 · 偏好 — 前后端完整生效；可配合云备份跨设备恢复</p></div>
+            <div><h2>修改环境 <span id="editor-profile-id"></span></h2><p>平台账号 · 代理 · 指纹 · 偏好 — 前后端完整生效；可配合云备份跨设备恢复</p></div>
           </div>
-          <div class="editor-tabs" role="tablist" aria-label="环境配置分类">
-            <button class="active" id="editor-tab-basic" type="button" role="tab" aria-selected="true" aria-controls="editor-panel-basic" tabindex="0" data-editor-tab="basic">平台账号</button>
-            <button id="editor-tab-proxy" type="button" role="tab" aria-selected="false" aria-controls="editor-panel-proxy" tabindex="-1" data-editor-tab="proxy">代理</button>
-            <button id="editor-tab-privacy" type="button" role="tab" aria-selected="false" aria-controls="editor-panel-privacy" tabindex="-1" data-editor-tab="privacy">指纹</button>
-            <button id="editor-tab-advanced" type="button" role="tab" aria-selected="false" aria-controls="editor-panel-advanced" tabindex="-1" data-editor-tab="advanced">偏好</button>
+          <div class="editor-tabs" role="tablist">
+            <button class="active" type="button" data-editor-tab="basic">平台账号配置</button>
+            <button type="button" data-editor-tab="proxy">代理配置</button>
+            <button type="button" data-editor-tab="privacy">指纹配置</button>
+            <button type="button" data-editor-tab="advanced">偏好设置</button>
           </div>
           <div class="environment-editor">
             <form id="profile-editor-form" class="editor-form">
               <input id="editor-id" type="hidden">
               <input id="editor-name" type="hidden">
-              <section class="editor-panel active" id="editor-panel-basic" role="tabpanel" aria-labelledby="editor-tab-basic" data-editor-panel="basic">
+              <section class="editor-panel active" data-editor-panel="basic">
                 <h3>平台账号配置</h3>
                 <div class="form-two platform-row">
                   <label class="platform-select-label">* 平台
@@ -182,10 +182,7 @@
                   </label>
                 </div>
                 <p class="network-mode-hint">选择预设平台会写入指定地址；选「空白页」则启动不打开站点；「其他平台」可手填任意 URL。</p>
-                <div class="form-two">
-                  <label>窗口名称<input id="editor-title" maxlength="120" placeholder="例如：Gmail"></label>
-                  <label>系统平台<select id="editor-os"><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option></select></label>
-                </div>
+                <label>窗口名称<input id="editor-title" maxlength="120" placeholder="例如：Gmail"></label>
                 <div class="form-two">
                   <label>选择分组<select id="editor-group"></select></label>
                   <label>标签<input id="editor-tag" maxlength="40" placeholder="可选标签"></label>
@@ -198,7 +195,7 @@
                 <label>Cookie JSON<textarea id="editor-cookies" rows="5" placeholder='[{"name":"session","value":"...","domain":".example.com","path":"/"}]'></textarea>
                   <small>选填，支持 JSON 数组。保存后下次启动导入；开启云备份后关闭窗口会自动刷新。</small>
                 </label>
-                <div class="storage-actions editor-tool-actions">
+                <div class="storage-actions" style="margin-top:4px;margin-bottom:12px">
                   <button class="outline" type="button" id="editor-cookie-export">导出 Cookie</button>
                   <button class="outline" type="button" id="editor-cookie-import-file">从文件导入 Cookie</button>
                   <button class="outline" type="button" id="editor-clear-cache-cookie">清除缓存及 Cookie</button>
@@ -207,6 +204,7 @@
                 <label>备注<textarea id="editor-note" rows="3" maxlength="2000" placeholder="浏览器窗口备注"></textarea></label>
                 <div class="form-two" hidden>
                   <label>浏览器<select id="editor-browser"><option>Google Chrome</option></select></label>
+                  <label>操作系统<select id="editor-os"><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option></select></label>
                   <label><span data-i18n="common.language">语言</span><select id="editor-language">
                     <option value="en-US">English (US)</option>
                     <option value="zh-CN">中文（简体）</option>
@@ -220,7 +218,7 @@
                   </select></label>
                 </div>
               </section>
-              <section class="editor-panel" id="editor-panel-proxy" role="tabpanel" aria-labelledby="editor-tab-proxy" data-editor-panel="proxy" hidden>
+              <section class="editor-panel" data-editor-panel="proxy">
                 <h3>代理配置</h3>
                 <label class="check-row"><input id="editor-proxy-check-start" type="checkbox"> 每次启动检测出口 IP（动态代理建议开启）</label>
                 <p class="network-mode-hint">本地直连 = 本机网络；代理模式 = HTTP / HTTPS / SOCKS5。</p>
@@ -228,7 +226,17 @@
                   <label><input type="radio" name="editor-network" value="direct" checked>本地直连</label>
                   <label><input type="radio" name="editor-network" value="custom">代理模式</label>
                 </div>
+                <label>代理库节点<select id="editor-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
+                <div class="network-mode-hint" id="editor-proxy-library-status">未关联代理库节点</div>
                 <div id="editor-proxy-fields">
+                  <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码）
+                    <div style="display:flex;gap:6px;align-items:center;">
+                      <input id="editor-proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080 或 host:port:user:pass" autocomplete="off" style="flex:1;">
+                      <button type="button" class="outline mini-btn" id="editor-proxy-raw-paste-btn">粘贴解析</button>
+                      <button type="button" class="outline mini-btn" id="editor-proxy-import-and-bind-btn" title="将当前代理存入代理库并直接与当前环境绑定">入库并绑定</button>
+                    </div>
+                  </label>
+                  <label class="check-row" style="margin-top:-4px;margin-bottom:8px;"><input id="editor-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便其他环境复用）</label>
                   <div class="form-two">
                     <label>代理类型<select id="editor-proxy-type"><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
                     <label>IP 查询通道<select id="editor-ip-channel"><option value="ip-api">IP-API</option><option value="ip2location">IP2Location</option><option value="ifconfig-me">ifconfig.me（HTTPS）</option></select></label>
@@ -283,7 +291,7 @@
                   </div>
                   <label class="check-row"><input id="editor-direct-bypass" type="checkbox"> 直连白名单（部分域名不走代理）</label>
                   <label>白名单（逗号/换行分隔）<textarea id="editor-bypass-list" rows="2" placeholder="*.local, intranet.company.com"></textarea></label>
-                  <div class="actions editor-tool-actions">
+                  <div class="actions" style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap">
                     <button class="outline" id="editor-test-proxy" type="button">代理检测</button>
                     <button class="outline" id="editor-apply-proxy-fp" type="button">用代理填充指纹</button>
                     <button class="outline" id="editor-refresh-proxy" type="button">刷新代理 IP</button>
@@ -291,7 +299,7 @@
                   <div class="proxy-test-result" id="editor-proxy-result">尚未检测</div>
                 </div>
               </section>
-              <section class="editor-panel" id="editor-panel-privacy" role="tabpanel" aria-labelledby="editor-tab-privacy" data-editor-panel="privacy" hidden>
+              <section class="editor-panel" data-editor-panel="privacy">
                 <h3>指纹配置</h3>
                 <label class="check-row"><input id="editor-refresh-fingerprint" type="checkbox"> 每次打开刷新指纹</label>
                 <label>User-Agent
@@ -301,7 +309,7 @@
                   <button type="button" class="outline" id="editor-ua-generate">按系统生成 UA</button>
                   <button type="button" class="outline" id="editor-ua-random">随机 UA</button>
                   <button type="button" class="outline" id="editor-ua-clear">跟随自动</button>
-                  <label class="ua-ver">Chrome 主版本 <input class="ua-version-input" id="editor-ua-chrome-major" type="number" min="100" max="200" placeholder="跟随内核"></label>
+                  <label class="ua-ver">Chrome 主版本 <input id="editor-ua-chrome-major" type="number" min="100" max="200" value="131" style="width:72px"></label>
                 </div>
                 <pre class="ua-meta-preview" id="editor-ua-meta" hidden></pre>
                 <div class="settings-row"><span data-i18n="editor.langMode">浏览器语言</span>
@@ -330,46 +338,14 @@
                 <input type="checkbox" id="editor-lang-from-ip" checked hidden>
                 <div class="settings-row"><span>时区</span>
                   <select id="editor-timezone-mode"><option value="ip">基于出口 IP</option><option value="real">系统真实</option><option value="custom">自定义</option></select>
-                  <input id="editor-timezone" list="editor-timezone-list" autocomplete="off" aria-label="自定义时区" placeholder="选择或输入，如 Asia/Shanghai">
-                  <datalist id="editor-timezone-list">
-                    <option value="UTC" label="协调世界时"></option>
-                    <option value="Asia/Shanghai" label="中国大陆 · 上海"></option>
-                    <option value="Asia/Hong_Kong" label="中国香港"></option>
-                    <option value="Asia/Taipei" label="中国台北"></option>
-                    <option value="Asia/Tokyo" label="日本 · 东京"></option>
-                    <option value="Asia/Seoul" label="韩国 · 首尔"></option>
-                    <option value="Asia/Singapore" label="新加坡"></option>
-                    <option value="Asia/Kuala_Lumpur" label="马来西亚 · 吉隆坡"></option>
-                    <option value="Asia/Bangkok" label="泰国 · 曼谷"></option>
-                    <option value="Asia/Ho_Chi_Minh" label="越南 · 胡志明市"></option>
-                    <option value="Asia/Jakarta" label="印度尼西亚 · 雅加达"></option>
-                    <option value="Asia/Manila" label="菲律宾 · 马尼拉"></option>
-                    <option value="Asia/Kolkata" label="印度 · 加尔各答"></option>
-                    <option value="Asia/Dubai" label="阿联酋 · 迪拜"></option>
-                    <option value="Asia/Riyadh" label="沙特阿拉伯 · 利雅得"></option>
-                    <option value="Europe/London" label="英国 · 伦敦"></option>
-                    <option value="Europe/Paris" label="法国 · 巴黎"></option>
-                    <option value="Europe/Berlin" label="德国 · 柏林"></option>
-                    <option value="Europe/Madrid" label="西班牙 · 马德里"></option>
-                    <option value="Europe/Moscow" label="俄罗斯 · 莫斯科"></option>
-                    <option value="America/New_York" label="美国东部 · 纽约"></option>
-                    <option value="America/Chicago" label="美国中部 · 芝加哥"></option>
-                    <option value="America/Denver" label="美国山地 · 丹佛"></option>
-                    <option value="America/Los_Angeles" label="美国西部 · 洛杉矶"></option>
-                    <option value="America/Toronto" label="加拿大 · 多伦多"></option>
-                    <option value="America/Vancouver" label="加拿大 · 温哥华"></option>
-                    <option value="America/Mexico_City" label="墨西哥 · 墨西哥城"></option>
-                    <option value="America/Sao_Paulo" label="巴西 · 圣保罗"></option>
-                    <option value="Australia/Sydney" label="澳大利亚 · 悉尼"></option>
-                    <option value="Pacific/Auckland" label="新西兰 · 奥克兰"></option>
-                  </datalist>
+                  <input id="editor-timezone" placeholder="Asia/Shanghai">
                 </div>
                 <div class="settings-row"><span>地理位置</span>
                   <select id="editor-geo-mode"><option value="ip">基于出口 IP</option><option value="prompt">询问</option><option value="disabled">禁用</option><option value="custom">自定义</option></select>
-                  <label class="check-row"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 生成坐标</label>
+                  <label class="check-row" style="margin:0"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 生成坐标</label>
                 </div>
                 <div class="form-three geo-custom"><label>纬度<input id="editor-latitude" type="number" step="0.000001" min="-90" max="90"></label><label>经度<input id="editor-longitude" type="number" step="0.000001" min="-180" max="180"></label><label>精度（米）<input id="editor-accuracy" type="number" min="1" max="100000" value="100"></label></div>
-                <div class="settings-row"><span>分辨率</span><select id="editor-resolution"><option value="auto">跟随当前电脑</option><option value="1280x820">1280 × 820</option><option value="1366x768">1366 × 768</option><option value="1440x900">1440 × 900</option><option value="1920x1080">1920 × 1080</option><option value="custom">自定义</option></select><input id="editor-width" type="number" min="640" max="7680" placeholder="宽"><input id="editor-height" type="number" min="480" max="4320" placeholder="高"></div>
+                <div class="settings-row"><span>分辨率</span><select id="editor-resolution"><option value="1280x820">1280 × 820</option><option value="1366x768">1366 × 768</option><option value="1440x900">1440 × 900</option><option value="1920x1080">1920 × 1080</option><option value="custom">自定义</option></select><input id="editor-width" type="number" min="640" max="7680" placeholder="宽"><input id="editor-height" type="number" min="480" max="4320" placeholder="高"></div>
                 <div class="settings-row"><span>字体</span><select id="editor-font-mode"><option value="default">系统默认</option><option value="custom">自定义字号</option></select><input id="editor-font-size" type="number" min="9" max="36" value="16"></div>
                 <div class="settings-row"><span>WebRTC</span><select id="editor-webrtc"><option value="proxy">替换（仅代理）</option><option value="real">真实</option><option value="disabled">禁用</option></select></div>
                 <div class="privacy-grid">
@@ -390,7 +366,7 @@
                   <label>设备名称<input id="editor-device-name" placeholder="自定义设备名"></label>
                   <label>Do Not Track<select id="editor-dnt-mode"><option value="default">默认</option><option value="on">开启</option><option value="off">关闭</option></select></label>
                 </div>
-                <div class="advanced-card editor-stability-card">
+                <div class="advanced-card" style="margin-top:4px">
                   <strong>站点稳定性</strong>
                   <p class="network-mode-hint">高风险站点降低 Canvas/WebGL 噪声漂移；开启后「每次打开刷新指纹」在稳定性模式非关闭时不再生效。</p>
                   <div class="form-two">
@@ -431,7 +407,7 @@
                 <label>允许被扫描的端口（可选，逗号分隔）<input id="editor-port-scan-allow" placeholder="例如：4000,4001（1–65535）"></label>
                 <label class="check-row"><input id="editor-cf-optimize" type="checkbox" checked> Cloudflare 验证优化 — 减少五秒盾卡住（可能略增被识别概率）</label>
               </section>
-              <section class="editor-panel" id="editor-panel-advanced" role="tabpanel" aria-labelledby="editor-tab-advanced" data-editor-panel="advanced" hidden>
+              <section class="editor-panel" data-editor-panel="advanced">
                 <h3>偏好设置</h3>
                 <div class="advanced-card">
                   <strong>云备份</strong>
@@ -442,7 +418,7 @@
                   <label class="check-row"><input id="editor-sync-ls" type="checkbox"> 同步 Local Storage（部分站点存登录态）</label>
                   <label class="check-row"><input id="editor-sync-passwords" type="checkbox"> 同步已保存的用户名密码</label>
                   <label class="check-row"><input id="editor-sync-ext" type="checkbox"> 同步插件应用数据（数字货币钱包建议关闭）</label>
-                  <div class="storage-actions editor-tool-actions">
+                  <div class="storage-actions" style="margin-top:10px">
                     <button class="outline" type="button" id="editor-cloud-push-one">立即推送此环境到云</button>
                     <button class="outline" type="button" id="editor-cloud-pull-one">从云拉取并合并此环境</button>
                   </div>
@@ -493,13 +469,10 @@
                   <label class="check-row"><input id="editor-clear-cache" type="checkbox"> 启动时清除缓存</label>
                 </div>
               </section>
-              <div class="editor-actions">
-                <span class="editor-save-state" id="editor-save-state" role="status" aria-live="polite" data-state="saved">已保存</span>
-                <div class="editor-action-buttons"><button class="outline" id="editor-cancel" type="button">取消</button><button class="primary" id="editor-save" type="submit">保存</button></div>
-              </div>
+              <div class="editor-actions"><button class="outline" id="editor-cancel" type="button">取消</button><button class="primary" type="submit">立即保存</button></div>
             </form>
             <aside class="profile-summary">
-              <div class="summary-head"><strong>概要</strong><button id="editor-system-defaults" type="button">读取本机默认值</button></div>
+              <div class="summary-head"><strong>概要</strong><button id="editor-system-defaults" type="button"><i data-lucide="refresh-cw"></i>读取本机默认值</button></div>
               <dl id="editor-summary"></dl>
               <section class="environment-audit" id="editor-audit"></section>
               <p>保存后，运行中的环境需要重启才能应用浏览器级设置。</p>
@@ -511,6 +484,7 @@
           <div class="toolbar">
             <div class="toolbar-left">
               <button class="primary" id="proxy-create" type="button"><i data-lucide="plus"></i>新建代理</button>
+              <button class="outline" id="proxy-batch-import-btn" type="button"><i data-lucide="folder-input"></i>批量导入</button>
               <button class="outline" id="proxy-refresh" type="button"><i data-lucide="refresh-cw"></i>刷新</button>
               <button class="outline" id="proxy-check-selected" type="button"><i data-lucide="activity"></i>检测选中</button>
               <button class="outline" id="proxy-check-all" type="button"><i data-lucide="list-checks"></i>检测全部</button>
@@ -671,6 +645,7 @@
             </div>
             <div class="rpa-toolbar">
               <button class="primary" type="button" id="rpa-create-task"><i data-lucide="plus"></i>创建任务</button>
+              <button type="button" class="danger outline" id="rpa-task-delete-checked" title="批量删除勾选任务" style="display:none"><i data-lucide="trash-2"></i>批量删除</button>
               <label class="rpa-search"><input id="rpa-task-search" placeholder="可输入任务名称进行搜索"></label>
               <button type="button" class="outline" id="rpa-task-refresh"><i data-lucide="refresh-cw"></i></button>
             </div>
@@ -851,9 +826,8 @@
               </div>
               <div class="rpa-row">
                 <span class="rpa-label">API Key</span>
-                <input class="rpa-input" id="api-key-display" value="" minlength="16" maxlength="256" autocomplete="off" spellcheck="false" placeholder="至少 16 个字符">
-                <button type="button" class="outline" id="api-key-save"><i data-lucide="save"></i>保存</button>
-                <button type="button" class="outline" id="api-key-generate"><i data-lucide="refresh-cw"></i>重新生成</button>
+                <input class="rpa-input" id="api-key-display" readonly value="" placeholder="未设置（可选环境变量 OPENBROWSER_API_KEY）">
+                <button type="button" class="outline" id="api-key-rotate" title="重新生成 API Key 并更新本地配置文件"><i data-lucide="refresh-cw"></i>重新生成</button>
               </div>
               <pre class="rpa-code-block" id="api-test-output">点击「测试」请求 /api/getVersion</pre>
             </div>
@@ -861,6 +835,7 @@
             <div class="rpa-section table-card">
               <h2 class="rpa-h2">MCP</h2>
               <p class="rpa-desc">可选：让 Claude / Cursor 等 AI 通过对话操作本机浏览器（启动、停止、同步、自动脚本）。不用 AI 编程的话可忽略。</p>
+              <p class="rpa-muted">权限等级：<code>admin</code>（全部）/ <code>manage</code>（环境、代理、RPA 配置）/ <code>run</code>（启动、同步、执行）/ <code>read</code>（只读）。启动 MCP 时可通过 <code>OPENBROWSER_MCP_MODE</code>、<code>OPENBROWSER_MCP_TOOL_BLACKLIST</code>、<code>OPENBROWSER_MCP_TOOL_WHITELIST</code> 环境变量限制工具范围。</p>
               <div class="rpa-row">
                 <span class="rpa-label">配置类型</span>
                 <div class="rpa-seg" id="mcp-config-tabs">
@@ -872,6 +847,7 @@
                 <pre class="rpa-code-block" id="mcp-config-json"></pre>
                 <button type="button" class="outline" id="mcp-copy-config"><i data-lucide="copy"></i>复制代码</button>
               </div>
+              <p class="rpa-muted" id="mcp-key-note"></p>
             </div>
 
             <div class="rpa-section table-card">
@@ -1088,7 +1064,9 @@
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center">手动选择回退浏览器（Windows 可选 Chrome 或 Edge）<select id="kernel-system-browser"><option value="">未选择</option></select></label>
   <p class="storage-warning" id="kernel-progress">点击下载会获取 Google Chrome Stable 正式包并校验，不使用 Chrome for Testing 包。默认不会自动回退到本机浏览器。</p>
 </article>
-<article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div></dl></article><article class="storage-settings-card"><div class="storage-settings-head"><div><h3>环境缓存与数据位置</h3><p>各环境的 Chrome 用户目录、Cookie、缓存、本地存储、IndexedDB 和会话数据都会保存在这里。</p></div><span>本地保存</span></div><div class="storage-path-box"><small>当前目录</small><code id="profile-storage-path">正在读取...</code></div><div class="storage-actions"><button class="primary" id="choose-profile-storage" type="button">选择新目录</button><button class="outline" id="open-profile-storage" type="button">打开目录</button><button class="outline" id="reset-profile-storage" type="button">恢复默认位置</button></div><p class="storage-warning">修改前请先停止所有环境。新位置在环境下次启动时生效；旧目录中的数据不会自动移动或删除。</p></article></div></section>
+<article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div></dl></article>
+<article class="storage-settings-card" id="close-action-card"><div class="storage-settings-head"><div><h3 data-i18n="system.close.title">关闭窗口行为</h3><p data-i18n="system.close.desc">控制点击主窗口右上角关闭按钮时，是将程序最小化到系统托盘继续运行后台代理，还是完全退出程序。</p></div><span data-i18n="system.close.label">托盘常驻</span></div><div class="form-row" style="margin-top:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="ask"> <span data-i18n="system.close.ask">每次询问</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="tray" checked> <span data-i18n="system.close.tray">最小化到系统托盘（保持浏览器与代理运行）</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="exit"> <span data-i18n="system.close.exit">退出程序（停止所有运行中的环境）</span></label></div><p class="storage-warning" style="margin-top:10px;" data-i18n="system.close.hint">保持后台运行可保证各个浏览器环境的代理链路不中断。如需完全退出，可在系统托盘图标右键选择「彻底退出」。</p></article>
+<article class="storage-settings-card"><div class="storage-settings-head"><div><h3>环境缓存与数据位置</h3><p>各环境的 Chrome 用户目录、Cookie、缓存、本地存储、IndexedDB 和会话数据都会保存在这里。</p></div><span>本地保存</span></div><div class="storage-path-box"><small>当前目录</small><code id="profile-storage-path">正在读取...</code></div><div class="storage-actions"><button class="primary" id="choose-profile-storage" type="button">选择新目录</button><button class="outline" id="open-profile-storage" type="button">打开目录</button><button class="outline" id="reset-profile-storage" type="button">恢复默认位置</button></div><p class="storage-warning">修改前请先停止所有环境。新位置在环境下次启动时生效；旧目录中的数据不会自动移动或删除。</p></article></div></section>
       </main>
     </div>
   </div>
@@ -1098,6 +1076,13 @@
     <form method="dialog" id="proxy-form">
       <div class="dialog-head"><div><h2 id="proxy-dialog-title">新建代理</h2><p>保存到本地代理库，不上传云端</p></div><button value="cancel" type="submit">×</button></div>
       <input type="hidden" id="proxy-edit-id" value="">
+      <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码/备注）
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080#备注 或 host:port:user:pass" style="flex:1;">
+          <button type="button" class="outline mini-btn" id="proxy-raw-paste-btn">粘贴解析</button>
+        </div>
+      </label>
+      <small class="field-hint" id="proxy-raw-status" style="margin-top:-4px;margin-bottom:8px;display:block;">粘贴整行代理（如 socks5://user:pass@host:port#备注）会自动拆分填入下方各字段</small>
       <label>名称<input id="proxy-name" placeholder="例如：美东住宅-01" maxlength="120"></label>
       <div class="form-two">
         <label>协议
@@ -1116,14 +1101,13 @@
         </label>
       </div>
       <div class="proxy-host-row">
-        <label>主机<input id="proxy-host" placeholder="127.0.0.1" required></label>
-        <label>端口<input id="proxy-port" type="number" min="1" max="65535" placeholder="1080" required></label>
+        <label>主机<input id="proxy-host" placeholder="127.0.0.1"></label>
+        <label>端口<input id="proxy-port" type="number" min="1" max="65535" placeholder="1080"></label>
       </div>
       <div class="form-two">
         <label>账号<input id="proxy-user" autocomplete="off" placeholder="可选"></label>
         <label>密码<input id="proxy-password" type="password" autocomplete="new-password" placeholder="可选"></label>
       </div>
-      <label>整行粘贴（可选，优先解析）<input id="proxy-raw" placeholder="socks5://user:pass@host:port 或 host:port:user:pass"></label>
       <label>备注<textarea id="proxy-remark" rows="2" placeholder="用途说明"></textarea></label>
       <div class="proxy-test-result" id="proxy-dialog-result">保存前可先检测</div>
       <div class="dialog-actions">
@@ -1134,9 +1118,72 @@
     </form>
   </dialog>
 
+  <dialog id="proxy-batch-import-dialog">
+    <form method="dialog" id="proxy-batch-import-form">
+      <div class="dialog-head">
+        <div>
+          <h2>批量导入代理</h2>
+          <p>每行一个代理配置，支持协议、主机、端口、认证及备注自动解析</p>
+        </div>
+        <button value="cancel" type="submit">×</button>
+      </div>
+      <label>代理列表（每行一条）
+        <textarea id="proxy-batch-import-text" rows="8" placeholder="例如：&#10;socks5://user:pass@127.0.0.1:1080#美东01&#10;192.168.1.1:7890:admin:secret&#10;http://10.0.0.1:8080" required></textarea>
+      </label>
+      <div class="form-two">
+        <label>默认协议
+          <select id="proxy-batch-default-protocol">
+            <option value="socks5">SOCKS5</option>
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+          </select>
+        </label>
+        <label>IP 查询通道
+          <select id="proxy-batch-ip-channel">
+            <option value="ip-api">IP-API</option>
+            <option value="ip2location">IP2Location</option>
+            <option value="ifconfig-me">ifconfig.me（HTTPS）</option>
+          </select>
+        </label>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel" class="outline" type="submit">取消</button>
+        <button value="default" class="primary" id="proxy-batch-import-submit" type="submit">确认批量导入</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="proxy-apply-dialog">
+    <form method="dialog" id="proxy-apply-form">
+      <div class="dialog-head">
+        <div>
+          <h2 id="proxy-apply-title">应用代理到环境</h2>
+          <p id="proxy-apply-summary">将该代理节点一键绑定到指定环境</p>
+        </div>
+        <button value="cancel" type="submit">×</button>
+      </div>
+      <input type="hidden" id="proxy-apply-id" value="">
+      <div style="margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">
+        <label class="assign-item" style="margin:0;"><input id="proxy-apply-select-all" type="checkbox"> 全选当前环境</label>
+        <span id="proxy-apply-count" class="field-hint">已选择 0 个环境</span>
+      </div>
+      <div class="assign-list" id="proxy-apply-list" style="max-height: 240px; overflow-y: auto; border: 1px solid var(--ui-border, #e2e8f0); border-radius: 6px; padding: 8px;"></div>
+      <div class="dialog-actions">
+        <button value="cancel" class="outline" type="submit">取消</button>
+        <button value="default" class="primary" id="proxy-apply-submit" type="submit">立即应用并绑定</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="profile-dialog"><form method="dialog" id="profile-form">
     <div class="dialog-head"><h2>新建浏览器环境</h2><button value="cancel">×</button></div>
     <label>环境名称（自动编号）<input name="name" required readonly value="1"></label>
+    <label>沿用偏好模板（可选）
+      <select id="profile-create-template">
+        <option value="">使用新环境默认偏好</option>
+      </select>
+      <small class="field-hint">可快速沿用现有环境的指纹参数、指定网页与偏好设置。</small>
+    </label>
     <div class="form-two">
       <label>浏览器<select name="browser"><option>Google Chrome</option></select></label>
       <label><span data-i18n="common.language">语言</span><select name="language" id="profile-create-language">
@@ -1151,7 +1198,40 @@
       </select></label>
     </div>
     <label>所属分组<select id="profile-create-group" name="groupId"></select></label>
-    <label>打开指定网页（可选）<input name="startUrl" type="text" inputmode="url" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false"></label>
+    <div class="platform-preset-group">
+      <label>快速选择平台 / 打开指定网页
+        <select id="profile-create-platform">
+          <option value="other" data-url="" selected>自定义网址</option>
+          <option value="blank" data-url="">空白页 (about:blank)</option>
+          <option value="google" data-url="https://www.google.com">Google (google.com)</option>
+          <option value="youtube" data-url="https://www.youtube.com">YouTube (youtube.com)</option>
+          <option value="twitter" data-url="https://x.com">X / Twitter (x.com)</option>
+          <option value="facebook" data-url="https://www.facebook.com">Facebook (facebook.com)</option>
+          <option value="amazon" data-url="https://www.amazon.com">Amazon (amazon.com)</option>
+          <option value="tiktok" data-url="https://www.tiktok.com">TikTok (tiktok.com)</option>
+          <option value="discord" data-url="https://discord.com">Discord (discord.com)</option>
+          <option value="gmail" data-url="https://mail.google.com">Gmail (mail.google.com)</option>
+          <option value="outlook" data-url="https://outlook.live.com">Outlook (outlook.com)</option>
+          <option value="paypal" data-url="https://www.paypal.com">PayPal (paypal.com)</option>
+          <option value="ebay" data-url="https://www.ebay.com">eBay (ebay.com)</option>
+          <option value="aliexpress" data-url="https://www.aliexpress.com">AliExpress (aliexpress.com)</option>
+          <option value="shopify" data-url="https://www.shopify.com">Shopify (shopify.com)</option>
+          <option value="stripe" data-url="https://dashboard.stripe.com">Stripe (stripe.com)</option>
+          <option value="whatsapp" data-url="https://web.whatsapp.com">WhatsApp (web.whatsapp.com)</option>
+          <option value="linkedin" data-url="https://www.linkedin.com">LinkedIn (linkedin.com)</option>
+        </select>
+      </label>
+      <div class="platform-chips" id="profile-create-platform-chips">
+        <button type="button" class="mini-chip" data-platform="google" data-url="https://www.google.com">Google</button>
+        <button type="button" class="mini-chip" data-platform="youtube" data-url="https://www.youtube.com">YouTube</button>
+        <button type="button" class="mini-chip" data-platform="twitter" data-url="https://x.com">X/Twitter</button>
+        <button type="button" class="mini-chip" data-platform="amazon" data-url="https://www.amazon.com">Amazon</button>
+        <button type="button" class="mini-chip" data-platform="facebook" data-url="https://www.facebook.com">Facebook</button>
+        <button type="button" class="mini-chip" data-platform="tiktok" data-url="https://www.tiktok.com">TikTok</button>
+        <button type="button" class="mini-chip" data-platform="blank" data-url="">空白页</button>
+      </div>
+    </div>
+    <label>打开指定网页（可选）<input name="startUrl" id="profile-create-start-url" type="text" inputmode="url" placeholder="example.com 或 https://example.com" autocomplete="off" spellcheck="false"></label>
     <div class="network-mode-block">
       <span class="network-mode-label">网络模式</span>
       <div class="segmented" id="create-network-mode" role="radiogroup" aria-label="网络模式">
@@ -1161,6 +1241,14 @@
       <p class="network-mode-hint">本地直连使用本机网络，不配置代理。</p>
     </div>
     <div id="create-proxy-fields" hidden>
+      <label>快捷智能粘贴（自动解析）
+        <div style="display:flex;gap:6px;align-items:center;">
+          <input id="create-proxy-raw" placeholder="socks5://user:pass@host:port 或 host:port:user:pass" autocomplete="off" style="flex:1;">
+          <button type="button" class="outline mini-btn" id="create-proxy-raw-paste-btn">粘贴解析</button>
+        </div>
+      </label>
+      <label class="check-row" style="margin-top:-4px;margin-bottom:8px;"><input id="create-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便后续环境复用）</label>
+      <label>代理库节点<select id="create-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
       <div class="form-two">
         <label>代理类型
           <select id="create-proxy-type" name="proxyType">
@@ -1193,6 +1281,60 @@
       <option value="id-ID">Bahasa Indonesia</option>
     </select></label><label>标签<input id="batch-add-tag" value="批量创建" maxlength="40"></label></div>
     <label>所属分组<select id="batch-add-group"></select></label>
+    <div class="platform-preset-group">
+      <label>快速选择平台 / 打开指定网页
+        <select id="batch-add-platform">
+          <option value="other" data-url="" selected>自定义网址</option>
+          <option value="blank" data-url="">空白页 (about:blank)</option>
+          <option value="google" data-url="https://www.google.com">Google (google.com)</option>
+          <option value="youtube" data-url="https://www.youtube.com">YouTube (youtube.com)</option>
+          <option value="twitter" data-url="https://x.com">X / Twitter (x.com)</option>
+          <option value="facebook" data-url="https://www.facebook.com">Facebook (facebook.com)</option>
+          <option value="amazon" data-url="https://www.amazon.com">Amazon (amazon.com)</option>
+          <option value="tiktok" data-url="https://www.tiktok.com">TikTok (tiktok.com)</option>
+        </select>
+      </label>
+      <div class="platform-chips" id="batch-add-platform-chips">
+        <button type="button" class="mini-chip" data-platform="google" data-url="https://www.google.com">Google</button>
+        <button type="button" class="mini-chip" data-platform="youtube" data-url="https://www.youtube.com">YouTube</button>
+        <button type="button" class="mini-chip" data-platform="twitter" data-url="https://x.com">X/Twitter</button>
+        <button type="button" class="mini-chip" data-platform="amazon" data-url="https://www.amazon.com">Amazon</button>
+        <button type="button" class="mini-chip" data-platform="facebook" data-url="https://www.facebook.com">Facebook</button>
+        <button type="button" class="mini-chip" data-platform="tiktok" data-url="https://www.tiktok.com">TikTok</button>
+        <button type="button" class="mini-chip" data-platform="blank" data-url="">空白页</button>
+      </div>
+    </div>
+    <label>打开指定网页（可选）<input id="batch-add-start-url" type="text" inputmode="url" placeholder="example.com 或 https://example.com（留空则沿用偏好设置）" autocomplete="off" spellcheck="false"></label>
+    <details class="batch-add-preferences-accordion" style="margin: 8px 0 12px; border: 1px solid var(--ui-border, #e2e8f0); border-radius: 6px; padding: 8px 12px;">
+      <summary style="cursor: pointer; font-weight: 600; color: var(--ui-text, #1e293b); font-size: 12px;">常用偏好设置（批量应用，无需建后逐个修改）</summary>
+      <div style="margin-top: 8px;">
+        <div class="form-two">
+          <label>操作系统画像
+            <select id="batch-add-os">
+              <option value="Windows" selected>Windows</option>
+              <option value="macOS">macOS</option>
+              <option value="Linux">Linux</option>
+            </select>
+          </label>
+          <label>窗口分辨率
+            <select id="batch-add-resolution">
+              <option value="1280x820" selected>1280 × 820（标准）</option>
+              <option value="1440x900">1440 × 900（宽屏）</option>
+              <option value="1600x1000">1600 × 1000</option>
+              <option value="1920x1080">1920 × 1080（全高清）</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-two">
+          <label class="check-row"><input id="batch-add-block-images" type="checkbox"> 拦截图片（节省流量）</label>
+          <label class="check-row"><input id="batch-add-block-sound" type="checkbox"> 拦截声音（静音浏览）</label>
+        </div>
+        <div class="form-two">
+          <label class="check-row"><input id="batch-add-clear-cache" type="checkbox"> 启动时清空缓存</label>
+          <label class="check-row"><input id="batch-add-multi-open" type="checkbox"> 允许环境多开</label>
+        </div>
+      </div>
+    </details>
     <label>偏好设置
       <select id="batch-add-template">
         <option value="">使用新环境默认偏好</option>
@@ -1207,9 +1349,33 @@
       </div>
     </div>
     <div id="batch-add-proxy-fields" hidden>
+      <label>代理库快捷选择（可选，所有新环境共用）<select id="batch-add-proxy-library"><option value="">逐行填写代理</option></select></label>
       <label>代理列表（每行一个，数量须与新增环境数一致）<textarea id="batch-add-proxies" placeholder="127.0.0.1:7890&#10;socks5://127.0.0.1:1080"></textarea></label>
     </div>
     <div class="dialog-actions"><button value="cancel" class="outline">取消</button><button value="default" class="primary">立即批量创建</button></div>
+  </form></dialog>
+
+  <dialog id="batch-preferences-dialog"><form method="dialog" id="batch-preferences-form">
+    <div class="dialog-head"><div><h2>批量偏好设置</h2><p id="batch-pref-summary">将偏好设置统一应用到已勾选的环境</p></div><button value="cancel">&times;</button></div>
+    <label>偏好模板
+      <select id="batch-pref-template"><option value="">手动指定下方偏好设置</option></select>
+      <small class="field-hint">选择模板会复制启动页、系统、窗口和高级偏好，但不会复制指纹、Cookie、账号密码。</small>
+    </label>
+    <label>打开指定网页（可选）<input id="batch-pref-start-url" type="text" inputmode="url" placeholder="留空表示保持原设置" autocomplete="off" spellcheck="false"></label>
+    <label class="assign-item"><input id="batch-pref-clear-start-url" type="checkbox"> 清空选中环境的启动网页</label>
+    <div class="form-two">
+      <label>系统画像<select id="batch-pref-os"><option value="">保持不变</option><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option></select></label>
+      <label>窗口尺寸<select id="batch-pref-resolution"><option value="">保持不变</option><option value="1280x820">1280 × 820</option><option value="1440x900">1440 × 900</option><option value="1600x1000">1600 × 1000</option><option value="1920x1080">1920 × 1080</option></select></label>
+    </div>
+    <div class="form-two">
+      <label>拦截图片<select id="batch-pref-block-images"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+      <label>拦截声音<select id="batch-pref-block-sound"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+    </div>
+    <div class="form-two">
+      <label>启动时清缓存<select id="batch-pref-clear-cache"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+      <label>多开模式<select id="batch-pref-multi-open"><option value="keep">保持不变</option><option value="on">开启</option><option value="off">关闭</option></select></label>
+    </div>
+    <div class="dialog-actions"><button value="cancel" class="outline">取消</button><button value="default" class="primary" id="batch-preferences-submit">应用到选中环境</button></div>
   </form></dialog>
 
   <dialog id="batch-delete-dialog"><form method="dialog" id="batch-delete-form"><div class="dialog-head"><div><h2>&#25209;&#37327;&#21024;&#38500;&#29615;&#22659;</h2><p id="batch-delete-summary"></p></div><button value="cancel">&times;</button></div><div class="delete-warning">&#27492;&#25805;&#20316;&#20250;&#20174;&#29615;&#22659;&#21015;&#34920;&#20013;&#31227;&#38500;&#25152;&#26377;&#24050;&#21246;&#36873;&#39033;&#12290;&#36816;&#34892;&#20013;&#30340;&#29615;&#22659;&#20250;&#20808;&#23433;&#20840;&#20572;&#27490;&#12290;</div><label class="assign-item"><input id="batch-delete-data" type="checkbox" checked> &#21516;&#26102;&#21024;&#38500;&#29420;&#31435;&#27983;&#35272;&#22120;&#25968;&#25454;&#65288;Cookie&#12289;&#32531;&#23384;&#12289;&#26412;&#22320;&#23384;&#20648;&#65289;</label><div class="dialog-actions"><button value="cancel" class="outline">&#21462;&#28040;</button><button value="default" class="danger">&#30830;&#35748;&#25209;&#37327;&#21024;&#38500;</button></div></form></dialog>
@@ -1233,6 +1399,6 @@
   </form></dialog><dialog id="add-app-dialog"><div class="dialog-head"><div><h2>&#28155;&#21152;&#24212;&#29992;</h2><p>&#20174;&#26412;&#22320;&#30446;&#24405;&#25110; Chrome &#24212;&#29992;&#21830;&#24215;&#28155;&#21152;</p></div><button id="close-add-app">&times;</button></div><div class="store-source-tabs"><button class="outline" id="choose-extension-folder">&#23433;&#35013;&#21253;&#30446;&#24405;</button><button class="primary" type="button">Chrome &#24212;&#29992;&#21830;&#24215;</button></div><label>Chrome &#24212;&#29992;&#21830;&#24215; URL<input id="chrome-store-url" placeholder="https://chromewebstore.google.com/detail/.../extension-id"></label><label class="assign-item"><input id="store-assign-all" type="checkbox" checked> &#28155;&#21152;&#21040;&#25152;&#26377;&#29615;&#22659;&#24182;&#37325;&#21551;&#27491;&#22312;&#36816;&#34892;&#30340;&#29615;&#22659;</label><p class="store-note">&#21482;&#25509;&#21463; Chrome Web Store &#38142;&#25509;&#65307;&#19979;&#36733;&#21518;&#20250;&#26657;&#39564; CRX &#26684;&#24335;&#21644;&#25991;&#20214;&#36335;&#24452;&#12290;</p><div class="dialog-actions"><button class="outline" id="cancel-add-app">&#21462;&#28040;</button><button class="primary" id="add-store-submit">&#30830;&#23450;&#28155;&#21152;</button></div></dialog><div class="toast" id="toast"></div>
   <script src="environment-audit.js?v=20260719-environment-audit"></script>
   <script src="assets/vendor/lucide.min.js"></script>
-  <script src="renderer.js?v=20260820-editor-guard"></script>
+  <script src="renderer.js?v=20260720-nes-light"></script>
 </body>
 </html>

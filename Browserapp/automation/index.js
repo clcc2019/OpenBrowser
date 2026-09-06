@@ -1,14 +1,16 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const fsp = require('fs/promises');
-const { LocalApiServer, normalizeApiKey } = require('./local-api-server');
+const { LocalApiServer } = require('./local-api-server');
 const { RpaEngine } = require('./rpa-engine');
 const { RpaStore } = require('./rpa-store');
 const { WindowSyncBridge } = require('./window-sync-bridge');
 const { AppCenter } = require('./app-center');
 const { ProxyStore } = require('./proxy-store');
+const { resolveApiKey } = require('./api-key');
+const { ApiKeyStore, KEY_FILE, TXT_FILE } = require('./api-key-store');
 
 /**
  * Mount automation stack (Local API + RPA + window-sync + app center + proxy library).
@@ -28,37 +30,26 @@ async function startAutomation(context = {}) {
     tile,
     emit = () => {},
     port = Number(process.env.OPENBROWSER_API_PORT || 50325),
-    apiKey = process.env.OPENBROWSER_API_KEY || '',
   } = context;
 
-  const storePath = path.join(app.getPath('userData'), 'rpa-store.json');
+  const userDataPath = app.getPath('userData');
+  const keyStore = new ApiKeyStore(userDataPath);
+  let effectiveApiKey = await keyStore.resolve(context.apiKey || process.env.OPENBROWSER_API_KEY);
+  const keyFilePath = keyStore.filePath;
+
+  const storePath = path.join(userDataPath, 'rpa-store.json');
   const rpaStore = new RpaStore(storePath);
   await rpaStore.load();
 
-  const apiKeyPath = path.join(app.getPath('userData'), 'local-api-key');
-  const savedApiKey = await fsp.readFile(apiKeyPath, 'utf8').catch(() => '');
-  let resolvedApiKey;
-  try { resolvedApiKey = normalizeApiKey(apiKey || savedApiKey); }
-  catch (error) {
-    if (apiKey) throw error;
-    resolvedApiKey = normalizeApiKey(crypto.randomBytes(32).toString('base64url'));
-  }
-  const persistApiKey = async (value) => {
-    const temporary = apiKeyPath + '.tmp';
-    await fsp.writeFile(temporary, value, { encoding: 'utf8', mode: 0o600 });
-    await fsp.rename(temporary, apiKeyPath);
-    await fsp.chmod(apiKeyPath, 0o600).catch(() => {});
-  };
-  if (savedApiKey.trim() !== resolvedApiKey) await persistApiKey(resolvedApiKey);
-
-  const proxyStore = new ProxyStore(path.join(app.getPath('userData'), 'proxy-library.json'));
+  const proxyStore = new ProxyStore(path.join(userDataPath, 'proxy-library.json'));
   await proxyStore.load();
+  await engine?.setProxyStore?.(proxyStore);
 
   const rpaEngine = new RpaEngine({
     engine,
     store: rpaStore,
     emit: (event) => emit(event),
-    userDataPath: app.getPath('userData'),
+    userDataPath,
   });
 
   const syncBridge = new WindowSyncBridge({
@@ -74,16 +65,12 @@ async function startAutomation(context = {}) {
   });
 
   const appCenter = new AppCenter({ engine });
-  let service = null;
 
   const localApi = new LocalApiServer({
     host: '127.0.0.1',
     port,
-    apiKey: resolvedApiKey,
-    onApiKeyChange: async (value) => {
-      await persistApiKey(value);
-      if (service) service.apiKey = value;
-    },
+    apiKey: effectiveApiKey,
+    userDataPath,
     engine,
     rpaEngine,
     rpaStore,
@@ -96,27 +83,31 @@ async function startAutomation(context = {}) {
   const info = await localApi.start();
   emit({ type: 'local-api', ...info });
 
-  service = {
+  return {
     localApi,
     rpaEngine,
     rpaStore,
     syncBridge,
     appCenter,
     proxyStore,
+    keyStore,
     info,
-    apiKey: resolvedApiKey,
-    async setApiKey(value) {
-      await localApi.setApiKey(value);
-      service.apiKey = localApi.apiKey;
-      emit({ type: 'local-api-key-changed' });
-      return { ...localApi.info(), apiKey: service.apiKey };
+    apiKey: effectiveApiKey,
+    apiKeyFile: keyFilePath,
+    async rotateApiKey() {
+      const newKey = await keyStore.rotate();
+      this.apiKey = newKey;
+      localApi.setApiKey(newKey);
+      return newKey;
     },
     async stop() {
       await rpaEngine.stop();
       await localApi.stop();
+      // Proxy credentials are written through a serialized queue. Wait for the
+      // queue before Electron is allowed to tear down the main process.
+      await proxyStore.flush?.();
     },
   };
-  return service;
 }
 
 module.exports = {
@@ -127,4 +118,5 @@ module.exports = {
   WindowSyncBridge,
   AppCenter,
   ProxyStore,
+  ApiKeyStore,
 };

@@ -1,29 +1,61 @@
 const cdp = require('./cdp');
 
 class PersistentCdp {
-  constructor(url, onEvent) { this.url = url; this.onEvent = onEvent; this.socket = null; this.nextId = 1; this.pending = new Map(); }
+  constructor(url, onEvent) { this.url = url; this.onEvent = onEvent; this.socket = null; this.nextId = 1; this.pending = new Map(); this.closed = false; }
   open() {
     return new Promise((resolve, reject) => {
       const socket = new WebSocket(this.url); this.socket = socket;
-      const timer = setTimeout(() => reject(new Error('CDP connection timeout')), 8000);
-      socket.addEventListener('open', () => { clearTimeout(timer); resolve(); });
+      let settled = false;
+      const finishOpen = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+      const failPending = (error) => {
+        for (const pending of this.pending.values()) {
+          clearTimeout(pending.timer);
+          pending.reject(error);
+        }
+        this.pending.clear();
+      };
+      const timer = setTimeout(() => {
+        const error = new Error('CDP connection timeout');
+        finishOpen(reject, error);
+        failPending(error);
+        try { socket.close(); } catch (_) {}
+      }, 8000);
+      socket.addEventListener('open', () => finishOpen(resolve));
       socket.addEventListener('message', (event) => {
         let value; try { value = JSON.parse(String(event.data)); } catch (_) { return; }
-        if (value.id && this.pending.has(value.id)) { const pending = this.pending.get(value.id); this.pending.delete(value.id); return value.error ? pending.reject(new Error(value.error.message || 'CDP error')) : pending.resolve(value.result || {}); }
+        if (value.id && this.pending.has(value.id)) { const pending = this.pending.get(value.id); this.pending.delete(value.id); clearTimeout(pending.timer); return value.error ? pending.reject(new Error(value.error.message || 'CDP error')) : pending.resolve(value.result || {}); }
         if (value.method) Promise.resolve(this.onEvent(value)).catch(() => {});
       });
-      socket.addEventListener('close', () => { for (const pending of this.pending.values()) pending.reject(new Error('CDP connection closed')); this.pending.clear(); });
-      socket.addEventListener('error', () => reject(new Error('CDP connection error')));
+      socket.addEventListener('close', () => { this.closed = true; if (this.socket === socket) this.socket = null; const error = new Error('CDP connection closed'); failPending(error); finishOpen(reject, error); });
+      socket.addEventListener('error', () => { const error = new Error('CDP connection error'); failPending(error); finishOpen(reject, error); });
     });
   }
-  command(method, params = {}) {
+  command(method, params = {}, options = {}) {
     return new Promise((resolve, reject) => {
-      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return reject(new Error('CDP is not connected'));
-      const id = this.nextId++; this.pending.set(id, { resolve, reject }); this.socket.send(JSON.stringify({ id, method, params }));
-      setTimeout(() => { if (this.pending.delete(id)) reject(new Error(`CDP timeout: ${method}`)); }, 7000);
+      if (this.closed || !this.socket || this.socket.readyState !== WebSocket.OPEN) return reject(new Error('CDP is not connected'));
+      const id = this.nextId++;
+      const timeout = Math.max(1, Number(options.timeout) || 7000);
+      const timer = setTimeout(() => { if (this.pending.delete(id)) reject(new Error(`CDP timeout: ${method}`)); }, timeout);
+      this.pending.set(id, { resolve, reject, timer });
+      const message = { id, method, params };
+      if (options.sessionId) message.sessionId = options.sessionId;
+      try { this.socket.send(JSON.stringify(message)); }
+      catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
   }
-  close() { try { this.socket?.close(); } catch (_) {} this.socket = null; }
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    for (const pending of this.pending.values()) { clearTimeout(pending.timer); pending.reject(new Error('CDP connection closed')); }
+    this.pending.clear();
+    try { this.socket?.close(); } catch (_) {}
+    this.socket = null;
+  }
 }
 
 const injection = String.raw`(() => {
@@ -42,6 +74,7 @@ const injection = String.raw`(() => {
   document.addEventListener('mouseup', (event) => mouse('up', event), true);
   let moveFrame = 0; document.addEventListener('mousemove', (event) => { if (!event.buttons || moveFrame) return; moveFrame = requestAnimationFrame(() => { moveFrame = 0; mouse('move', event); }); }, true);
   document.addEventListener('click', (event) => { if (!event.isTrusted) send('click', { ...pointState(actual(event),event.clientX,event.clientY), button: event.button }); }, true);
+  document.addEventListener('contextmenu', (event) => { send('contextmenu', { ...pointState(actual(event), event.clientX, event.clientY), button: 2 }); }, true);
   document.addEventListener('wheel', (event) => send('wheel', { ...pointState(actual(event),event.clientX,event.clientY), deltaX: event.deltaX, deltaY: event.deltaY, alt: event.altKey, ctrl: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey }), { capture: true, passive: true });
   const focusState = (target) => {
     let x = 0, y = 0; try { const rect = target.getBoundingClientRect(); x = rect.left + rect.width / 2; y = rect.top + rect.height / 2; let current = window; while (current !== current.top) { const frame = current.frameElement; if (!frame) break; const frameRect = frame.getBoundingClientRect(); x += frameRect.left; y += frameRect.top; current = current.parent; } } catch (_) {}
@@ -54,18 +87,46 @@ const injection = String.raw`(() => {
   const key = (phase, event) => { const target=actual(event); const editable=Boolean(target && (target.isContentEditable || 'value' in target)); send('key', { phase, key: event.key, code: event.code, keyCode: event.keyCode, location: event.location, alt: event.altKey, ctrl: event.ctrlKey, meta: event.metaKey, shift: event.shiftKey, editable }); };
   document.addEventListener('keydown', (event) => key('down', event), true);
   document.addEventListener('keyup', (event) => key('up', event), true);
+  if (window === window.top) {
+    let surfaceTimer = 0;
+    const reportSurface = () => {
+      clearTimeout(surfaceTimer);
+      surfaceTimer = setTimeout(() => send('surface', {
+        visible: document.visibilityState === 'visible',
+        focused: typeof document.hasFocus !== 'function' || document.hasFocus(),
+      }), 0);
+    };
+    window.addEventListener('blur', reportSurface, true);
+    window.addEventListener('focus', reportSurface, true);
+    window.addEventListener('pagehide', reportSurface, true);
+    window.addEventListener('pageshow', reportSurface, true);
+    document.addEventListener('visibilitychange', reportSurface, true);
+    document.addEventListener('freeze', reportSurface, true);
+    document.addEventListener('resume', reportSurface, true);
+    reportSurface();
+  }
   let scrollTimer = 0; const reportScroll = () => { clearTimeout(scrollTimer); scrollTimer = setTimeout(() => send('scroll', { x: scrollX, y: scrollY }), 40); };
   addEventListener('scroll', reportScroll, true); document.addEventListener('scroll', reportScroll, true);
 })();`;
 
-function normalTabs(values) { return values.filter((tab) => !/^(chrome|edge|devtools|chrome-extension|edge-extension):/i.test(tab.url)); }
+const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+function normalTabs(values) {
+  return values.filter((tab) => {
+    if (!tab || !tab.url) return false;
+    if (/^(devtools|chrome-extension|edge-extension):/i.test(tab.url)) return false;
+    if (/^(chrome|edge):/i.test(tab.url)) {
+const ALLOWED_INTERNAL_PAGES = new RegExp("^" + "(chrome|edge)://(newtab|new-tab-page|extensions|settings|downloads|history|flags|version|bookmarks|about)", "i");
+    }
+    return true;
+  });
+}
 
 class LiveSyncController {
   constructor(engine, emit) {
     this.engine = engine; this.emit = emit; this.master = null; this.slaves = []; this.connections = new Map(); this.masterTabs = []; this.timer = null;
     this.forwardQueue = []; this.forwardQueueRunning = false; this.coalescedForwards = new Map();
     this.forwardStats = { coalesced: 0, dropped: 0, processed: 0, lastLatencyMs: 0 }; this.lastHealthEmitAt = 0;
-    this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.skippedRefreshes = 0;
+    this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.refreshTask = null; this.refreshEpoch = 0; this.skippedRefreshes = 0;
     // Adaptive sync poll: active input stays fast; idle stretches to save CPU/CDP load.
     this.lastActivityAt = 0; this.refreshIntervalMs = 700; this.tickCount = 0;
   }
@@ -86,20 +147,43 @@ class LiveSyncController {
   scheduleRefreshTick() {
     if (this.timer) clearTimeout(this.timer);
     if (!this.master) return;
+    const refreshGeneration = this.getRefreshGeneration?.();
+    const refreshEpoch = this.refreshEpoch;
     const idleMs = Date.now() - (this.lastActivityAt || 0);
     // Active: ~450ms; recent: ~700ms; idle: ~1400ms. Caps CDP churn when user is not driving.
     this.refreshIntervalMs = idleMs < 2500 ? 450 : idleMs < 12000 ? 700 : 1400;
-    this.timer = setTimeout(() => { this.runRefreshTick().finally(() => this.scheduleRefreshTick()); }, this.refreshIntervalMs);
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.runRefreshTick(refreshGeneration, refreshEpoch).finally(() => {
+        if (this.refreshEpoch !== refreshEpoch) return;
+        if (this.getRefreshGeneration && refreshGeneration !== this.getRefreshGeneration()) return;
+        this.scheduleRefreshTick();
+      });
+    }, this.refreshIntervalMs);
     this.timer.unref?.();
   }
 
   markActivity() { this.lastActivityAt = Date.now(); }
 
-  async runRefreshTick() {
+  async runRefreshTick(refreshGeneration = null, refreshEpoch = this.refreshEpoch) {
+    if (refreshEpoch !== this.refreshEpoch) return;
+    if (refreshGeneration != null && this.getRefreshGeneration && refreshGeneration !== this.getRefreshGeneration()) return;
     if (!this.master || this.refreshInFlight) { if (this.refreshInFlight) this.skippedRefreshes += 1; return; }
-    this.refreshInFlight = true; this.tickCount = (this.tickCount || 0) + 1;
-    try { await this.refreshMasterTabs(); } catch (error) { this.handleWatchError(error); }
-    finally { this.refreshInFlight = false; }
+    const task = { epoch: refreshEpoch, generation: refreshGeneration };
+    this.refreshTask = task; this.refreshInFlight = true; this.tickCount = (this.tickCount || 0) + 1;
+    try {
+      await this.refreshMasterTabs(refreshGeneration);
+    } catch (error) {
+      if (refreshGeneration == null || !this.getRefreshGeneration || refreshGeneration === this.getRefreshGeneration()) {
+        this.handleWatchError(error, refreshGeneration);
+      }
+    }
+    finally {
+      if (this.refreshTask === task) {
+        this.refreshTask = null;
+        this.refreshInFlight = false;
+      }
+    }
   }
 
   handleWatchError(error) {
@@ -115,7 +199,8 @@ class LiveSyncController {
   }
 
   stop() {
-    this.lastWatchErrorAt = 0; this.refreshInFlight = false; this.skippedRefreshes = 0;
+    this.refreshEpoch += 1;
+    this.lastWatchErrorAt = 0; this.refreshTask = null; this.refreshInFlight = false; this.skippedRefreshes = 0;
     this.forwardQueue.length = 0; this.coalescedForwards.clear(); this.forwardQueueRunning = false;
     if (this.timer) clearTimeout(this.timer); this.timer = null; this.tickCount = 0;
     for (const value of this.connections.values()) value.connection.close(); this.connections.clear();
@@ -200,8 +285,17 @@ class LiveSyncController {
 
   async handle(tabId, event) {
     if (event.method === 'Runtime.executionContextCreated') {
-      const contextId = event.params?.context?.id; const connection = this.connections.get(tabId)?.connection;
-      if (contextId && connection) connection.command('Runtime.evaluate', { expression: injection, contextId }).catch(() => {});
+      const context = event.params?.context;
+      const contextId = context?.id; const connection = this.connections.get(tabId)?.connection;
+      // The DOM event bridge must be installed once in Chromium's default
+      // world. Isolated worlds receive the same DOM events but keep their own
+      // window sentinel, which otherwise duplicates every forwarded action.
+      if (context?.auxData?.isDefault === false) return;
+      if (contextId && connection) connection.command(
+        'Runtime.evaluate',
+        { expression: injection, contextId },
+        event.sessionId ? { sessionId: event.sessionId } : {},
+      ).catch(() => {});
     }
     if (event.method === 'Runtime.bindingCalled' && event.params?.name === 'openBrowserSync') {
       let payload; try { payload = JSON.parse(event.params.payload); } catch (_) { return; }

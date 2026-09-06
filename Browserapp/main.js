@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, globalShortcut, ipcMain, screen, session, shell } = require('./host-bridge');
+const { app, BrowserWindow, Menu, clipboard, dialog, globalShortcut, ipcMain, nativeImage, screen, session, shell, Tray } = require('./host-bridge');
 const path = require('path');
 const fs = require('fs');
 const fsp = require('fs/promises');
@@ -38,6 +38,16 @@ try {
   }
 } catch (_) { /* ignore */ }
 app.setPath('userData', userDataRoot);
+
+// Single instance: a second launch (e.g. while the app sits in the tray) focuses the
+// running window instead of spawning a copy. This only limits the app shell — browser
+// environments are kernel processes spawned per profile and are not affected.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => showMainWindow());
+}
 
 const defaultProfileDataRoot = path.join(app.getPath('userData'), 'browser-profiles-v2');
 const localSettingsFile = path.join(app.getPath('userData'), 'openbrowser-local-settings.json');
@@ -538,10 +548,16 @@ function normalizeProfileDataRoot(value) {
   return check.root;
 }
 
+const CLOSE_ACTION_VALUES = ['ask', 'tray', 'exit'];
+function normalizeCloseAction(value) {
+  return CLOSE_ACTION_VALUES.includes(value) ? value : 'ask';
+}
+
 let localSettingsCache = {
   profileDataRoot: defaultProfileDataRoot,
   cloud: cloudSync.defaultCloudConfig(),
   uiGroups: [],
+  closeAction: 'ask',
 };
 
 async function loadLocalSettings() {
@@ -551,6 +567,7 @@ async function loadLocalSettings() {
       profileDataRoot: normalizeProfileDataRoot(saved.profileDataRoot),
       cloud: { ...cloudSync.defaultCloudConfig(), ...(saved.cloud || {}) },
       uiGroups: Array.isArray(saved.uiGroups) ? saved.uiGroups : [],
+      closeAction: normalizeCloseAction(saved.closeAction),
     };
     return localSettingsCache;
   } catch (_) {
@@ -558,6 +575,7 @@ async function loadLocalSettings() {
       profileDataRoot: defaultProfileDataRoot,
       cloud: cloudSync.defaultCloudConfig(),
       uiGroups: [],
+      closeAction: 'ask',
     };
     return localSettingsCache;
   }
@@ -568,6 +586,7 @@ async function saveLocalSettings(value) {
     profileDataRoot: normalizeProfileDataRoot(value.profileDataRoot || localSettingsCache.profileDataRoot),
     cloud: value.cloud || localSettingsCache.cloud || cloudSync.defaultCloudConfig(),
     uiGroups: Array.isArray(value.uiGroups) ? value.uiGroups : (localSettingsCache.uiGroups || []),
+    closeAction: normalizeCloseAction(value.closeAction || localSettingsCache.closeAction),
   };
   await fsp.mkdir(path.dirname(localSettingsFile), { recursive: true });
   const temporary = localSettingsFile + '.tmp';
@@ -677,7 +696,7 @@ async function applyBackupBody(body, { mode = 'merge', localProfiles = null, loc
   }
 
   await saveLocalSettings({ ...localSettingsCache, uiGroups: groups });
-  if (engine) engine.syncProfiles(merged.profiles);
+  if (engine) await engine.syncProfiles(merged.profiles);
 
   return {
     profiles: merged.profiles,
@@ -790,6 +809,7 @@ let engine;
 let liveSync;
 let automation = null;
 let quitting = false;
+let quitCleanupPromise = null;
 let syncSelection = [];
 let syncState = { active: false, master: null, selected: [] };
 const windows = new Set();
@@ -855,6 +875,104 @@ function pickWorkArea() {
   return { ...display.workArea, screenWidth: display.bounds.width, screenHeight: display.bounds.height, scaleFactor: display.scaleFactor };
 }
 
+let tray = null;
+const forceCloseWindowIds = new Set();
+
+function closeActionStrings() {
+  const zh = /^zh/i.test(String(app.getLocale?.() || ''));
+  if (zh) {
+    return {
+      message: '最小化到托盘，还是退出程序？',
+      minimize: '最小化到托盘',
+      quit: '退出程序',
+      remember: '记住我的选择',
+      trayShow: '显示主窗口',
+      trayQuit: '退出 OpenBrowser',
+      trayTooltip: 'OpenBrowser 正在后台运行，点击恢复主窗口',
+    };
+  }
+  return {
+    message: 'Minimize to tray, or quit?',
+    minimize: 'Minimize to tray',
+    quit: 'Quit',
+    remember: 'Remember my choice',
+    trayShow: 'Show OpenBrowser',
+    trayQuit: 'Quit OpenBrowser',
+    trayTooltip: 'OpenBrowser is running in the background — click to restore',
+  };
+}
+
+function trayIconImage() {
+  const pixelPng = path.join(__dirname, 'assets', 'logo-pixel.png');
+  const png = path.join(__dirname, 'assets', 'logo.png');
+  const ico = path.join(__dirname, 'assets', 'logo.ico');
+  const source = fs.existsSync(pixelPng) ? pixelPng : (fs.existsSync(png) ? png : ico);
+  let image = nativeImage.createFromPath(source);
+  if (process.platform === 'win32' && !image.isEmpty()) image = image.resize({ width: 16, height: 16 });
+  return image;
+}
+
+function ensureTray() {
+  if (tray || process.platform === 'darwin') return;
+  const strings = closeActionStrings();
+  tray = new Tray(trayIconImage());
+  tray.setToolTip(strings.trayTooltip);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: strings.trayShow, click: () => showMainWindow() },
+    { type: 'separator' },
+    { label: strings.trayQuit, click: () => app.quit() },
+  ]));
+  // Windows: left click restores the window, right click opens the menu.
+  tray.on('click', () => showMainWindow());
+}
+
+function destroyTray() {
+  try { tray?.destroy(); } catch (_) {}
+  tray = null;
+}
+
+function hideMainWindowToTray(win) {
+  ensureTray();
+  win.hide();
+}
+
+function showMainWindow() {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  if (!win) {
+    createWindow().catch(() => {});
+    return;
+  }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+async function askCloseAction(win) {
+  const strings = closeActionStrings();
+  const { response, checkboxChecked } = await dialog.showMessageBox(win, {
+    type: 'question',
+    buttons: [strings.minimize, strings.quit],
+    defaultId: 0,
+    cancelId: 1,
+    message: strings.message,
+    checkboxLabel: strings.remember,
+    checkboxChecked: false,
+    noLink: true,
+  });
+  return { mode: response === 0 ? 'tray' : 'exit', remember: Boolean(checkboxChecked) };
+}
+
+function clampBoundsToWorkArea(bounds, work) {
+  const norm = normalizeBounds(bounds);
+  const width = Math.max(320, Math.min(norm.width, work.width));
+  const height = Math.max(240, Math.min(norm.height, work.height));
+  const maxX = work.x + Math.max(0, work.width - width);
+  const maxY = work.y + Math.max(0, work.height - height);
+  const left = Math.max(work.x, Math.min(maxX, norm.left));
+  const top = Math.max(work.y, Math.min(maxY, norm.top));
+  return { left, top, width, height };
+}
+
 function normalizeBounds(bounds) {
   return {
     left: Math.round(Number(bounds.left) || 0),
@@ -869,7 +987,8 @@ async function tile(ids, cascade = false) {
   if (!entries.length) throw new Error('No selected browser has a CDP session');
   const work = pickWorkArea();
   // Pause geometry mirroring while we rearrange so live-sync does not fight tile layout.
-  if (liveSync) liveSync.lastWindowSync = Date.now() + 2500;
+  liveSync?.pauseGeometrySync?.(3500, cascade ? 'manual-cascade' : 'manual-tile');
+  if (liveSync) liveSync.lastWindowSync = Date.now();
   if (cascade) {
     // Cascade layout: left + vs * index
     const { computeCascadeBounds } = require('./automation/protocol/window-sync-protocol');
@@ -877,29 +996,40 @@ async function tile(ids, cascade = false) {
     const height = Math.max(560, work.height - 180);
     const layout = computeCascadeBounds(entries.map((e) => e.id), {
       left: work.x, top: work.y, width, height, vs: 38,
+      workWidth: work.width, workHeight: work.height,
     });
     await Promise.all(entries.map(({ item }, index) => {
-      const raw = layout[index]?.bounds || { left: work.x + index * 38, top: work.y + index * 34, width, height };
-      return cdp.setWindowBounds(item.port, normalizeBounds(raw));
+      const raw = layout[index]?.bounds || {
+        left: work.x + ((index * 38) % Math.max(1, work.width - width)),
+        top: work.y + ((index * 34) % Math.max(1, work.height - height)),
+        width,
+        height,
+      };
+      return cdp.setWindowBounds(item.port, clampBoundsToWorkArea(raw, work));
     }));
   } else {
     // Prefer side-by-side for 2 windows; otherwise use a near-square grid.
     const count = entries.length;
     const cols = count === 2 ? 2 : Math.ceil(Math.sqrt(count));
     const rows = Math.ceil(count / cols);
-    const width = Math.floor(work.width / cols);
-    const height = Math.floor(work.height / rows);
+    const baseWidth = Math.floor(work.width / cols);
+    const baseHeight = Math.floor(work.height / rows);
     await Promise.all(entries.map(({ item }, index) => {
       const col = index % cols;
       const row = Math.floor(index / cols);
-      return cdp.setWindowBounds(item.port, normalizeBounds({
-        left: work.x + col * width,
-        top: work.y + row * height,
+      const isLastCol = col === cols - 1;
+      const isLastRow = row === rows - 1;
+      const width = isLastCol ? Math.max(320, work.width - col * baseWidth) : baseWidth;
+      const height = isLastRow ? Math.max(240, work.height - row * baseHeight) : baseHeight;
+      return cdp.setWindowBounds(item.port, clampBoundsToWorkArea({
+        left: work.x + col * baseWidth,
+        top: work.y + row * baseHeight,
         width,
         height,
-      }));
+      }, work));
     }));
   }
+  liveSync?.pauseGeometrySync?.(900, cascade ? 'manual-cascade-settle' : 'manual-tile-settle');
   return { success: true, count: entries.length, mode: cascade ? 'cascade' : 'tile', platform: process.platform, workArea: work };
 }
 
@@ -1402,6 +1532,29 @@ async function createWindow() {
   mainWindow = win;
   windows.add(win);
   win.on('closed', () => { windows.delete(win); if (mainWindow === win) mainWindow = null; });
+  win.on('close', (event) => {
+    // macOS keeps the standard close-to-Dock convention; quitting paths bypass this.
+    if (quitting || process.platform === 'darwin') return;
+    if (forceCloseWindowIds.has(win.id)) { forceCloseWindowIds.delete(win.id); return; }
+    const pref = normalizeCloseAction(localSettingsCache.closeAction);
+    if (pref === 'exit') return;
+    event.preventDefault();
+    if (pref === 'tray') {
+      hideMainWindowToTray(win);
+      return;
+    }
+    askCloseAction(win)
+      .then(({ mode, remember }) => {
+        if (remember) {
+          localSettingsCache.closeAction = mode;
+          saveLocalSettings(localSettingsCache).catch(() => {});
+        }
+        if (win.isDestroyed()) return;
+        if (mode === 'tray') hideMainWindowToTray(win);
+        else { forceCloseWindowIds.add(win.id); win.close(); }
+      })
+      .catch(() => { try { if (!win.isDestroyed()) hideMainWindowToTray(win); } catch (_) {} });
+  });
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return;
     win.show();
@@ -1527,7 +1680,19 @@ app.whenReady().then(async () => {
     systemBrowserPath: engine.systemBrowserPath,
     titleBarIntegrated: process.platform === 'darwin' || process.platform === 'win32',
     platform: process.platform,
+    closeAction: normalizeCloseAction(localSettingsCache.closeAction),
   }));
+  registerTrustedIpc('system:read-clipboard', () => {
+    try { return clipboard.readText(); } catch (_) { return ''; }
+  });
+  registerTrustedIpc('system:set-close-action', async (_event, mode) => {
+    const value = normalizeCloseAction(mode);
+    localSettingsCache.closeAction = value;
+    await saveLocalSettings(localSettingsCache);
+    // A remembered "exit" means the user no longer wants background running.
+    if (value === 'exit') destroyTray();
+    return { success: true, closeAction: value };
+  });
   registerTrustedIpc('app:update-check', async () => {
     const payload = await pushAppUpdateStatus({ check: true });
     if (payload?.error && !payload?.remoteVersion) throw new Error(payload.error);
@@ -1696,6 +1861,10 @@ app.whenReady().then(async () => {
     for (const id of running) { const profile = engine.profiles.get(id); if (profile) await engine.start(profile); }
     return { success: true, enabled, affected: ids.length, restarted: running.length };
   });
+  registerTrustedIpc('extensions:reload', async (_event, id) => {
+    if (!id || id === 'all') return await engine.reloadAllExtensions();
+    return await engine.reloadExtension(String(id));
+  });
   registerTrustedIpc('extensions:remove', (_event, id) => engine.removeExtension(String(id)));
 
   registerTrustedIpc('sync:sessions', () => engine.sessions());
@@ -1710,9 +1879,11 @@ app.whenReady().then(async () => {
     const ids = sanitizeIds(payload.ids); const entries = engine.runningWithCdp(ids); const action = String(payload.action);
     if (action === 'tile') return tile(ids, false);
     if (action === 'cascade') return tile(ids, true);
-    if (!['minimized', 'normal', 'maximized'].includes(action)) throw new Error('Unknown window action');
-    await Promise.all(entries.map(({ item }) => cdp.setWindowState(item.port, action)));
-    return { success: true, count: entries.length };
+    if (!['minimized', 'normal', 'maximized', 'fullscreen'].includes(action)) throw new Error('Unknown window action');
+    const transitions = await Promise.all(entries.map(({ item }) => cdp.setWindowState(item.port, action, action === 'fullscreen'
+      ? { verify: true, fallbackState: 'maximized' }
+      : {})));
+    return { success: true, count: entries.length, degraded: transitions.filter((value) => value?.degraded).length };
   });
   registerTrustedIpc('sync:text', async (_event, payload) => {
     const ids = sanitizeIds(payload.ids); const action = String(payload.action); const text = String(payload.text || '').slice(0, 100000);
@@ -2021,11 +2192,31 @@ app.whenReady().then(async () => {
     }
     return automation.rpaStore.importTemplates(parsed);
   });
+  registerTrustedIpc('automation:api-key-rotate', async () => {
+    if (!automation) throw new Error('Automation stack is not ready');
+    const newKey = await automation.rotateApiKey();
+    automation.apiKey = newKey;
+    return { apiKey: newKey };
+  });
+  registerTrustedIpc('automation:rpa-task-delete', async (_event, ids) => {
+    if (!automation) throw new Error('Automation stack is not ready');
+    const list = [...new Set((Array.isArray(ids) ? ids : [ids]).map((id) => String(id || '').trim()).filter(Boolean))];
+    const running = new Set(automation.rpaEngine?.getStatus?.().running || []);
+    const deleted = []; const skipped = [];
+    for (const id of list) {
+      if (running.has(id)) { skipped.push(id); continue; }
+      const result = await automation.rpaStore.deleteTask(id);
+      if (result && result.deleted) deleted.push(id);
+      else skipped.push(id);
+    }
+    return { deleted, skipped };
+  });
   registerTrustedIpc('automation:mcp-paths', () => ({
     mcpScript: path.join(__dirname, 'automation', 'mcp-server.js'),
     appRoot: __dirname,
     port: automation?.info?.port || Number(process.env.OPENBROWSER_API_PORT || 50325),
     apiKey: automation?.apiKey || process.env.OPENBROWSER_API_KEY || '',
+    apiKeyFile: automation?.apiKeyFile || path.join(app.getPath('userData'), 'local-api-key.txt'),
     localApi: automation?.info || null,
   }));
 
@@ -2033,35 +2224,108 @@ app.whenReady().then(async () => {
   startAppUpdateWatcher();
 });
 
+async function stopAllForQuit() {
+  if (!engine) return { stopped: true, remaining: [], errors: [] };
+  const lifecycleIds = () => [...new Set([
+    ...(engine.running?.keys?.() || []),
+    ...(engine.starting?.keys?.() || []),
+    ...(engine.stopping?.keys?.() || []),
+  ])];
+  let result = null;
+  const errors = [];
+  try { result = await engine.stopAll(); } catch (error) {
+    errors.push(String(error?.message || error));
+  }
+  let remaining = Array.isArray(result?.remaining) ? result.remaining : [];
+  if (!result) remaining = lifecycleIds();
+  if (Array.isArray(result?.errors)) errors.push(...result.errors);
+  for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1) {
+    await Promise.allSettled(remaining.map((id) => engine.stop(id)));
+    await sleep(150 * (attempt + 1));
+    try { result = await engine.stopAll(); } catch (error) {
+      errors.push(String(error?.message || error));
+      result = null;
+    }
+    remaining = Array.isArray(result?.remaining) ? result.remaining : lifecycleIds();
+    if (Array.isArray(result?.errors)) errors.push(...result.errors);
+  }
+  if (remaining.length) {
+    console.warn('OpenBrowser quit left browser environments running, force-terminating:', remaining.join(', '));
+    for (const id of remaining) {
+      const item = engine.running?.get(id) || engine.starting?.get(id) || engine.stopping?.get(id);
+      if (item?.pid) {
+        try {
+          if (process.platform === 'win32') {
+            require('child_process').execFileSync('taskkill.exe', ['/PID', String(item.pid), '/T', '/F'], { windowsHide: true, timeout: 3000 });
+          } else {
+            process.kill(item.pid, 'SIGKILL');
+          }
+        } catch (_) {}
+      }
+      if (item?.root) {
+        isolation.terminateProcessesUsingProfile?.(item.root, { force: true }).catch(() => {});
+      }
+    }
+  }
+  return { ...(result || {}), stopped: remaining.length === 0, remaining, errors: [...new Set(errors)] };
+}
+
+function beginQuitCleanup() {
+  if (quitCleanupPromise) return quitCleanupPromise;
+  quitting = true;
+  destroyTray();
+  const cloud = localSettingsCache?.cloud || {};
+  let stopResult = { stopped: true, remaining: [], errors: [] };
+  quitCleanupPromise = Promise.resolve()
+    .then(async () => { stopResult = await stopAllForQuit(); })
+    .then(() => engine?.flushPersistence?.())
+    .then(() => {
+      try { liveSync?.stop?.(); } catch (error) {
+        console.warn('OpenBrowser quit live-sync cleanup failed:', error?.message || error);
+      }
+    })
+    .then(async () => {
+      try { await automation?.stop?.(); } catch (error) {
+        console.warn('OpenBrowser quit automation cleanup failed:', error?.message || error);
+      }
+    })
+    .then(async () => {
+      // Stop browsers and flush close-time state before packaging browser data.
+      // Otherwise the backup can capture stale cookies or locked SQLite/LevelDB files.
+      if (stopResult.remaining.length) return;
+      if (!cloud.enabled || !cloud.autoSyncOnQuit) return;
+      try {
+        await runCloudBackup({
+          profiles: [...(engine?.profiles?.values?.() || [])],
+          groups: localSettingsCache.uiGroups || [],
+          cloud,
+        });
+      } catch (error) {
+        console.warn('OpenBrowser quit auto-backup failed:', error.message);
+        try {
+          localSettingsCache.cloud = { ...cloud, lastError: error.message };
+          await saveLocalSettings(localSettingsCache);
+        } catch (_) {}
+      }
+    })
+    .finally(() => app.quit());
+  return quitCleanupPromise;
+}
+
 app.on('before-quit', (event) => {
   if (quitting) return;
   event.preventDefault();
-  quitting = true;
-  const cloud = localSettingsCache?.cloud || {};
-  Promise.resolve()
-    .then(async () => {
-      if (cloud.enabled && cloud.autoSyncOnQuit) {
-        try {
-          await runCloudBackup({
-            profiles: [...(engine?.profiles?.values?.() || [])],
-            groups: localSettingsCache.uiGroups || [],
-            cloud,
-          });
-        } catch (error) {
-          console.warn('OpenBrowser quit auto-backup failed:', error.message);
-          try {
-            localSettingsCache.cloud = { ...cloud, lastError: error.message };
-            await saveLocalSettings(localSettingsCache);
-          } catch (_) {}
-        }
-      }
-    })
-    .then(() => automation?.stop?.())
-    .then(() => (engine ? engine.stopAll() : null))
-    .finally(() => app.quit());
+  beginQuitCleanup();
 });
 app.on('will-quit', () => {
   stopShortcutBridge();
-  automation?.stop?.().catch(() => {});
+  // before-quit owns the awaited shutdown chain. Do not invoke automation.stop()
+  // a second time while local API/RPA/proxy resources are already being closed.
+  if (!quitCleanupPromise) automation?.stop?.().catch(() => {});
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('window-all-closed', () => {
+  // OpenBrowser owns external browser processes. Closing its last control
+  // window must run the same awaited shutdown path on every platform so proxy
+  // exits cannot remain active behind a hidden macOS application.
+  if (!quitting) app.quit();
+});

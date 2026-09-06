@@ -14,7 +14,8 @@ const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = re
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { platformPreflight } = require('./automation/platform-preflight');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
-const { acquireProfileLock, releaseProfileLock, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = require('./automation/isolation');
+const isolation = require('./automation/isolation');
+const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
 const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
@@ -25,6 +26,119 @@ const {
 const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath } = require('./automation/fingerprint-debug-log');
 
 const KERNEL_POLICY_VERSION = 4;
+const MAX_PROFILE_PROXY_LENGTH = 64 * 1024;
+// Chromium's Windows renderer/GPU helpers can outlive the browser process by
+// several seconds while profile databases close. Keep the profile lock until
+// the OS process list confirms they are gone, but give taskkill enough time to
+// finish on slower RDP/VM hosts.
+const HELPER_CLEANUP_ATTEMPTS = process.platform === 'win32' ? 32 : 3;
+const HELPER_CLEANUP_DELAY_MS = process.platform === 'win32' ? 250 : 120;
+const HELPER_CLEANUP_TIMEOUT_MS = process.platform === 'win32' ? 14000 : 3000;
+const STOP_ALL_ITEM_TIMEOUT_MS = process.platform === 'win32' ? 22000 : 12000;
+
+function isChildExited(child) {
+  if (!child) return true;
+  if (child.exitCode !== null && child.exitCode !== undefined) return true;
+  if (child.signalCode !== null && child.signalCode !== undefined) return true;
+  if (child.pid && !isPidAlive(child.pid)) return true;
+  return false;
+}
+
+const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
+
+async function removeSingletonFiles(root, options = {}) {
+  if (!root) return;
+  const attempts = Math.max(1, Number(options.attempts) || 6);
+  const initialDelay = Math.max(10, Number(options.delayMs) || 40);
+  for (const f of SINGLETON_FILES) {
+    const target = path.join(root, f);
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await fsp.rm(target, { force: true, recursive: true });
+        break;
+      } catch (error) {
+        if (!error || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(error.code)) break;
+        if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, initialDelay * (attempt + 1)));
+      }
+    }
+  }
+}
+
+
+function lifecycleTimeout(promise, timeoutMs, message) {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const error = new Error(message);
+        error.code = 'LIFECYCLE_TIMEOUT';
+        reject(error);
+      }, Math.max(1, Number(timeoutMs) || 1));
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function parsedProxy(value) {
+  try {
+    return parseProxy(String(value || '').trim());
+  } catch (_) {
+    return null;
+  }
+}
+
+function proxyHasCredentials(value) {
+  return Boolean(parsedProxy(value)?.authenticated);
+}
+
+function hasExplicitScheme(value) {
+  return /^[a-z][a-z0-9+.-]*:///i.test(String(value || '').trim());
+}
+
+function sameProxyEndpoint(left, right) {
+  const a = parsedProxy(left);
+  const b = parsedProxy(right);
+  if (!a || !b) return false;
+  if (a.host !== b.host || Number(a.port) !== Number(b.port)) return false;
+  if (hasExplicitScheme(left) && hasExplicitScheme(right)) {
+    return a.protocol === b.protocol;
+  }
+  return true;
+}
+
+function sameProxyIdentity(left, right) {
+  const a = parsedProxy(left);
+  const b = parsedProxy(right);
+  if (!a || !b) return false;
+  const protocolMatches = (hasExplicitScheme(left) && hasExplicitScheme(right))
+    ? a.protocol === b.protocol
+    : true;
+  return Boolean(protocolMatches
+    && a.host === b.host
+    && Number(a.port) === Number(b.port)
+    && String(a.username || '') === String(b.username || '')
+    && String(a.password || '') === String(b.password || ''));
+}
+
+function ownAliasValue(input, keys) {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(input || {}, key)) {
+      return { present: true, value: input[key] };
+    }
+  }
+  return { present: false, value: undefined };
+}
+
+function profileProxyAssociation(value) {
+  const topLevel = ownAliasValue(value, ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id']);
+  if (topLevel.present) return topLevel;
+  return ownAliasValue(value?.proxyMeta, ['proxyId', 'proxy_id', 'proxyLibraryId', 'proxy_library_id']);
+}
+
+function normalizedProxyAssociationId(value) {
+  if (value == null || String(value).trim() === '') return null;
+  return String(value).trim().slice(0, 128);
+}
 
 /** Kill options that match both kernel binary and macOS env Dock shell (OpenBrowser.bin). */
 function managedBrowserKillOptions(itemOrBrowser, root, launchBinary = null) {
@@ -119,10 +233,95 @@ function stopIpcStubForWindow(windowName) {
   if (!/^SB[0-9A-Za-z_-]{4,64}$/.test(win)) return false;
   try {
     // Anchor end-of-arg so SB123 does not pkill SB1234 / SB12345.
-    execFileSync('pkill', ['-f', `ipc-stub\\.py ${win}( |$)`], { stdio: 'ignore' });
+    const regexMode = process.platform === 'darwin' ? ['-E'] : [];
+    execFileSync('pkill', [...regexMode, '-f', `ipc-stub\\.py ${win}( |$)`], { stdio: 'ignore' });
     return true;
   } catch (_) {
     return false;
+  }
+}
+
+async function writeRawAtomically(filePath, value, mode = 0o600) {
+  const directory = path.dirname(filePath);
+  await fsp.mkdir(directory, { recursive: true });
+  const temporary = `${filePath}.tmp-${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+  let handle = null;
+  try {
+    handle = await fsp.open(temporary, 'wx', mode);
+    await handle.writeFile(value, 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = null;
+    await fsp.rename(temporary, filePath);
+    // A directory fsync is supported on POSIX and harmlessly skipped on Windows.
+    try {
+      const directoryHandle = await fsp.open(directory, 'r');
+      await directoryHandle.sync();
+      await directoryHandle.close();
+    } catch (_) {}
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+    await fsp.rm(temporary, { force: true }).catch(() => {});
+  }
+}
+
+async function writeJsonAtomically(filePath, value, mode = 0o600) {
+  // Keep the last valid state available for recovery after a power loss or a
+  // renderer-triggered write that is interrupted halfway through.
+  let previous = null;
+  try {
+    const raw = await fsp.readFile(filePath, 'utf8');
+    JSON.parse(raw);
+    previous = raw;
+  } catch (error) {
+    if (error.code === 'ENOENT') previous = null;
+    // A corrupt current file is deliberately not copied over the good .bak.
+  }
+  if (previous != null) await writeRawAtomically(`${filePath}.bak`, previous, mode);
+  await writeRawAtomically(filePath, value, mode);
+}
+
+async function readEngineStateCandidate(filePath) {
+  const raw = await fsp.readFile(filePath, 'utf8');
+  const saved = JSON.parse(raw);
+  if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+    throw new Error('引擎状态文件格式无效');
+  }
+  return { path: filePath, saved };
+}
+
+async function engineStateRecoveryCandidates(filePath) {
+  const directory = path.dirname(filePath);
+  const base = path.basename(filePath);
+  let names = [];
+  try {
+    names = await fsp.readdir(directory);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const candidates = [
+    `${filePath}.bak`,
+    `${filePath}.tmp`,
+    ...names.filter((name) => name.startsWith(base + '.tmp-')).map((name) => path.join(directory, name)),
+  ];
+  const valid = [];
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      const state = await readEngineStateCandidate(candidate);
+      const stat = await fsp.stat(candidate);
+      valid.push({ ...state, mtimeMs: stat.mtimeMs });
+    } catch (_) {}
+  }
+  return valid.sort((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+async function preserveCorruptEngineState(filePath) {
+  const target = `${filePath}.corrupt-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    await fsp.rename(filePath, target);
+    return target;
+  } catch (_) {
+    return null;
   }
 }
 
@@ -164,8 +363,21 @@ class BrowserEngine {
     this.app = app;
     this.profiles = new Map();
     this.running = new Map();
+    // Per-profile lifecycle barriers. A browser must finish stopping (including
+    // process-tree, proxy bridge, and profile-lock cleanup) before a new start
+    // can acquire the same profile.
     this.starting = new Map();
+    this.stopping = new Map();
+    this.lifecycleGenerations = new Map();
+    this.lifecycleStopRequests = new Map();
+    this.stopAllPromise = null;
+    this.stopAllInProgress = false;
+    this._persistQueue = Promise.resolve();
     this.networkInfo = new Map();
+    // The proxy library is loaded by the automation layer after engine.init().
+    // Keep the reference here so linked profiles always resolve their current
+    // credentials at sync/start time instead of relying on renderer storage.
+    this.proxyStore = null;
     this.extensions = new Map();
     this.assignments = new Map();
     this.listeners = new Set();
@@ -201,7 +413,6 @@ class BrowserEngine {
     this.systemBrowserPath = null;
     this.kernelBootstrapPromise = null;
     this.startPageServer = null;
-    this.getWorkArea = options.getWorkArea || (() => null);
   }
 
   async ensureStartPage() {
@@ -232,9 +443,40 @@ class BrowserEngine {
   async init(bundledExtensionPath) {
     await this.kernelManager.loadMeta();
     let migrateKernelPolicy = false;
+    let recoveredState = false;
+    let state = null;
+    let primaryStateError = null;
     try {
-      const saved = JSON.parse(await fsp.readFile(this.stateFile, 'utf8'));
-      for (const extension of saved.extensions || []) if (fs.existsSync(extension.path)) this.extensions.set(extension.id, extension);
+      state = await readEngineStateCandidate(this.stateFile);
+    } catch (error) {
+      primaryStateError = error;
+    }
+    if (!state) {
+      const recovery = await engineStateRecoveryCandidates(this.stateFile);
+      if (recovery.length) {
+        state = recovery[0];
+        recoveredState = true;
+        if (primaryStateError && primaryStateError.code !== 'ENOENT') {
+          await preserveCorruptEngineState(this.stateFile);
+        }
+      }
+    }
+    if (!state && primaryStateError && primaryStateError.code !== 'ENOENT') {
+      throw new Error(`引擎状态文件损坏且没有可用备份: ${primaryStateError.message || primaryStateError}`);
+    }
+    if (state) {
+      const saved = state.saved;
+      for (const extension of saved.extensions || []) {
+        if (fs.existsSync(extension.path)) {
+          try {
+            const refreshed = await this.readExtension(extension.path, Boolean(extension.builtIn));
+            refreshed.addedAt = extension.addedAt || refreshed.addedAt;
+            this.extensions.set(refreshed.id, refreshed);
+          } catch (_) {
+            this.extensions.set(extension.id, extension);
+          }
+        }
+      }
       for (const [profileId, ids] of Object.entries(saved.assignments || {})) this.assignments.set(profileId, new Set(ids));
       // Profiles (incl. cookies / proxy auth / platform secrets) live in main-process state,
       // not renderer localStorage, so XSS cannot dump them from the UI store.
@@ -257,7 +499,7 @@ class BrowserEngine {
         this.allowSystemBrowserFallback = saved.allowSystemBrowserFallback;
         if (typeof saved.systemBrowserPath === 'string') this.systemBrowserPath = saved.systemBrowserPath;
       }
-    } catch (_) {}
+    }
     if (bundledExtensionPath && fs.existsSync(path.join(bundledExtensionPath, 'manifest.json'))) {
       const builtIn = await this.readExtension(bundledExtensionPath, true);
       const obsoleteBuiltInIds = [...this.extensions.values()]
@@ -275,13 +517,74 @@ class BrowserEngine {
       this.extensions.set(builtIn.id, builtIn);
       await this.persist();
     }
-    if (migrateKernelPolicy) await this.persist();
+    if (migrateKernelPolicy || recoveredState) await this.persist();
   }
 
-  async persist() {
-    await fsp.mkdir(path.dirname(this.stateFile), { recursive: true });
+  resolveStoredProxyProfile(incoming) {
+    const profile = incoming && typeof incoming === 'object' ? incoming : null;
+    if (!profile) return profile;
+    const direct = profile.networkMode === 'direct' || /^(?:direct|offline|none)$/i.test(String(profile.proxy || '').trim());
+    const association = profileProxyAssociation(profile);
+    const proxyId = direct ? null : normalizedProxyAssociationId(association.value);
+    if (!proxyId) {
+      return this.sanitizeProfile({
+        ...profile,
+        proxyId: null,
+        proxyMeta: { ...(profile.proxyMeta || {}), proxyId: null },
+      });
+    }
+    if (!this.proxyStore) {
+      return this.sanitizeProfile({
+        ...profile,
+        proxyId,
+        proxyMeta: { ...(profile.proxyMeta || {}), proxyId },
+      });
+    }
+    const item = this.proxyStore.get?.(proxyId);
+    if (!item?.raw) {
+      // A deleted library entry must not leave a ghost association that later
+      // overwrites Direct/manual proxy edits. Keep the last raw endpoint as a
+      // manual proxy and remove every accepted association alias via sanitize.
+      return this.sanitizeProfile({
+        ...profile,
+        proxyId: null,
+        proxyMeta: { ...(profile.proxyMeta || {}), proxyId: null },
+      });
+    }
+    return this.sanitizeProfile({
+      ...profile,
+      networkMode: 'proxy',
+      proxy: item.raw,
+      proxyId: item.id,
+      proxyMeta: {
+        ...(profile.proxyMeta || {}),
+        proxyId: item.id,
+        ipChannel: item.ipChannel || profile.proxyMeta?.ipChannel || 'ip-api',
+        refreshUrl: item.refreshUrl || profile.proxyMeta?.refreshUrl || '',
+      },
+    });
+  }
+
+  async setProxyStore(proxyStore) {
+    this.proxyStore = proxyStore || null;
+    if (!this.proxyStore) return false;
+    let changed = false;
+    for (const [id, profile] of this.profiles) {
+      const next = this.resolveStoredProxyProfile(profile);
+      if (!next || next.proxy === profile.proxy
+        && next.proxyId === profile.proxyId
+        && next.proxyMeta?.ipChannel === profile.proxyMeta?.ipChannel
+        && next.proxyMeta?.refreshUrl === profile.proxyMeta?.refreshUrl) continue;
+      this.profiles.set(id, next);
+      changed = true;
+    }
+    if (changed) await this.persist();
+    return changed;
+  }
+
+  persist() {
     const assignments = Object.fromEntries([...this.assignments].map(([id, values]) => [id, [...values]]));
-    await fsp.writeFile(this.stateFile, JSON.stringify({
+    const payload = JSON.stringify({
       extensions: [...this.extensions.values()],
       assignments,
       profiles: [...this.profiles.values()],
@@ -289,7 +592,16 @@ class BrowserEngine {
       preferIndependentKernel: this.preferIndependentKernel,
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
       systemBrowserPath: this.systemBrowserPath,
-    }, null, 2), 'utf8');
+    }, null, 2);
+    const write = () => writeJsonAtomically(this.stateFile, payload);
+    const previous = this._persistQueue || Promise.resolve();
+    const queued = previous.then(write, write);
+    this._persistQueue = queued.catch(() => {});
+    return queued;
+  }
+
+  flushPersistence() {
+    return this._persistQueue || Promise.resolve();
   }
 
   kernelStatus() {
@@ -310,7 +622,10 @@ class BrowserEngine {
     return this.kernelBootstrapPromise;
   }
 
-  /** Resolve the integrated kernel, downloading Google Chrome Stable when requested. */
+  /**
+   * Resolve the integrated independent kernel only.
+   * Runtime auto-download of Wayfern / Chrome for Testing is permanently disabled.
+   */
   async ensureIndependentKernel(force = false) {
     const kernel = await this.kernelManager.ensureIntegrated(force);
     this.emit({ type: 'kernel-ready', kernel });
@@ -353,10 +668,11 @@ class BrowserEngine {
     const advancedValue = value.advanced && typeof value.advanced === 'object' ? value.advanced : {};
     const proxyMetaValue = value.proxyMeta && typeof value.proxyMeta === 'object' ? value.proxyMeta : {};
     const platformValue = value.platform && typeof value.platform === 'object' ? value.platform : {};
+    const fingerprintValue = value.fingerprint && typeof value.fingerprint === 'object'
+      ? value.fingerprint
+      : (privacyValue.fingerprint && typeof privacyValue.fingerprint === 'object' ? privacyValue.fingerprint : null);
     const allowed = (candidate, values, fallback) => values.includes(String(candidate || '')) ? String(candidate) : fallback;
     const finite = (candidate) => candidate !== '' && candidate !== null && candidate !== undefined && Number.isFinite(Number(candidate)) ? Number(candidate) : null;
-    const hasExplicitSize = Number(value.width) >= 640 && Number(value.height) >= 480;
-    const screenMode = allowed(value.screenMode || value.screen_mode, ['auto', 'custom'], hasExplicitSize ? 'custom' : 'auto');
     const width = Math.min(7680, Math.max(640, Number(value.width) || 1280)); const height = Math.min(4320, Math.max(480, Number(value.height) || 820));
     const number = Number.parseInt(value.number, 10);
     const parseLimitedOption = (candidate, values) => {
@@ -365,25 +681,31 @@ class BrowserEngine {
       return values.includes(value) ? value : null;
     };
     const cpuCandidate = privacyValue.cores === '' || privacyValue.cores === null || privacyValue.cores === undefined
-      ? privacyValue.fingerprint?.cores
+      ? fingerprintValue?.cores
       : privacyValue.cores;
     const memoryCandidate = privacyValue.memory === '' || privacyValue.memory === null || privacyValue.memory === undefined
-      ? privacyValue.fingerprint?.memory
+      ? fingerprintValue?.memory
       : privacyValue.memory;
     const cores = parseLimitedOption(cpuCandidate, [0, 2, 4, 6, 8, 10, 12, 16]);
     const memory = parseLimitedOption(memoryCandidate, [0, 2, 4, 6, 8]);
-    const rawProxy = String(value.proxy || '').trim().slice(0, 500);
+    const rawProxy = String(value.proxy || '').trim();
+    if (rawProxy.length > MAX_PROFILE_PROXY_LENGTH) throw new Error('Proxy URL is too long');
     const networkMode = value.networkMode === 'direct' || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy';
+    const effectiveStartUrl = String(value.startUrl || platformValue.startUrl || advancedValue.startUrls || '').trim().slice(0, 2000);
+    const proxyAssociation = profileProxyAssociation(value);
+    const proxyId = networkMode === 'direct' ? null : normalizedProxyAssociationId(proxyAssociation.value);
     return {
       id, number: Number.isInteger(number) && number > 0 ? number : null, name: value.name.slice(0, 100),
       title: String(value.title || value.displayName || '').slice(0, 120),
+      startUrl: effectiveStartUrl,
       browser: 'Google Chrome', os: String(value.os || 'Windows').slice(0, 40), location: String(value.location || 'Local').slice(0, 80),
       networkMode,
       proxy: networkMode === 'direct' ? 'Direct' : rawProxy,
+      proxyId,
       tag: String(value.tag || '').slice(0, 40),
       groupId: String(value.groupId || '').slice(0, 64),
       group_name: String(value.group_name || value.groupName || '').slice(0, 40),
-      language: String(value.language || 'en-US').slice(0, 20), screenMode, width, height,
+      language: String(value.language || 'en-US').slice(0, 20), width, height,
       userAgent: String(value.userAgent || '').replace(/[\r\n]/g, ' ').slice(0, 1000), cookies: String(value.cookies || '').slice(0, 500000), note: String(value.note || '').slice(0, 2000),
       exitIp: String(value.exitIp || '').slice(0, 80), exitCountryCode: String(value.exitCountryCode || '').slice(0, 4), exitTimezone: String(value.exitTimezone || '').slice(0, 100),
       exitLatitude: finite(value.exitLatitude), exitLongitude: finite(value.exitLongitude),
@@ -392,14 +714,15 @@ class BrowserEngine {
       exitNetworkType: String(value.exitNetworkType || '').slice(0, 40),
       platform: {
         type: String(platformValue.type || 'other').slice(0, 40),
-        startUrl: String(platformValue.startUrl || value.startUrl || '').slice(0, 2000),
+        startUrl: effectiveStartUrl,
         username: String(platformValue.username || '').slice(0, 200),
         password: String(platformValue.password || '').slice(0, 500),
         totpSecret: String(platformValue.totpSecret || platformValue.otp || '').slice(0, 200),
       },
       proxyMeta: {
-        ipChannel: normalizeIpLookupChannel(proxyMetaValue.ipChannel),
-        refreshUrl: String(proxyMetaValue.refreshUrl || '').slice(0, 1000),
+        proxyId,
+        ipChannel: normalizeIpLookupChannel(proxyMetaValue.ipChannel ?? proxyMetaValue.ip_channel),
+        refreshUrl: String(proxyMetaValue.refreshUrl ?? proxyMetaValue.refresh_url ?? '').slice(0, 1000),
         checkOnStart: Boolean(proxyMetaValue.checkOnStart),
         refreshOnStart: Boolean(proxyMetaValue.refreshOnStart),
         systemProxy: allowed(proxyMetaValue.systemProxy, ['global', 'use', 'off'], 'global'),
@@ -488,19 +811,19 @@ class BrowserEngine {
         cores,
         memory,
         // Keep 0 (= real hardware). Do NOT use `cores || nested` — 0 is falsy and was wiped to "auto".
-        fingerprint: privacyValue.fingerprint && typeof privacyValue.fingerprint === 'object' ? {
-          ...privacyValue.fingerprint,
+        ...(fingerprintValue ? { fingerprint: {
+          ...fingerprintValue,
           cores: cores === null || cores === undefined
-            ? (privacyValue.fingerprint.cores === 0 || privacyValue.fingerprint.cores === '0'
+            ? (fingerprintValue.cores === 0 || fingerprintValue.cores === '0'
               ? 0
-              : (privacyValue.fingerprint.cores ?? null))
+              : (fingerprintValue.cores ?? null))
             : cores,
           memory: memory === null || memory === undefined
-            ? (privacyValue.fingerprint.memory === 0 || privacyValue.fingerprint.memory === '0'
+            ? (fingerprintValue.memory === 0 || fingerprintValue.memory === '0'
               ? 0
-              : (privacyValue.fingerprint.memory ?? null))
+              : (fingerprintValue.memory ?? null))
             : memory,
-        } : { cores, memory },
+        } } : {}),
       },
       advanced: {
         saveCookies: advancedValue.saveCookies !== false, savePasswords: Boolean(advancedValue.savePasswords), saveBookmarks: advancedValue.saveBookmarks !== false,
@@ -518,7 +841,7 @@ class BrowserEngine {
         syncExtensionData: Boolean(advancedValue.syncExtensionData),
         multiOpen: Boolean(advancedValue.multiOpen),
         tabMode: allowed(advancedValue.tabMode, ['fixed', 'restore'], advancedValue.restoreSession ? 'restore' : 'fixed'),
-        startUrls: String(advancedValue.startUrls || '').slice(0, 8000),
+        startUrls: String(advancedValue.startUrls || effectiveStartUrl || '').slice(0, 8000),
         blockUrls: String(advancedValue.blockUrls || '').slice(0, 8000),
         blockSound: Boolean(advancedValue.blockSound),
         blockPasswordPrompt: Boolean(advancedValue.blockPasswordPrompt),
@@ -535,15 +858,35 @@ class BrowserEngine {
     };
   }
 
-  syncProfiles(values) {
+  async syncProfiles(values) {
     if (!Array.isArray(values) || values.length > 1000) throw new Error('Invalid profile list');
     const existingIds = [...this.profiles.keys()];
     const globallyEnabled = existingIds.length ? [...this.extensions.keys()].filter((extensionId) => existingIds.every((profileId) => (this.assignments.get(profileId) || new Set()).has(extensionId))) : [];
     let assignmentsChanged = false;
     const incomingIds = new Set();
     for (const value of values) {
-      const profile = this.sanitizeProfile(value);
-      const previous = this.profiles.get(profile.id);
+      const sanitized = this.sanitizeProfile(value);
+      const previous = this.profiles.get(sanitized.id);
+      let profile = sanitized;
+      if (previous && sanitized.proxyId && previous.proxyId === sanitized.proxyId) {
+        const stored = this.proxyStore?.get?.(sanitized.proxyId);
+        const matchesPrevious = sameProxyIdentity(sanitized.proxy, previous.proxy)
+          || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, previous.proxy));
+        const matchesStored = Boolean(stored?.raw) && (
+          sameProxyIdentity(sanitized.proxy, stored.raw)
+          || (!proxyHasCredentials(sanitized.proxy) && sameProxyEndpoint(sanitized.proxy, stored.raw))
+        );
+        if (!matchesPrevious && !matchesStored) {
+          // A linked profile whose endpoint/auth was manually edited becomes a
+          // manual proxy. This prevents the old library id from overwriting it.
+          profile = this.sanitizeProfile({
+            ...sanitized,
+            proxyId: null,
+            proxyMeta: { ...(sanitized.proxyMeta || {}), proxyId: null },
+          });
+        }
+      }
+      profile = this.resolveStoredProxyProfile(profile);
       const isNew = !previous;
       // UI may send redacted proxy (no auth) after localStorage reload. Prefer previous
       // authenticated form only when host:port match and incoming lacks credentials.
@@ -551,21 +894,21 @@ class BrowserEngine {
       if (previous) {
         const nextProxy = String(profile.proxy || '');
         const prevProxy = String(previous.proxy || '');
-        const nextHasAuth = /:\/\/[^/@]+@/.test(nextProxy) || nextProxy.split(':').length >= 4;
-        const prevHasAuth = /:\/\/[^/@]+@/.test(prevProxy) || prevProxy.split(':').length >= 4;
-        if (!nextHasAuth && prevHasAuth) {
-          try {
-            const prev = parseProxy(prevProxy);
-            const bare = parseProxy(nextProxy);
-            if (prev && bare && prev.host === bare.host && prev.port === bare.port) {
-              merged = this.sanitizeProfile({ ...profile, proxy: prevProxy });
-            }
-          } catch (_) {}
+        const nextHasAuth = proxyHasCredentials(nextProxy);
+        const prevHasAuth = proxyHasCredentials(prevProxy);
+        const explicitlyCleared = String(value?.proxyAuthAction ?? value?.proxy_auth_action ?? '').toLowerCase() === 'clear';
+        if (!explicitlyCleared && !nextHasAuth && prevHasAuth && sameProxyEndpoint(prevProxy, nextProxy)) {
+          merged = this.sanitizeProfile({ ...profile, proxy: prevProxy });
         }
         // Restore cookies/platform secrets only when UI clearly redacted ALL of them
         // (post-localStorage load) while engine still holds values — not when user
         // intentionally cleared a single field in the editor.
-        const uiLooksRedacted = !String(profile.cookies || '').trim()
+        const secretAction = String(value?.secretsAction ?? value?.credentialsAction ?? '').trim().toLowerCase();
+        const explicitSecretUpdate = value?.__secretsExplicit === true
+          || secretAction === 'replace'
+          || secretAction === 'clear';
+        const uiLooksRedacted = !explicitSecretUpdate
+          && !String(profile.cookies || '').trim()
           && !String(profile.platform?.password || '').trim()
           && !String(profile.platform?.totpSecret || '').trim()
           && (
@@ -615,7 +958,7 @@ class BrowserEngine {
       }
     }
     // Do not drop unknown engine profiles here — deleteProfiles is the explicit path.
-    this.persist().catch((error) => this.emit({ type: 'sync-error', action: 'persist-profiles', message: error.message }));
+    await this.persist();
     return this.status();
   }
 
@@ -643,7 +986,9 @@ class BrowserEngine {
   setProfileDataRoot(value) {
     const raw = String(value || '').trim();
     if (!raw) throw new Error('Environment data directory is required');
-    if (this.running.size) throw new Error('Stop all browser environments before changing the data directory');
+    if (this.running.size || this.starting.size || this.stopping.size) {
+      throw new Error('Stop all browser environments before changing the data directory');
+    }
     const check = validateDataRootIsolationSecure(raw);
     if (!check.ok) throw new Error(check.message);
     this.profileDataRootPath = check.root;
@@ -719,7 +1064,7 @@ class BrowserEngine {
   /** Clear cache + cookies on disk for a stopped profile. */
   async clearProfileCacheAndCookies(profileId) {
     const id = assertProfileId(profileId);
-    if (this.running.has(id)) throw new Error('请先关闭窗口再清除缓存及 Cookie');
+    if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) throw new Error('请先关闭窗口再清除缓存及 Cookie');
     const root = this.profileRoot(id);
     await this.clearProfileCache(root);
     const base = path.join(root, 'Default');
@@ -759,7 +1104,26 @@ class BrowserEngine {
     let prefs = {}; try { prefs = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) {}
     prefs.profile ||= {}; prefs.profile.default_content_setting_values ||= {};
     prefs.profile.exit_type = 'Normal'; prefs.profile.exited_cleanly = true;
+    prefs.devtools ||= {};
+    prefs.devtools.preferences ||= {};
+    prefs.policy ||= {};
+    prefs.policy.developer_tools_availability = 1;
+    prefs.DeveloperToolsAvailability = 1;
     const content = prefs.profile.default_content_setting_values;
+    content.fullscreen = 1;
+    content.automatic_fullscreen = 1;
+    content.window_placement = 1;
+    content.window_management = 1;
+    prefs.fullscreen ||= {};
+    prefs.fullscreen.allowed = true;
+    prefs.profile.content_settings ||= {};
+    prefs.profile.content_settings.exceptions ||= {};
+    const exceptions = prefs.profile.content_settings.exceptions;
+    for (const key of ['fullscreen', 'automatic_fullscreen', 'window_placement', 'window_management']) {
+      exceptions[key] ||= {};
+      exceptions[key]['*,*'] = { setting: 1 };
+      exceptions[key]['[*.]*,*'] = { setting: 1 };
+    }
     if (profile.advanced.blockImages) content.images = 2; else delete content.images;
     if (profile.advanced.blockSound) content.sound = 2; else delete content.sound;
     if (profile.advanced.blockNotifications) content.notifications = 2; else delete content.notifications;
@@ -801,6 +1165,18 @@ class BrowserEngine {
    * shortening the launch critical path (scales with disk latency and profile size).
    */
   async prepareProfileFilesForStart(root, profile, restoreSession) {
+    await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
+    const lockF = path.join(root, '.openbrowser-instance.lock');
+    if (fs.existsSync(lockF)) {
+      try {
+        const content = JSON.parse(await fsp.readFile(lockF, 'utf8'));
+        if (content?.pid && !isPidAlive(content.pid)) {
+          await fsp.rm(lockF, { force: true }).catch(() => {});
+        }
+      } catch (_) {
+        await fsp.rm(lockF, { force: true }).catch(() => {});
+      }
+    }
     const jobs = [
       // Shared-file chain: resetZoom then applyProfilePreferences, ordered.
       (async () => { await this.resetZoom(root); await this.applyProfilePreferences(root, profile); })(),
@@ -815,8 +1191,10 @@ class BrowserEngine {
     const urls = [];
     // blank page: no platform URL
     if (String(profile.platform?.type || '') !== 'blank') {
+      const rootStartUrl = String(profile.startUrl || '').trim();
+      if (rootStartUrl) urls.push(rootStartUrl);
       const platformUrl = String(profile.platform?.startUrl || '').trim();
-      if (platformUrl) urls.push(platformUrl);
+      if (platformUrl && !urls.includes(platformUrl)) urls.push(platformUrl);
     }
     const lines = String(profile.advanced?.startUrls || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     for (const line of lines) if (!urls.includes(line)) urls.push(line);
@@ -1122,7 +1500,24 @@ class BrowserEngine {
         }
       })();
     };
-    const connection = await cdp.connect(browserWs, { onEvent: onAttached, timeout: 8000 });
+    const connection = await cdp.connect(browserWs, {
+      onEvent: onAttached,
+      onDisconnect: (error) => {
+        if (item.cleanedUp || item.stopping) return;
+        this.handleBrowserGone(item.profile.id, item, 'worker-cdp-disconnect', {
+          expected: false,
+          error: error?.message || String(error),
+          kill: true,
+          waitForExit: true,
+        }).catch((cleanupError) => this.emit({
+          type: 'sync-error',
+          action: 'worker-cdp-disconnect-cleanup',
+          id: item.profile.id,
+          message: cleanupError.message,
+        }));
+      },
+      timeout: 8000,
+    });
     try {
       await connection.command('Target.setDiscoverTargets', { discover: true });
       await connection.command('Target.setAutoAttach', {
@@ -1637,12 +2032,19 @@ class BrowserEngine {
         cdpAlive = false;
       }
 
+      // Stop may have started while the CDP probes were in flight. Never let a
+      // stale watcher callback act on, or reschedule itself for, a torn-down item.
+      if (item.cleanedUp || item.stopping || this.running.get(profileId) !== item) return;
+
       if (!processAlive || !cdpAlive) {
         item.watchDeadTicks = (item.watchDeadTicks || 0) + 1;
         item.watchEmptyTicks = 0;
         // pid gone: stop immediately; CDP flaky: need 2 consecutive fails
         if (!processAlive || item.watchDeadTicks >= 2) {
-          this.handleBrowserGone(profileId, item, processAlive ? 'cdp-dead' : 'process-exit');
+          this.handleBrowserGone(profileId, item, processAlive ? 'cdp-dead' : 'process-exit', {
+            kill: true,
+            waitForExit: true,
+          }).catch((error) => this.emit({ type: 'sync-error', action: 'watch-cleanup', id: profileId, message: error.message }));
           return;
         }
       } else {
@@ -1654,7 +2056,10 @@ class BrowserEngine {
             // Gracefully stop environment so UI matches closed browser
             this.stop(profileId).catch((error) => {
               this.emit({ type: 'sync-error', action: 'auto-stop-empty', id: profileId, message: error.message });
-              this.handleBrowserGone(profileId, item, 'empty-windows');
+              this.handleBrowserGone(profileId, item, 'empty-windows', {
+                kill: true,
+                waitForExit: true,
+              }).catch((error) => this.emit({ type: 'sync-error', action: 'auto-stop-empty-cleanup', id: profileId, message: error.message }));
             });
             return;
           }
@@ -1683,47 +2088,348 @@ class BrowserEngine {
         }
       }
       // 2.4s is enough for new-tab FP inject without burning CDP every 1.2s across fleets.
-      item.watchTimer = setTimeout(tick, 2400);
+      if (!item.cleanedUp && !item.stopping && this.running.get(profileId) === item) {
+        item.watchTimer = setTimeout(tick, 2400);
+      }
     };
     // Delay first check so startup tabs can settle
     item.watchTimer = setTimeout(tick, 2500);
   }
 
-  handleBrowserGone(profileId, item, reason = 'browser-gone') {
-    if (!item || item.cleanedUp) return;
-    this.clearRunningWatch(item);
-    const expected = item.stopping === true;
-    if (item.markerProcess && !item.markerProcess.killed) {
-      try { item.markerProcess.kill(); } catch (_) {}
-    }
-    item.proxyForwarder?.close().catch(() => {});
-    releaseProfileLock(item.root, item.profileLock).catch(() => {});
-    // Best-effort kill remaining helpers when CDP already dead
-    if (item.child && item.child.exitCode === null && item.pid) {
-      killProcessTree(item.pid, managedBrowserKillOptions(item, item.root)).catch(() => {});
-    }
-    stopIpcStubForWindow(item.kernelWindowName);
-    if (!expected) this.markProfileCleanExit(item.root).catch(() => {});
-    item.cleanedUp = true;
-    this.running.delete(profileId);
-    const live = this.profiles.get(profileId) || item.profile;
-    this.emit({
-      type: 'status',
-      id: profileId,
-      running: false,
-      error: null,
-      reason,
+  waitForChildExit(child, timeout = 3000) {
+    if (isChildExited(child)) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.removeListener?.('exit', onExit);
+        child.removeListener?.('close', onExit);
+        resolve(value);
+      };
+      const onExit = () => finish(true);
+      const timer = setTimeout(() => finish(isChildExited(child)), timeout);
+      child.once?.('exit', onExit);
+      child.once?.('close', onExit);
     });
-    if (live?.advanced?.cloudBackup && !item.stopping) {
-      this.emit({
-        type: 'profile-closed',
-        id: profileId,
-        cloudBackup: true,
-        cookieExported: false,
-        profile: live,
+  }
+
+  async drainProfileHelpers(root) {
+    if (!root) return { known: true, pids: [], attempts: 0, timedOut: false };
+    return isolation.drainProcessesUsingProfile(root, {
+      attempts: HELPER_CLEANUP_ATTEMPTS,
+      delayMs: HELPER_CLEANUP_DELAY_MS,
+      timeoutMs: HELPER_CLEANUP_TIMEOUT_MS,
+    });
+  }
+
+  cleanupRunningItem(profileId, item, options = {}) {
+    if (!item) return Promise.resolve({ id: profileId, running: false });
+    if (item.cleanupPromise?.lifecycleSettled) item.cleanupPromise = null;
+    if (item.cleanupPromise) return item.cleanupPromise;
+
+    const reason = String(options.reason || 'browser-gone');
+    const wasStopping = Boolean(item.stopping);
+    const cleanup = async () => {
+      // Mark first so the watcher and any late startup continuation stop touching
+      // a browser whose ownership is already being torn down. Keep `running` until
+      // all external resources have been released; start() waits on `stopping`.
+      item.cleanupState = 'cleaning';
+      item.cleanupAttempts = (item.cleanupAttempts || 0) + 1;
+      item.cleanedUp = false;
+      item.stopping = true;
+      this.clearRunningWatch(item);
+      item.workerFingerprintConnection?.close();
+      item.workerFingerprintConnection = null;
+
+      if (options.kill && !isChildExited(item.child) && item.pid) {
+        await killProcessTree(item.pid, managedBrowserKillOptions(item, item.root)).catch(() => {});
+      }
+      if (options.waitForExit) {
+        let exited = await this.waitForChildExit(item.child, Number(options.exitTimeout) || 6500);
+        // A failed first kill must not release the profile lock while Chromium
+        // still owns the profile. Retry the bounded kill/wait sequence once.
+        if (!exited && !isChildExited(item.child) && item.pid) {
+          await killProcessTree(item.pid, managedBrowserKillOptions(item, item.root)).catch(() => {});
+          exited = await this.waitForChildExit(item.child, 2500);
+        }
+        item.childExitState = { ...(item.childExitState || {}), exited, code: item.child?.exitCode ?? null, signal: item.child?.signalCode || null };
+        if (!exited) {
+          // Fail closed: a live child may still own SQLite/LevelDB/profile locks.
+          // Release auxiliary handles, but never release the profile lock or delete
+          // the running item until a later cleanup attempt confirms child exit.
+          try { item.cdpConnection?.close?.(); } catch (_) {}
+          if (item.markerProcess && !item.markerProcess.killed) {
+            try { item.markerProcess.kill(); } catch (_) {}
+          }
+          // Do not close proxyForwarder while child has not exited to avoid network leak to host
+          stopIpcStubForWindow(item.kernelWindowName);
+          item.cleanupFailed = true;
+          item.cleanupState = 'blocked';
+          const failure = new Error(`Browser child exit was not confirmed for profile ${profileId}; cleanup is fail-closed`);
+          failure.code = 'BROWSER_EXIT_UNCONFIRMED';
+          item.cleanupError = failure;
+          throw failure;
+        }
+      }
+
+      // The tracked browser process can exit before Chromium's renderer/GPU
+      // helpers. Re-scan the exact user-data-dir and terminate only those
+      // helpers before releasing the profile lock.
+      if (item.root && isChildExited(item.child)) {
+        let helperDrain = await this.drainProfileHelpers(item.root);
+        if (!helperDrain.known || helperDrain.pids.length) {
+          if (helperDrain.pids?.length) {
+            await isolation.terminateProcessIds?.(helperDrain.pids);
+            helperDrain = await this.drainProfileHelpers(item.root);
+          }
+        }
+        if (!helperDrain.known || helperDrain.pids.length) {
+          try {
+            const remaining = scanProcessesUsingProfile(item.root);
+            if (remaining?.pids?.length) {
+              for (const p of remaining.pids) {
+                if (p && p !== process.pid) {
+                  try {
+                    if (process.platform === 'win32') {
+                      require('child_process').execFileSync('taskkill.exe', ['/PID', String(p), '/T', '/F'], { windowsHide: true, timeout: 3000 });
+                    } else {
+                      process.kill(p, 'SIGKILL');
+                    }
+                  } catch (_) {}
+                }
+              }
+            }
+          } catch (_) {}
+          helperDrain = await this.drainProfileHelpers(item.root);
+        }
+        if (item.root) {
+          await removeSingletonFiles(item.root, { attempts: 6, delayMs: 40 });
+        }
+        const activeHelperPids = (helperDrain.pids || []).filter(isPidAlive);
+        if (activeHelperPids.length > 0) {
+          const failure = new Error(`Chromium helper exit was not confirmed for profile ${profileId}; cleanup is fail-closed`);
+          failure.code = 'BROWSER_HELPERS_EXIT_UNCONFIRMED';
+          failure.pids = activeHelperPids;
+          item.cleanupFailed = true;
+          item.cleanupState = 'blocked';
+          item.cleanupError = failure;
+          throw failure;
+        }
+      }
+
+      try { item.cdpConnection?.close?.(); } catch (_) {}
+      if (item.markerProcess && !item.markerProcess.killed) {
+        try { item.markerProcess.kill(); } catch (_) {}
+      }
+      await item.proxyForwarder?.close().catch(() => {});
+      stopIpcStubForWindow(item.kernelWindowName);
+      const lockReleased = await releaseProfileLock(item.root, item.profileLock).catch(() => false);
+      if (!lockReleased && item.profileLock && fs.existsSync(lockPath(item.root))) {
+        if (!options.ignoreForeignLock) {
+          item.cleanupFailed = true;
+          item.cleanupState = 'blocked';
+          const failure = new Error(`Profile lock release failed for profile ${profileId}; cleanup is fail-closed`);
+          failure.code = 'PROFILE_LOCK_RELEASE_FAILED';
+          item.cleanupError = failure;
+          throw failure;
+        }
+      }
+      // Existing behavior intentionally marks the profile clean after watchdog
+      // cleanup as well, preventing Chromium's restore bubble on the next launch.
+      if (options.markCleanExit !== false) await this.markProfileCleanExit(item.root).catch(() => {});
+
+      if (this.running.get(profileId) === item) this.running.delete(profileId);
+      item.cleanupFailed = false;
+      item.cleanupState = 'cleaned';
+      item.cleanupError = null;
+      item.cleanedUp = true;
+      item.stopping = false;
+      const live = this.profiles.get(profileId) || item.profile;
+      const error = options.error === undefined ? null : (options.error || null);
+      const currentItem = this.running.get(profileId);
+      const mayEmitForGeneration = !currentItem || currentItem === item;
+      if (mayEmitForGeneration && options.emitStatus !== false && !item.statusEmitted) {
+        item.statusEmitted = true;
+        this.emit({ type: 'status', id: profileId, running: false, stopping: false, error, reason });
+      }
+      if (mayEmitForGeneration && options.emitProfileClosed && live?.advanced?.cloudBackup && !wasStopping && !item.profileClosedEmitted) {
+        item.profileClosedEmitted = true;
+        this.emit({
+          type: 'profile-closed',
+          id: profileId,
+          cloudBackup: true,
+          cookieExported: false,
+          profile: live,
+          reason,
+        });
+      }
+      return { id: profileId, running: false, reason };
+    };
+
+    const cleanupPromise = cleanup();
+    cleanupPromise.lifecycleItem = item;
+    cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
+    cleanupPromise.lifecycleSettled = false;
+    item.cleanupPromise = cleanupPromise;
+    cleanupPromise.then(
+      () => {
+        cleanupPromise.lifecycleSettled = true;
+        if (item.cleanupPromise === cleanupPromise) item.cleanupPromise = null;
+      },
+      (error) => {
+        cleanupPromise.lifecycleSettled = true;
+        // Keep the running item and lock visible, but allow an explicit retry after
+        // the child eventually exits instead of memoizing a rejected promise forever.
+        item.cleanupFailed = true;
+        item.cleanupState = 'blocked';
+        item.cleanupError = error;
+        if (item.cleanupPromise === cleanupPromise) item.cleanupPromise = null;
+      },
+    );
+    return cleanupPromise;
+  }
+
+  /**
+   * Clean resources acquired before a running item is published. Startup can
+   * fail after Chromium has spawned but before the item has enough state for
+   * cleanupRunningItem(); keep this path idempotent and use the same bounded
+   * close/kill/wait ordering on every failure branch.
+   */
+  cleanupStartupResources(resources = {}) {
+    if (resources.cleanupPromise) return resources.cleanupPromise;
+    const cleanup = async () => {
+      const child = resources.child;
+      const connection = resources.connection;
+      let exited = isChildExited(child);
+
+      if (connection && !exited) {
+        try {
+          await Promise.race([
+            (async () => {
+              try {
+                await connection.command?.('Browser.close', {}, { timeout: 5000 });
+              } catch (_) {}
+            })(),
+            new Promise((resolve) => {
+              const timer = setTimeout(resolve, 1800);
+              timer.unref?.();
+            }),
+          ]);
+        } catch (_) {}
+      }
+
+      if (child) {
+        exited = exited || await this.waitForChildExit(child, 2500);
+        if (!exited && !isChildExited(child) && child.pid) {
+          await killProcessTree(child.pid, managedBrowserKillOptions(
+            resources.browser,
+            resources.root,
+            resources.launchBinary,
+          )).catch(() => {});
+          exited = await this.waitForChildExit(child, 2500);
+        }
+      }
+
+      try { connection?.close?.(); } catch (_) {}
+      if (resources.markerProcess && !resources.markerProcess.killed) {
+        try { resources.markerProcess.kill(); } catch (_) {}
+      }
+      await resources.proxyForwarder?.close().catch(() => {});
+      stopIpcStubForWindow(resources.kernelWindowName);
+      if (child && !exited) {
+        // Startup owns the same profile lock safety rule as running cleanup: a
+        // process that may still be alive must keep the lock as a tombstone.
+        return { exited: false, lockReleased: false, cleanupBlocked: true };
+      }
+      if (resources.root) {
+        await removeSingletonFiles(resources.root, { attempts: 6, delayMs: 40 });
+        const helperDrain = await this.drainProfileHelpers(resources.root);
+        if (!helperDrain.known || helperDrain.pids.length) {
+          return {
+            exited: false,
+            lockReleased: false,
+            cleanupBlocked: true,
+            helperPids: helperDrain.pids,
+          };
+        }
+      }
+      if (resources.profileLock && resources.root) {
+        const released = await releaseProfileLock(resources.root, resources.profileLock).catch(() => false);
+        const lockStillPresent = fs.existsSync(lockPath(resources.root));
+        if (!released && lockStillPresent) {
+          return { exited: false, lockReleased: false, cleanupBlocked: true };
+        }
+        return { exited, lockReleased: !lockStillPresent };
+      }
+      return { exited, lockReleased: true };
+    };
+    resources.cleanupPromise = cleanup();
+    return resources.cleanupPromise;
+  }
+
+  handleBrowserGone(profileId, item, reason = 'browser-gone', options = {}) {
+    if (!item) return Promise.resolve({ id: profileId, running: false });
+    const pending = this.stopping.get(profileId);
+    if (pending?.lifecycleSettled && this.stopping.get(profileId) === pending) this.stopping.delete(profileId);
+    const activePending = this.stopping.get(profileId);
+    if (activePending && (!activePending.lifecycleItem || activePending.lifecycleItem === item)) return activePending;
+    if (item.cleanupPromise?.lifecycleSettled) item.cleanupPromise = null;
+    if (item.cleanupPromise) return item.cleanupPromise;
+
+    const current = this.running.get(profileId);
+    const latestGeneration = Math.max(
+      Number(this.lifecycleGenerations?.get(profileId)) || 0,
+      Number(this.starting.get(profileId)?.lifecycleGeneration) || 0,
+      Number(current?.lifecycleGeneration) || 0,
+      Number(activePending?.lifecycleGeneration) || 0,
+    );
+    const staleGeneration = Number(item.lifecycleGeneration) > 0
+      && latestGeneration > Number(item.lifecycleGeneration);
+    if (staleGeneration || (current && current !== item) || (activePending && activePending.lifecycleItem && activePending.lifecycleItem !== item)) {
+      // A late exit/error from an older generation must never replace the stop
+      // barrier or status of the current browser generation.
+      return this.cleanupRunningItem(profileId, item, {
         reason,
+        expected: true,
+        error: null,
+        kill: options.kill !== false,
+        waitForExit: options.waitForExit !== false,
+        exitTimeout: options.exitTimeout,
+        // A replacement generation may already be preparing the same profile.
+        // Do not rewrite its Preferences from an old process callback.
+        markCleanExit: false,
+        emitStatus: false,
+        emitProfileClosed: false,
+        ignoreForeignLock: Boolean(
+          current
+          && current !== item
+          && current.profileLock
+          && current.root
+          && item.root
+          && path.resolve(String(current.root || '')) === path.resolve(String(item.root || '')),
+        ),
       });
     }
+
+    const cleanupPromise = this.cleanupRunningItem(profileId, item, {
+      reason,
+      expected: options.expected !== undefined ? options.expected : item.stopping === true,
+      error: options.error,
+      kill: options.kill !== false,
+      waitForExit: options.waitForExit !== false,
+      exitTimeout: options.exitTimeout,
+      markCleanExit: options.markCleanExit,
+      emitProfileClosed: options.emitProfileClosed !== false,
+    });
+    cleanupPromise.lifecycleItem = item;
+    cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
+    this.stopping.set(profileId, cleanupPromise);
+    cleanupPromise.finally(() => {
+      if (this.stopping.get(profileId) === cleanupPromise) this.stopping.delete(profileId);
+    }).catch(() => {});
+    return cleanupPromise;
   }
 
   async waitForPort(root, timeout = 30000, child = null) {
@@ -1734,7 +2440,7 @@ class BrowserEngine {
       if (child?._startupDiagnostic?.spawnError) {
         throw new Error(`Browser process could not start: ${child._startupDiagnostic.spawnError}`);
       }
-      if (child && child.exitCode !== null && child.exitCode !== undefined) {
+      if (child && isChildExited(child)) {
         throw new Error(formatBrowserStartupError(
           `Browser exited before CDP was ready (code ${child.exitCode}${child.signalCode ? ', signal ' + child.signalCode : ''})`,
           child,
@@ -1743,24 +2449,20 @@ class BrowserEngine {
       }
     };
     const tryReadPort = async () => {
-      const candidates = [];
       try {
         const content = await fsp.readFile(file, 'utf8');
         const port = Number(content.split(/\r?\n/)[0]);
-        if (Number.isInteger(port) && port > 0) candidates.push(port);
-      } catch (_) {}
-      const announced = String(child?._startupDiagnostic?.stderr || '').match(
-        /DevTools listening on ws:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):(\d+)\//
-      );
-      if (announced) candidates.push(Number(announced[1]));
-      for (const port of new Set(candidates)) {
-        try {
-          await cdp.json(`http://127.0.0.1:${port}/json/version`);
-          return port;
-        } catch (_) {
-          // Chromium may announce/write the port slightly before the endpoint answers.
+        if (Number.isInteger(port) && port > 0) {
+          try {
+            await cdp.json(`http://127.0.0.1:${port}/json/version`);
+            return port;
+          } catch (_) {
+            // File is written slightly before the DevTools endpoint answers. Measured on a
+            // real launch that gap is ~600ms of Chromium coming up, not idle polling — a
+            // tighter retry loop here was tried and bought nothing, so keep it simple.
+          }
         }
-      }
+      } catch (_) {}
       return 0;
     };
     // Event-driven fast path: watch the profile dir so we react ~1 tick after Chromium
@@ -1816,23 +2518,201 @@ class BrowserEngine {
     });
   }
 
-  async start(raw) {
-    const id = String(raw?.id || '').trim();
-    if (!id) return this._start(raw);
-    const pending = this.starting.get(id);
-    if (pending) return pending;
-    const promise = this._start(raw);
-    this.starting.set(id, promise);
-    try {
-      return await promise;
-    } finally {
-      if (this.starting.get(id) === promise) this.starting.delete(id);
+  restoreStoredProxyCredentials(incoming, source = null) {
+    if (!incoming || incoming.networkMode === 'direct' || incoming.proxyId) return incoming;
+    if (String(source?.proxyAuthAction ?? source?.proxy_auth_action ?? '').trim().toLowerCase() === 'clear') {
+      return incoming;
+    }
+    const previous = this.profiles.get(incoming.id);
+    if (!previous) return incoming;
+    const nextProxy = String(incoming.proxy || '');
+    const prevProxy = String(previous.proxy || '');
+    const nextHasAuth = proxyHasCredentials(nextProxy);
+    const prevHasAuth = proxyHasCredentials(prevProxy);
+    if (!prevHasAuth || nextHasAuth) return incoming;
+    if (sameProxyEndpoint(prevProxy, nextProxy)) {
+      return this.sanitizeProfile({ ...incoming, networkMode: 'proxy', proxy: prevProxy });
+    }
+    return incoming;
+  }
+
+  nextLifecycleGeneration(id) {
+    if (!this.lifecycleGenerations) this.lifecycleGenerations = new Map();
+    const next = (Number(this.lifecycleGenerations.get(id)) || 0) + 1;
+    this.lifecycleGenerations.set(id, next);
+    return next;
+  }
+
+  requestLifecycleStop(id, generation) {
+    if (!this.lifecycleStopRequests) this.lifecycleStopRequests = new Map();
+    this.lifecycleStopRequests.set(id, generation == null ? true : generation);
+  }
+
+  clearLifecycleStopRequest(id, generation) {
+    if (!this.lifecycleStopRequests) return;
+    if (generation === undefined) return;
+    const requested = this.lifecycleStopRequests.get(id);
+    if (requested === generation || (generation === null && requested === true)) {
+      this.lifecycleStopRequests.delete(id);
     }
   }
 
-  async _start(raw) {
+  isLifecycleStopRequested(id, generation) {
+    const requested = this.lifecycleStopRequests?.get(id);
+    return requested === true || requested === generation;
+  }
+
+  assertStartGenerationActive(id, generation) {
+    if (this.stopAllInProgress || this.isLifecycleStopRequested(id, generation)) {
+      const error = new Error(`Browser start was cancelled for profile ${id}`);
+      error.code = 'BROWSER_START_CANCELLED';
+      throw error;
+    }
+  }
+
+  retainBlockedStartup(profile, resources, cause, generation, cleanupResult = {}) {
+    const current = this.running.get(profile.id);
+    if (current) return current;
+    const error = new Error(`Browser startup cleanup is incomplete for profile ${profile.id}`);
+    error.code = cleanupResult.helperPids?.length
+      ? 'BROWSER_HELPERS_EXIT_UNCONFIRMED'
+      : 'BROWSER_EXIT_UNCONFIRMED';
+    error.cause = cause;
+    error.pids = cleanupResult.helperPids || [];
+    const item = {
+      child: resources.child || null,
+      cdpConnection: resources.connection || null,
+      proxyForwarder: resources.proxyForwarder || null,
+      markerProcess: resources.markerProcess || null,
+      profileLock: resources.profileLock || null,
+      pid: resources.child?.pid || null,
+      browser: resources.browser || null,
+      root: resources.root || null,
+      profile,
+      port: null,
+      launchBinary: resources.launchBinary || null,
+      kernelWindowName: resources.kernelWindowName || null,
+      childExitState: {
+        exited: isChildExited(resources.child),
+        code: resources.child?.exitCode ?? null,
+        signal: resources.child?.signalCode || null,
+        error: null,
+      },
+      lifecycleGeneration: generation,
+      cleanupState: 'blocked',
+      cleanupAttempts: 1,
+      cleanedUp: false,
+      cleanupFailed: true,
+      cleanupError: error,
+      stopping: true,
+      cleanupPromise: null,
+      statusEmitted: false,
+      profileClosedEmitted: false,
+      extensions: [],
+      loadedExtensions: [],
+    };
+    this.running.set(profile.id, item);
+    return item;
+  }
+
+  async start(raw) {
+    const candidate = this.restoreStoredProxyCredentials(
+      this.resolveStoredProxyProfile(this.sanitizeProfile(raw)),
+      raw,
+    );
+    const id = candidate.id;
+    const pendingStart = this.starting.get(id);
+    if (pendingStart) return pendingStart;
+    if (this.stopAllInProgress) {
+      const error = new Error('Browser engine is stopping all environments');
+      error.code = 'ENGINE_STOPPING';
+      throw error;
+    }
+
+    const generation = this.nextLifecycleGeneration(id);
+    const task = (async () => {
+      const pendingStop = this.stopping.get(id);
+      if (pendingStop) await pendingStop.catch(() => {});
+      this.assertStartGenerationActive(id, generation);
+
+      let afterStop = this.running.get(id);
+      if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
+        if (!afterStop.cleanupFailed) {
+          await this.stopRunningItem(id, afterStop).catch(() => {});
+          afterStop = this.running.get(id);
+        }
+      }
+      if (afterStop && (afterStop.cleanupFailed || afterStop.cleanedUp || afterStop.stopping)) {
+        let numericPid = Number(afterStop.pid);
+        let childDead = afterStop.child
+          ? isChildExited(afterStop.child)
+          : (numericPid > 0 ? !isPidAlive(numericPid) : true);
+        let helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
+        if (!childDead || helpers.length) {
+          if (!childDead && numericPid > 0) {
+            await killProcessTree(numericPid, managedBrowserKillOptions(afterStop, afterStop.root)).catch(() => {});
+          }
+          for (const helperPid of helpers) {
+            if (helperPid && helperPid !== process.pid) {
+              await killProcessTree(helperPid, { force: true }).catch(() => {});
+            }
+          }
+          childDead = afterStop.child
+            ? isChildExited(afterStop.child)
+            : (numericPid > 0 ? !isPidAlive(numericPid) : true);
+          helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
+          if (!childDead || helpers.length) {
+            if (numericPid > 0 && isPidAlive(numericPid)) {
+              try { process.kill(numericPid, 'SIGKILL'); } catch (_) {}
+            }
+            for (const helperPid of helpers) {
+              try { if (helperPid !== process.pid) process.kill(helperPid, 'SIGKILL'); } catch (_) {}
+            }
+          }
+        }
+        childDead = afterStop.child
+          ? isChildExited(afterStop.child)
+          : (numericPid > 0 ? !isPidAlive(numericPid) : true);
+        helpers = scanProcessesUsingProfile(afterStop.root || '').pids;
+        if (!childDead) {
+          throw afterStop.cleanupError || Object.assign(
+            new Error(`Browser environment ${id} is still stopping; child exit has not been confirmed`),
+            { code: 'BROWSER_EXIT_UNCONFIRMED' },
+          );
+        }
+        if (afterStop.root) {
+          await removeSingletonFiles(afterStop.root, { attempts: 8, delayMs: 40 });
+        }
+        try { afterStop.cdpConnection?.close?.(); } catch (_) {}
+        if (afterStop.proxyForwarder) {
+          try { await afterStop.proxyForwarder.close?.(); } catch (_) {}
+        }
+        if (afterStop.profileLock && afterStop.root) {
+          await releaseProfileLock(afterStop.root, afterStop.profileLock).catch(() => {});
+        }
+        this.running.delete(id);
+        afterStop = null;
+      }
+      if (afterStop) return this.publicRunning(id);
+      this.assertStartGenerationActive(id, generation);
+      return this._start(candidate, generation);
+    })();
+    task.lifecycleGeneration = generation;
+    this.starting.set(id, task);
+    try {
+      return await task;
+    } finally {
+      if (this.starting.get(id) === task) this.starting.delete(id);
+    }
+  }
+
+  async _start(raw, lifecycleGeneration = null) {
     // let: language/timezone resolution reassigns profile via applyResolvedLocale
-    let profile = this.sanitizeProfile(raw); this.profiles.set(profile.id, profile);
+    // start() already applied redaction recovery exactly once. Repeating it here
+    // would undo an explicit proxyAuthAction=clear before launch.
+    let profile = this.resolveStoredProxyProfile(this.sanitizeProfile(raw));
+    this.profiles.set(profile.id, profile);
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     if (this.running.has(profile.id)) {
       if (!profile.advanced.multiOpen) return this.publicRunning(profile.id);
       return this.publicRunning(profile.id);
@@ -1855,28 +2735,53 @@ class BrowserEngine {
     let profileLock = null;
     let proxyForwarder = null;
     let kernelWindowName = null;
+    let liveItem = null;
+    const startupResources = {
+      root: null,
+      profileLock: null,
+      proxyForwarder: null,
+      kernelWindowName: null,
+      browser: null,
+      launchBinary: null,
+      child: null,
+      connection: null,
+    };
     try {
       profile = await this.prepareProfileProxyForStart(profile);
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     this.profiles.set(profile.id, profile);
     this.emitStartProgress(profile.id, 'proxy', 18, '正在检测代理与出口…');
     await this.ensureExitNetworkForLocale(profile).catch(() => {});
     profile = this.applyResolvedLocale(profile);
     this.profiles.set(profile.id, profile);
+    // Persist the effective proxy (including credentials returned by a dynamic
+    // proxy API) before launching Chromium. A quit immediately after startup
+    // must not leave the renderer's redacted copy as the durable state.
+    await this.persist();
     const extensions = this.assignedExtensions(profile.id);
     this.emitStartProgress(profile.id, 'kernel', 30, '正在准备浏览器内核…');
     if (!this.kernelStatus().installed && this.preferIndependentKernel) {
-      // Resolve the integrated seed, or let the kernel manager download Chrome Stable.
+      // Resolve integrated seed only — never download a remote kernel at start time.
       await this.ensureKernelBootstrap();
     }
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     const browser = this.chooseBrowser(profile);
     root = this.profileRoot(profile.id);
+    startupResources.root = root;
     const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, root, profile.id, { create: true });
     if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
-    profileLock = await acquireProfileLock(root, { profileId: profile.id, browser: browser.path });
+    profileLock = await acquireProfileLock(root, {
+      profileId: profile.id,
+      browser: browser.path,
+      lifecycleGeneration,
+    });
+    startupResources.profileLock = profileLock;
+    startupResources.lifecycleGeneration = lifecycleGeneration;
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
     // Parallelized (independent IO overlaps; Preferences writers stay serialized). See method.
     await this.prepareProfileFilesForStart(root, profile, restoreSession);
-    await fsp.rm(path.join(root, 'DevToolsActivePort'), { force: true }).catch(() => {});
+    await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
     const pageNetwork = this.networkInfo.get(profile.id) || {};
     const customStartUrls = this.resolveStartupUrls(profile);
     const infoStartUrl = profile.advanced.showInfoPage !== false
@@ -1891,31 +2796,8 @@ class BrowserEngine {
     const proxyConfig = this.proxyConfig(profile.proxy);
     // Site-stability keeps static marks; refresh-on-start only when stability is off.
     const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
-    const workArea = this.getWorkArea();
-    const autoScreen = profile.screenMode === 'auto' && workArea?.width && workArea?.height;
-    const fingerprintProfile = autoScreen ? {
-      ...profile,
-      width: Math.max(640, Number(workArea.screenWidth) || workArea.width),
-      height: Math.max(480, Number(workArea.screenHeight) || workArea.height),
-      privacy: {
-        ...profile.privacy,
-        fingerprint: {
-          ...(profile.privacy?.fingerprint || {}),
-          screenWidth: Math.max(640, Number(workArea.screenWidth) || workArea.width),
-          screenHeight: Math.max(480, Number(workArea.screenHeight) || workArea.height),
-          availLeft: workArea.x,
-          availTop: workArea.y,
-          availWidth: workArea.width,
-          availHeight: workArea.height,
-          screenX: workArea.x + 16,
-          screenY: workArea.y + 16,
-          devicePixelRatio: Math.max(1, Number(workArea.scaleFactor) || 1),
-          taskbarHeight: Math.max(0, (Number(workArea.screenHeight) || workArea.height) - workArea.height),
-        },
-      },
-    } : profile;
     const fingerprint = buildFingerprint({
-      ...fingerprintProfile,
+      ...profile,
       fingerprintLaunchSeed: allowSeedRefresh ? crypto.randomBytes(16).toString('hex') : '',
       kernelVersion: browser.version,
       exitTimezone: profile.exitTimezone || pageNetwork.timezone || '',
@@ -1935,6 +2817,7 @@ class BrowserEngine {
     }
     if (proxyConfig?.authenticated) {
       proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
+      startupResources.proxyForwarder = proxyForwarder;
     }
     this.emitStartProgress(profile.id, 'configure', 48, '正在配置启动参数…');
     const args = [
@@ -1948,32 +2831,18 @@ class BrowserEngine {
       '--disable-session-crashed-bubble',
       '--disable-background-mode',
       '--enable-unsafe-extension-debugging',
+      '--extensions-on-chrome-urls',
+      '--enable-features=AutomaticFullscreenContentSetting,WindowPlacement,WindowManagement',
+      '--disable-gesture-requirement-for-presentation',
+      '--disable-fullscreen-low-power-mode',
       // Random loopback port only; never bind 0.0.0.0. Restrict CDP WebSocket origins
       // (was * — any local page that learns the port could attach and steal session).
       '--remote-debugging-port=0',
       '--remote-allow-origins=http://127.0.0.1,http://localhost',
     ];
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
-    for (const flag of chromeArgsForFingerprint(fingerprint, fingerprintProfile)) {
+    for (const flag of chromeArgsForFingerprint(fingerprint, profile)) {
       if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
-    }
-    let windowWidth = profile.width;
-    let windowHeight = profile.height;
-    if (workArea?.width && workArea?.height) {
-      const maxWidth = Math.max(640, workArea.width - 32);
-      const maxHeight = Math.max(480, workArea.height - 32);
-      if (autoScreen) {
-        windowWidth = maxWidth;
-        windowHeight = maxHeight;
-      } else {
-        const scale = Math.min(1, maxWidth / profile.width, maxHeight / profile.height);
-        windowWidth = Math.round(profile.width * scale);
-        windowHeight = Math.round(profile.height * scale);
-      }
-      const size = `--window-size=${windowWidth},${windowHeight}`;
-      const index = args.findIndex((arg) => arg.startsWith('--window-size='));
-      if (index >= 0) args[index] = size;
-      else args.push(size);
     }
     // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
     let runtimeFingerprint = fingerprint;
@@ -1991,6 +2860,7 @@ class BrowserEngine {
           ],
         });
         kernelWindowName = written.windowName;
+        startupResources.kernelWindowName = kernelWindowName;
         runtimeFingerprint = fingerprintForNativeKernelInject(fingerprint);
         this.emit({
           type: 'kernel-init-synced',
@@ -2011,6 +2881,7 @@ class BrowserEngine {
     if (profile.privacy.webgpu === 'blocked') args.push('--disable-features=WebGPU');
     if (profile.advanced.blockImages) args.push('--blink-settings=imagesEnabled=false');
     if (profile.advanced.blockVideo || profile.advanced.blockSound) args.push('--autoplay-policy=user-gesture-required');
+    else args.push('--autoplay-policy=no-user-gesture-required');
     if (profile.advanced.jsHeapMax) args.push('--js-flags=--max-old-space-size=8192');
     if (restoreSession) args.push('--restore-last-session');
     const disabledFeatures = [];
@@ -2023,6 +2894,11 @@ class BrowserEngine {
     }
     if (proxy) {
       args.push(`--proxy-server=${proxy}`);
+      // HTTP/SOCKS proxies are IPv4; disable IPv6 so Chrome cannot skip the proxy.
+      if (!args.includes('--disable-ipv6')) args.push('--disable-ipv6');
+      if (!args.some((a) => a.startsWith('--force-webrtc-ip-handling-policy='))) {
+        args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
+      }
       // 本机启动页必须直连，不走代理；可叠加用户直连白名单
       let bypass = '<-loopback>;127.0.0.1;localhost';
       if (profile.proxyMeta?.directBypass && profile.proxyMeta.bypassList) {
@@ -2111,6 +2987,8 @@ class BrowserEngine {
     // macOS + openbrowser-148 only: Dock wrapper so process shows logo-native+number.
     // Non-148 Chromium has no OpenBrowser.bin layout; do not force a shell (would fail hard).
     let launchBinary = browser.path;
+    startupResources.browser = browser;
+    startupResources.launchBinary = launchBinary;
     try {
       if (process.platform === 'darwin' && isOpenBrowser148(browser)) {
         const dockBin = await prepareMacDockWrapper({
@@ -2119,41 +2997,71 @@ class BrowserEngine {
           userDataPath: this.app.getPath('userData'),
           realBinary: browser.path,
         });
-        if (dockBin && fs.existsSync(dockBin)) launchBinary = dockBin;
+        if (dockBin && fs.existsSync(dockBin)) {
+          launchBinary = dockBin;
+          startupResources.launchBinary = launchBinary;
+        }
       }
     } catch (error) {
       this.emit({ type: 'sync-error', action: 'env-dock-icon', id: profile.id, message: error.message });
     }
 
     let child;
+    let childExitState;
     let connection;
     let port;
     try {
       this.emitStartProgress(profile.id, 'spawn', 62, '正在启动浏览器进程…');
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
       await ensureKernelReadyForLaunch(browser);
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+      const headless = /^(1|true|new)$/i.test(String(process.env.OPENBROWSER_HEADLESS || '').trim());
+      if (headless && !finalArgs.some((arg) => /^--headless(?:=|$)/i.test(String(arg)))) {
+        finalArgs.push('--headless=new');
+        if (!finalArgs.some((arg) => String(arg).split('=')[0] === '--disable-gpu')) finalArgs.push('--disable-gpu');
+      }
       child = spawn(launchBinary, finalArgs, {
         detached: process.platform !== 'win32',
-        windowsHide: false,
+        windowsHide: headless,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      startupResources.child = child;
+      // Register these listeners immediately after spawn. CDP setup can take
+      // several seconds, and an early browser exit must not be lost before the
+      // running item is assembled below.
+      childExitState = { exited: false, code: null, signal: null, error: null };
+      child.once('exit', (code, signal) => {
+        childExitState.exited = true;
+        childExitState.code = code;
+        childExitState.signal = signal;
+      });
+      child.once('error', (error) => {
+        childExitState.error = error;
+      });
+      profileLock = await updateProfileLock(root, profileLock, {
+        browserPid: child.pid,
+        browserProfileRoot: path.resolve(root),
+        browserExecutable: launchBinary,
+        browserStartedAt: new Date().toISOString(),
+      });
+      if (!profileLock) {
+        const error = new Error('Profile lock ownership changed while starting browser');
+        error.code = 'PROFILE_LOCK_LOST';
+        throw error;
+      }
+      startupResources.profileLock = profileLock;
       const startupDiagnostic = { launchBinary, profileRoot: root, stdout: '', stderr: '' };
       child._startupDiagnostic = startupDiagnostic;
       child.stdout?.setEncoding('utf8');
       child.stderr?.setEncoding('utf8');
       child.stdout?.on('data', (chunk) => { startupDiagnostic.stdout = appendDiagnosticOutput(startupDiagnostic.stdout, chunk); });
       child.stderr?.on('data', (chunk) => { startupDiagnostic.stderr = appendDiagnosticOutput(startupDiagnostic.stderr, chunk); });
-      child.once('error', (error) => { startupDiagnostic.spawnError = error.message; });
+      child.on('error', (error) => { startupDiagnostic.spawnError = error.message; });
       this.emitStartProgress(profile.id, 'cdp', 76, '正在等待调试端口…');
       port = await this.waitForPort(root, 30000, child);
       connection = await portConnection(port);
-      if (workArea?.width && workArea?.height) {
-        await cdp.setWindowBounds(port, {
-          left: workArea.x + 16,
-          top: workArea.y + 16,
-          width: windowWidth,
-          height: windowHeight,
-        }).catch(() => {});
-      }
+      startupResources.connection = connection;
+      this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     } catch (error) {
       const diagnostic = child?._startupDiagnostic || { launchBinary, profileRoot: root };
       await writeBrowserStartupDiagnostic(this.app.getPath('userData'), {
@@ -2170,12 +3078,7 @@ class BrowserEngine {
         stderr: diagnostic.stderr || '',
         spawnError: diagnostic.spawnError || null,
       });
-      if (child && child.exitCode === null) {
-        await killProcessTree(child.pid, managedBrowserKillOptions(browser, root, launchBinary)).catch(() => {});
-      }
-      stopIpcStubForWindow(kernelWindowName);
-      await proxyForwarder?.close().catch(() => {});
-      await releaseProfileLock(root, profileLock);
+      await this.cleanupStartupResources(startupResources);
       throw new Error(formatBrowserStartupError(error, child, diagnostic));
     }
     if (profile.cookies && profile.advanced.saveCookies) { try { await this.importProfileCookies(connection, profile.cookies); } catch (error) { this.emit({ type: 'sync-error', action: 'import-cookies', id: profile.id, message: 'Cookie 导入失败：' + error.message }); } }
@@ -2208,9 +3111,7 @@ class BrowserEngine {
           reason: msg,
         });
       } else {
-        await connection.command('Browser.close').catch(() => {});
-        await proxyForwarder?.close().catch(() => {});
-        await releaseProfileLock(root, profileLock);
+        await this.cleanupStartupResources(startupResources);
         throw error;
       }
     }
@@ -2225,43 +3126,57 @@ class BrowserEngine {
       fingerprint,
       kernelWindowName: kernelWindowName || null,
       nativeKernelFingerprint: isOpenBrowser148(browser),
-    };
-    const cleanup = (exitedNormally = false) => {
-      if (item.cleanedUp) return;
-      item.cleanedUp = true;
-      this.clearRunningWatch(item);
-      item.workerFingerprintConnection?.close();
-      if (item.markerProcess && !item.markerProcess.killed) { try { item.markerProcess.kill(); } catch (_) {} }
-      item.proxyForwarder?.close().catch(() => {});
-      stopIpcStubForWindow(item.kernelWindowName);
-      releaseProfileLock(root, profileLock).catch(() => {});
-      if (exitedNormally) this.markProfileCleanExit(item.root).catch(() => {});
-      this.running.delete(profile.id);
+      childExitState: childExitState || { exited: isChildExited(child), code: child.exitCode, signal: child.signalCode, error: null },
+      lifecycleGeneration,
+      cleanupState: 'active',
+      cleanupAttempts: 0,
+      cleanedUp: false,
+      stopping: false,
+      cleanupPromise: null,
+      statusEmitted: false,
+      profileClosedEmitted: false,
     };
     this.running.set(profile.id, item);
-    child.once('exit', (code, signal) => {
+    liveItem = item;
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+
+    const handleChildExit = (code, signal) => {
       const expected = item.stopping === true || code === 0;
-      // If closed by user (not via stop()), still try cloud cookie snapshot while connection may be dead —
-      // rely on profile data files on disk; emit close for auto cloud push of opted-in envs.
-      const live = this.profiles.get(profile.id) || profile;
-      cleanup(expected);
-      this.emit({
-        type: 'status', id: profile.id, running: false,
-        error: expected ? null : `浏览器异常退出${signal ? ` (${signal})` : ` (code ${code})`}`,
-        reason: 'browser-exit',
+      const error = expected
+        ? null
+        : `浏览器异常退出${signal ? ` (${signal})` : ` (code ${code})`}`;
+      this.handleBrowserGone(profile.id, item, 'browser-exit', {
+        expected,
+        error,
+        kill: true,
+        waitForExit: true,
+      }).catch((cleanupError) => {
+        this.emit({ type: 'sync-error', action: 'browser-exit-cleanup', id: profile.id, message: cleanupError.message });
       });
-      if (live?.advanced?.cloudBackup && !item.stopping) {
-        this.emit({
-          type: 'profile-closed',
-          id: profile.id,
-          cloudBackup: true,
-          cookieExported: false,
-          profile: live,
-          reason: 'browser-exit',
-        });
-      }
+    };
+    const handleChildError = (error) => {
+      this.handleBrowserGone(profile.id, item, 'browser-error', {
+        expected: false,
+        error: error?.message || String(error),
+        kill: true,
+        waitForExit: true,
+      }).catch(() => {});
+    };
+    child.once('exit', (code, signal) => {
+      item.childExitState = { ...(item.childExitState || {}), exited: true, code, signal };
+      handleChildExit(code, signal);
     });
-    child.once('error', (error) => { cleanup(false); this.emit({ type: 'status', id: profile.id, running: false, error: error.message }); });
+    child.once('error', (error) => {
+      item.childExitState = { ...(item.childExitState || {}), error };
+      handleChildError(error);
+    });
+    // The process may have exited during CDP/bootstrap setup, before the item
+    // listeners above were installed. Replay that state exactly once.
+    if (item.childExitState?.exited) {
+      queueMicrotask(() => handleChildExit(item.childExitState.code, item.childExitState.signal));
+    } else if (item.childExitState?.error) {
+      queueMicrotask(() => handleChildError(item.childExitState.error));
+    }
     item.startupExtensionGuard = this.suppressStartupExtensionPages(connection, reconciled.installed).catch((error) => this.emit({ type: 'sync-error', action: 'startup-extension-pages', id: profile.id, message: error.message }));
     try {
       item.startUrl = startUrl;
@@ -2358,7 +3273,8 @@ class BrowserEngine {
         } catch (_) {}
       }
     }
-    if (!this.running.has(profile.id)) {
+    this.assertStartGenerationActive(profile.id, lifecycleGeneration);
+    if (this.running.get(profile.id) !== item || item.cleanedUp || item.stopping) {
       throw new Error(item.cdpError || '浏览器在启动过程中异常退出');
     }
     // Detect user closing browser with X (process may stay alive; CDP/pages are source of truth)
@@ -2371,10 +3287,23 @@ class BrowserEngine {
       // catches already release on their own failure paths (making this a safe no-op via
       // token/close idempotency); this covers the earlier steps — proxy bridge, tab reset,
       // start-page/fingerprint build — whose throws would otherwise strand the lock.
-      if (!this.running.has(profile.id)) {
-        try { await proxyForwarder?.close(); } catch (_) {}
-        stopIpcStubForWindow(kernelWindowName);
-        if (profileLock && root) await releaseProfileLock(root, profileLock).catch(() => {});
+      let cleanupResult = null;
+      if (liveItem) {
+        // The item is published before runtime injection and start-page setup so
+        // exit events can clean it up. If either step fails, run the same guarded
+        // cleanup path instead of leaving a live map entry and profile lock behind.
+        cleanupResult = await this.handleBrowserGone(profile.id, liveItem, 'start-failed', {
+          expected: false,
+          error: error?.message || String(error),
+          kill: true,
+          waitForExit: true,
+          emitProfileClosed: false,
+        }).catch(() => null);
+      } else if (!this.running.has(profile.id)) {
+        cleanupResult = await this.cleanupStartupResources(startupResources).catch(() => null);
+        if (cleanupResult?.cleanupBlocked) {
+          this.retainBlockedStartup(profile, startupResources, error, lifecycleGeneration, cleanupResult);
+        }
       }
       this.emit({
         type: 'profile-start-progress',
@@ -2391,9 +3320,24 @@ class BrowserEngine {
   }
 
   publicRunning(id) {
-    const item = this.running.get(id); if (!item) return { id, running: false };
+    const starting = this.starting.has(id);
+    const pendingStop = this.stopping.has(id);
+    const item = this.running.get(id);
+    if (!item) return { id, running: false, starting, stopping: pendingStop };
+    if (item.cleanedUp || item.stopping) {
+      return {
+        id,
+        running: false,
+        stopping: true,
+        pid: item.pid,
+        port: item.port,
+        browser: item.browser?.name,
+        executable: item.browser?.path,
+        profileDirectory: item.root,
+      };
+    }
     return {
-      id, running: true, pid: item.pid, port: item.port,
+      id, running: true, starting: false, stopping: false, pid: item.pid, port: item.port,
       browser: item.browser.name, executable: item.browser.path,
       profileDirectory: item.root,
       extensionCount: item.extensions.length,
@@ -2410,9 +3354,80 @@ class BrowserEngine {
     };
   }
 
+  stopRunningItem(safe, item) {
+    if (!item) return Promise.resolve({ id: safe, running: false, alreadyStopped: true });
+    const pending = this.stopping.get(safe);
+    if (pending?.lifecycleSettled && this.stopping.get(safe) === pending) this.stopping.delete(safe);
+    const activePending = this.stopping.get(safe);
+    if (activePending && (!activePending.lifecycleItem || activePending.lifecycleItem === item)) return activePending;
+    if (activePending) {
+      return activePending.catch(() => {}).then(() => {
+        if (this.running.get(safe) !== item) return { id: safe, running: false, alreadyStopped: true };
+        return this.stopRunningItem(safe, item);
+      });
+    }
+    if (item.cleanupPromise?.lifecycleSettled) item.cleanupPromise = null;
+    if (item.cleanupPromise) {
+      const cleanupPromise = item.cleanupPromise;
+      cleanupPromise.lifecycleItem = item;
+      cleanupPromise.lifecycleGeneration = item.lifecycleGeneration;
+      this.stopping.set(safe, cleanupPromise);
+      cleanupPromise.finally(() => {
+        if (this.stopping.get(safe) === cleanupPromise) this.stopping.delete(safe);
+      }).catch(() => {});
+      return cleanupPromise;
+    }
+
+    const task = this._stop(safe, item);
+    task.lifecycleItem = item;
+    task.lifecycleGeneration = item.lifecycleGeneration;
+    task.lifecycleSettled = false;
+    task.then(
+      () => { task.lifecycleSettled = true; },
+      () => { task.lifecycleSettled = true; },
+    );
+    this.stopping.set(safe, task);
+    task.finally(() => {
+      if (this.stopping.get(safe) === task) this.stopping.delete(safe);
+    }).catch(() => {});
+    return task;
+  }
+
   async stop(id) {
-    const safe = assertProfileId(id); const item = this.running.get(safe);
-    if (!item) return { id: safe, running: false, alreadyStopped: true };
+    const safe = assertProfileId(id);
+    const pendingStop = this.stopping.get(safe);
+    if (pendingStop?.lifecycleSettled && this.stopping.get(safe) === pendingStop) this.stopping.delete(safe);
+    if (this.stopping.has(safe)) return this.stopping.get(safe);
+
+    const pendingStart = this.starting.get(safe);
+    const requestedGeneration = pendingStart?.lifecycleGeneration;
+    if (pendingStart) {
+      this.requestLifecycleStop(safe, requestedGeneration);
+      await pendingStart.catch(() => {});
+    }
+
+    const afterStartStop = this.stopping.get(safe);
+    if (afterStartStop) {
+      try {
+        return await afterStartStop;
+      } finally {
+        this.clearLifecycleStopRequest(safe, requestedGeneration);
+      }
+    }
+    const item = this.running.get(safe);
+    if (!item) {
+      this.clearLifecycleStopRequest(safe, requestedGeneration);
+      return { id: safe, running: false, alreadyStopped: true };
+    }
+
+    try {
+      return await this.stopRunningItem(safe, item);
+    } finally {
+      this.clearLifecycleStopRequest(safe, requestedGeneration);
+    }
+  }
+
+  async _stop(safe, item) {
     item.stopping = true;
     this.clearRunningWatch(item);
     item.workerFingerprintConnection?.close();
@@ -2430,14 +3445,14 @@ class BrowserEngine {
         await this.persist().catch(() => {});
       }
     }
-    let graceful = item.child.exitCode !== null;
-    if (!graceful) {
+    let graceful = !item.child || isChildExited(item.child);
+    if (!graceful && item.child) {
       // Prefer Browser.close so window-X / empty-window auto-stop fully quits Chromium helpers
       try {
         await Promise.race([
           (async () => {
             try {
-              await item.cdpConnection?.command?.('Browser.close', {}, 5000);
+              await item.cdpConnection?.command?.('Browser.close', {}, { timeout: 5000 });
             } catch (_) {
               const ws = await cdp.browserSocket(item.port).catch(() => null);
               if (ws) await cdp.call(ws, 'Browser.close', {}, 4000).catch(() => {});
@@ -2446,43 +3461,78 @@ class BrowserEngine {
           new Promise((resolve) => setTimeout(resolve, 1800)),
         ]);
       } catch (_) {}
-      graceful = await new Promise((resolve) => {
-        if (item.child.exitCode !== null) return resolve(true);
-        const timer = setTimeout(() => { item.child.removeListener('exit', exited); resolve(false); }, 6500);
-        const exited = () => { clearTimeout(timer); resolve(true); };
-        item.child.once('exit', exited);
-      });
+      graceful = await this.waitForChildExit(item.child, 6500);
     }
-    if (!graceful && item.child.exitCode === null) {
-      await killProcessTree(item.pid, managedBrowserKillOptions(item, item.root));
-    }
-    if (item.markerProcess && !item.markerProcess.killed) { try { item.markerProcess.kill(); } catch (_) {} }
-    stopIpcStubForWindow(item.kernelWindowName);
-    await item.proxyForwarder?.close().catch(() => {});
-    await releaseProfileLock(item.root, item.profileLock);
-    await this.markProfileCleanExit(item.root);
+    const cleanupResult = await this.cleanupRunningItem(safe, item, {
+      reason: 'stop',
+      expected: true,
+      kill: !graceful,
+      waitForExit: true,
+      exitTimeout: 6500,
+      emitProfileClosed: false,
+    });
     await this.enforceDataRetention(item.root, this.profiles.get(safe) || item.profile).catch(() => {});
-    item.cleanedUp = true;
-    this.running.delete(safe);
-    this.emit({ type: 'status', id: safe, running: false, reason: 'stop' });
     if (profile.advanced?.cloudBackup) {
+      item.profileClosedEmitted = true;
       this.emit({
         type: 'profile-closed',
         id: safe,
         cloudBackup: true,
         cookieExported: Boolean(cookieExport),
         profile: this.profiles.get(safe) || profile,
+        reason: 'stop',
       });
     }
-    return { id: safe, running: false, graceful, cookieExported: Boolean(cookieExport) };
+    return { ...cleanupResult, id: safe, running: false, graceful, cookieExported: Boolean(cookieExport) };
   }
 
   async stopAll() {
-    // allSettled so one environment failing to stop never aborts stopping the rest
-    // (and never rejects the before-quit chain into an unhandled rejection).
-    const results = await Promise.allSettled([...this.running.keys()].map((id) => this.stop(id)));
-    const failed = results.filter((r) => r.status === 'rejected').map((r) => String(r.reason?.message || r.reason));
-    if (failed.length) this.emit({ type: 'sync-error', action: 'stop-all', message: `部分环境停止失败：${failed.join('; ')}` });
+    if (this.stopAllPromise) return this.stopAllPromise;
+    this.stopAllInProgress = true;
+    const task = this._stopAll();
+    this.stopAllPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (this.stopAllPromise === task) this.stopAllPromise = null;
+      this.stopAllInProgress = false;
+    }
+  }
+
+  async _stopAll() {
+    // Drain until the lifecycle maps reach a fixed point. A one-shot snapshot can
+    // miss a restart that was queued while another environment was stopping.
+    // Each environment also has its own deadline, so a stuck startup or WMI/CDP
+    // operation cannot prevent unrelated environments and the start-page server
+    // from being closed during application shutdown.
+    const failed = [];
+    const itemTimeout = Math.max(50, Number(this.stopAllItemTimeoutMs) || STOP_ALL_ITEM_TIMEOUT_MS);
+    for (let pass = 0; pass < 8; pass += 1) {
+      const ids = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
+      if (!ids.length) break;
+      const results = await Promise.allSettled(ids.map((id) => lifecycleTimeout(
+        this.stop(id),
+        itemTimeout,
+        `Timed out stopping browser environment ${id}`,
+      )));
+      for (let index = 0; index < results.length; index += 1) {
+        const result = results[index];
+        if (result.status === 'rejected') failed.push(`${ids[index]}: ${String(result.reason?.message || result.reason)}`);
+      }
+      const remaining = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
+      if (!remaining.length) break;
+    }
+    const remaining = [...new Set([...this.running.keys(), ...this.starting.keys(), ...this.stopping.keys()])];
+    if (remaining.length) failed.push(`lifecycle resources remain: ${remaining.join(', ')}`);
+    if (this.startPageServer?.server) {
+      try {
+        await lifecycleTimeout(this.startPageServer.stop(), 4000, 'Timed out stopping start page server');
+      } catch (error) {
+        failed.push(`start page server: ${error.message || error}`);
+      }
+    }
+    if (failed.length) this.emit({ type: 'sync-error', action: 'stop-all', message: `部分环境停止失败：${[...new Set(failed)].join('; ')}` });
+    return { stopped: remaining.length === 0, remaining, errors: [...new Set(failed)] };
   }
 
   async deleteProfiles(ids, deleteData = true) {
@@ -2491,8 +3541,10 @@ class BrowserEngine {
     const deleted = []; let stopped = 0;
     for (const id of safeIds) {
       if (!this.profiles.has(id)) continue;
-      if (this.running.has(id)) { await this.stop(id); stopped += 1; }
-      this.profiles.delete(id); this.assignments.delete(id); this.networkInfo.delete(id); deleted.push(id);
+      if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
+        await this.stop(id);
+        stopped += 1;
+      }
       if (deleteData) {
         const profileRoot = this.profileRoot(id);
         const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, profileRoot, id);
@@ -2514,8 +3566,27 @@ class BrowserEngine {
           if (lastError) throw lastError;
         }
       }
+      // Commit in-memory deletion only after the profile directory is gone.
+      // Persist each successful item so a later batch failure cannot leave the
+      // durable profile list disagreeing with already-deleted directories.
+      const previousProfile = this.profiles.get(id);
+      const previousAssignments = this.assignments.get(id);
+      const previousNetwork = this.networkInfo.get(id);
+      const hadAssignments = this.assignments.has(id);
+      const hadNetwork = this.networkInfo.has(id);
+      this.profiles.delete(id);
+      this.assignments.delete(id);
+      this.networkInfo.delete(id);
+      try {
+        await this.persist();
+      } catch (error) {
+        if (previousProfile) this.profiles.set(id, previousProfile);
+        if (hadAssignments) this.assignments.set(id, previousAssignments);
+        if (hadNetwork) this.networkInfo.set(id, previousNetwork);
+        throw error;
+      }
+      deleted.push(id);
     }
-    await this.persist();
     this.emit({ type: 'profiles', action: 'delete', ids: deleted }); this.emit({ type: 'extensions' });
     return { success: true, deleted: deleted.length, stopped, dataDeleted: Boolean(deleteData), ids: deleted };
   }
@@ -2523,7 +3594,7 @@ class BrowserEngine {
   status() { return [...this.profiles.values()].map((profile) => ({ ...profile, ...this.publicRunning(profile.id), network: this.networkInfo.get(profile.id) || null, assignedExtensions: [...(this.assignments.get(profile.id) || [])] })); }
 
   async resolveProfileProxyConfig(profile, { allowExtract = true } = {}) {
-    const working = this.sanitizeProfile(profile);
+    const working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     let lastError = null;
     const candidates = [];
     const pushCandidate = (value, source) => {
@@ -2643,7 +3714,10 @@ class BrowserEngine {
   }
 
   async checkProxy(raw, options = {}) {
-    const profile = this.sanitizeProfile(raw);
+    const profile = this.restoreStoredProxyCredentials(
+      this.resolveStoredProxyProfile(this.sanitizeProfile(raw)),
+      raw,
+    );
     const network = await this.testProxy(profile, options);
     const applied = this.applyNetworkToProfile(profile, network, { persist: false });
     // A successful manual check may be followed immediately by app shutdown. Do not
@@ -2657,7 +3731,10 @@ class BrowserEngine {
   }
 
   async refreshProfileProxy(raw) {
-    const profile = this.sanitizeProfile(raw);
+    const profile = this.restoreStoredProxyCredentials(
+      this.resolveStoredProxyProfile(this.sanitizeProfile(raw)),
+      raw,
+    );
     const refreshUrl = String(profile.proxyMeta?.refreshUrl || '').trim();
     const extractUrl = String(profile.proxyMeta?.apiExtractUrl || '').trim();
     // refreshUrl and apiExtractUrl stay separate: refresh rotates; extract re-reads endpoint.
@@ -2694,7 +3771,7 @@ class BrowserEngine {
   }
 
   async prepareProfileProxyForStart(profile) {
-    let working = this.sanitizeProfile(profile);
+    let working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     const meta = working.proxyMeta || {};
     const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
     const extractUrl = String(meta.apiExtractUrl || '').trim();
@@ -2835,10 +3912,42 @@ class BrowserEngine {
     for (const profileId of profileIds) { const safe = assertProfileId(profileId); const set = this.assignments.get(safe) || new Set(); if (enabled) set.add(extensionId); else set.delete(extensionId); this.assignments.set(safe, set); }
     await this.persist(); this.emit({ type: 'extensions' }); return { success: true, restartRequired: profileIds.filter((id) => this.running.has(id)) };
   }
+  async reloadExtension(id) {
+    const existing = this.extensions.get(id);
+    if (!existing) throw new Error('Unknown extension');
+    if (!fs.existsSync(existing.path)) throw new Error('Extension path does not exist');
+    const updated = await this.readExtension(existing.path, Boolean(existing.builtIn));
+    updated.addedAt = existing.addedAt || updated.addedAt;
+    this.extensions.set(id, updated);
+    await this.persist();
+    this.emit({ type: 'extensions' });
+    return updated;
+  }
+  async reloadAllExtensions() {
+    const results = [];
+    for (const [id, ext] of this.extensions.entries()) {
+      if (fs.existsSync(ext.path)) {
+        try {
+          const updated = await this.readExtension(ext.path, Boolean(ext.builtIn));
+          updated.addedAt = ext.addedAt || updated.addedAt;
+          this.extensions.set(id, updated);
+          results.push(updated);
+        } catch (e) {
+          console.warn('[extensions] Failed to reload extension ' + id + ':', e.message);
+        }
+      }
+    }
+    await this.persist();
+    this.emit({ type: 'extensions' });
+    return results;
+  }
   async removeExtension(id) { const value = this.extensions.get(id); if (!value || value.builtIn) throw new Error('Built-in extension cannot be removed'); this.extensions.delete(id); for (const set of this.assignments.values()) set.delete(id); await this.persist(); return { success: true }; }
   on(listener) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(value) { for (const listener of this.listeners) listener(value); }
-  runningWithCdp(ids) { return ids.map((id) => ({ id, item: this.running.get(id) })).filter((entry) => entry.item?.port); }
+  runningWithCdp(ids) {
+    return ids.map((id) => ({ id, item: this.running.get(id) }))
+      .filter((entry) => entry.item?.port && !entry.item.cleanedUp && !entry.item.stopping);
+  }
   async sessions() { const result = []; for (const { id, item } of this.runningWithCdp([...this.running.keys()])) { try { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: await cdp.tabs(item.port) }); } catch (error) { result.push({ id, profile: this.profiles.get(id), port: item.port, browser: item.browser.name, tabs: [], error: error.message }); } } return result; }
 }
 
