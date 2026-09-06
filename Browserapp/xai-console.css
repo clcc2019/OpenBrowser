@@ -1191,7 +1191,6 @@ html[data-ui-theme="merge-gateway"] .rpa-section,
 html[data-ui-theme="merge-gateway"] .settings-card {
   box-shadow: var(--xai-shadow-card);
 }
-html[data-ui-theme="merge-gateway"] tbody tr:hover { background: rgb(10 10 10 / 2%); transition: none; }
 html[data-ui-theme="merge-gateway"] thead th,
 html[data-ui-theme="merge-gateway"] .table-card thead th {
   position: sticky; top: 0; z-index: 1;
@@ -1214,7 +1213,7 @@ html[data-ui-theme="merge-gateway"] .rpa-table-empty {
 html[data-ui-theme="merge-gateway"] .table-card:has(.empty:not([hidden])) table { display: none; }
 
 html[data-ui-theme="merge-gateway"] dialog[open] { animation: dialog-enter var(--xai-duration-slow) var(--xai-ease-page); }
-html[data-ui-theme="merge-gateway"] dialog::backdrop { background: rgb(9 9 9 / 32%); backdrop-filter: blur(4px); }
+html[data-ui-theme="merge-gateway"] dialog::backdrop { background: rgb(9 9 9 / 38%); }
 
 html[data-ui-theme="merge-gateway"] .primary,
 html[data-ui-theme="merge-gateway"] .outline,
