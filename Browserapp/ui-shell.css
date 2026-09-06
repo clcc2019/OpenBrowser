@@ -641,6 +641,21 @@ body {
   text-overflow: ellipsis;
   min-width: 0;
 }
+
+/* Keep the action column usable after adding row-level delete controls. */
+#view-profiles .table-card table { table-layout: auto !important; }
+#view-profiles .table-card th.col-actions,
+#view-profiles .table-card td.col-actions {
+  width: 1%;
+  min-width: 220px;
+  white-space: normal;
+}
+#view-profiles .table-card .actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+#view-profiles .table-card .actions .mini { flex: 0 0 auto; }
 #view-profiles .table-card tbody td {
   border-bottom: 1px solid color-mix(in srgb, var(--ui-border) 70%, transparent);
 }
