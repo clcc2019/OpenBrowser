@@ -2005,3 +2005,114 @@ html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions {
 html[data-ui-theme="merge-gateway"] body:has(#view-profile-editor.active) main {
   padding-bottom: 0 !important;
 }
+
+/* Final profile editor layout: one calm, non-overlapping document flow. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor {
+  display: block;
+  min-height: 100dvh;
+  margin: calc(-1 * var(--xai-space-6)) calc(-1 * var(--xai-page-gutter)) 0;
+  background: var(--xai-warm);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
+  position: relative !important;
+  top: auto !important;
+  z-index: 1 !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+  min-height: 72px;
+  padding: var(--xai-space-4) var(--xai-page-gutter);
+  background: var(--xai-warm);
+  border-bottom: 1px solid var(--xai-border-subtle);
+  box-shadow: none !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--xai-space-1);
+  min-height: 52px;
+  padding: var(--xai-space-2) var(--xai-page-gutter);
+  overflow-x: auto;
+  background: var(--xai-warm) !important;
+  border-bottom: 1px solid var(--xai-border-subtle) !important;
+  box-shadow: none !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  align-items: start;
+  gap: var(--xai-space-6);
+  padding: var(--xai-space-6) var(--xai-page-gutter) var(--xai-space-8);
+  background: var(--xai-warm) !important;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+  display: block;
+  overflow: visible;
+  padding: var(--xai-space-6);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active > h3 {
+  display: block;
+  margin: 0 0 var(--xai-space-5);
+  padding-bottom: var(--xai-space-3);
+  color: var(--xai-ink-console);
+  border-bottom: 1px solid var(--xai-border-subtle);
+  font: 500 20px/27px var(--xai-font-display);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary {
+  position: sticky;
+  top: var(--xai-space-6);
+  max-height: calc(100dvh - var(--xai-space-12));
+  padding: var(--xai-space-5);
+  overflow: auto;
+  background: var(--xai-white);
+  border: 1px solid var(--xai-border);
+  border-radius: var(--xai-radius-card);
+  box-shadow: var(--xai-shadow-card);
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions {
+  position: static;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: var(--xai-space-2);
+  margin: var(--xai-space-4) 0 0;
+  padding: var(--xai-space-3) 0 0;
+  background: transparent;
+  border-top: 1px solid var(--xai-border-subtle);
+  box-shadow: none;
+}
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions button {
+  min-width: 104px;
+}
+@media (max-width: 1024px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary {
+    position: static;
+    max-height: none;
+  }
+}
+@media (max-width: 640px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+    padding-inline: var(--xai-space-4);
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+    padding: var(--xai-space-4);
+    box-shadow: none;
+  }
+}
