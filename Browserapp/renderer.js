@@ -2825,7 +2825,8 @@ function renderProfiles() {
     const sync = element('button', 'mini blue', t('action.sync')); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; sync.title = t('profiles.syncSelect');
     const copy = element('button', 'mini', t('action.copy')); copy.dataset.action = 'copy'; copy.dataset.id = profile.id;
     const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
-    actions.append(toggle, sync, copy, edit); actionCell.append(actions);
+    const remove = element('button', 'mini danger', t('action.delete') || '删除'); remove.dataset.action = 'delete'; remove.dataset.id = profile.id;
+    actions.append(toggle, sync, copy, edit, remove); actionCell.append(actions);
     row.append(selectCell, idCell, profileIdCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell);
     profileRows.append(row);
   }
@@ -3668,6 +3669,12 @@ document.addEventListener('click', async (event) => {
   if (action?.dataset.action === 'stop') stopProfile(action.dataset.id);
   if (action?.dataset.action === 'copy') copyProfile(action.dataset.id);
   if (action?.dataset.action === 'edit') openProfileEditor(action.dataset.id);
+  if (action?.dataset.action === 'delete') {
+    pendingDeleteProfiles = [action.dataset.id];
+    const profile = ui.profiles.find((item) => item.id === action.dataset.id);
+    $('#batch-delete-summary').textContent = tx('将删除环境 ') + (profile ? displayProfileNumber(profile) : action.dataset.id) + '。';
+    $('#batch-delete-dialog').showModal();
+  }
   if (action?.dataset.action === 'select-sync') { selectedSessions.add(action.dataset.id); pushSyncSelection(); switchView('sync'); }
 
   const assign = event.target.closest('[data-extension-assign]'); if (assign) openAssign(assign.dataset.extensionAssign);
