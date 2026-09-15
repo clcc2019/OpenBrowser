@@ -18,6 +18,7 @@
  */
 
 const crypto = require('crypto');
+const { normalizeTimezoneValue } = require('../proxy-forwarder');
 const { pickPersona, fontsForOs, exclusiveFontsForOtherOs } = require('./device-personas');
 const {
   buildUaProfile,
@@ -808,12 +809,13 @@ function buildFingerprint(profile = {}) {
     || profile.exitIP
     || ''
   ).trim() || null;
-  const timezoneDynamic = String(
-    profile.exitTimezone
-    || (privacy.timezoneMode === 'custom' ? privacy.timezone : '')
-    || privacy.timezone
-    || ''
-  ).trim() || null;
+  const timezoneDynamic = normalizeTimezoneValue(
+    privacy.timezoneMode === 'custom'
+      ? privacy.timezone
+      : privacy.timezoneMode === 'real'
+        ? ''
+        : (profile.exitTimezone || privacy.timezone || '')
+  ) || null;
   let geoposition = null;
   if (privacy.geoMode === 'custom' && Number.isFinite(Number(privacy.latitude)) && Number.isFinite(Number(privacy.longitude))) {
     geoposition = {
@@ -2334,11 +2336,11 @@ function chromeArgsForFingerprint(fp, profile = {}) {
 
 async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}) {
   const privacy = profile.privacy || {};
-  const timezone = privacy.timezoneMode === 'custom'
+  const timezone = normalizeTimezoneValue(privacy.timezoneMode === 'custom'
     ? privacy.timezone
     : privacy.timezoneMode === 'real'
       ? ''
-      : (profile.exitTimezone || '');
+      : (profile.exitTimezone || ''));
   // geoMode: custom coords | disabled/prompt (no override) | ip/allow (from exit IP)
   let latitude = null;
   let longitude = null;

@@ -8,7 +8,7 @@
   <script src="i18n.js?v=20260720-aqua"></script>
   <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
   <link rel="stylesheet" href="assets/fonts/pixelify-sans.css?v=20260720-ark">
-  <link rel="stylesheet" href="styles.css?v=20260720-pixelfont">
+  <link rel="stylesheet" href="styles.css?v=20260915-editor-workbench">
   <link rel="stylesheet" href="themes.css?v=20260720-start-progress">
   <link rel="stylesheet" href="retro-desktop.css?v=20260720-aqua">
   <link rel="stylesheet" href="environment-audit.css?v=20260719-readable-scale">
@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="nes-light.css?v=20260720-kraft-desat33">
   <link rel="stylesheet" href="element-admin.css?v=20260720-start-progress">
   <link rel="stylesheet" href="xai-console.css?v=20260824-interaction-perf">
-  <link rel="stylesheet" href="ui-polish.css?v=20260906">
+  <link rel="stylesheet" href="ui-polish.css?v=20260915-editor-workbench">
 </head>
 <body>
   <div class="app-shell">
@@ -129,23 +129,29 @@
           </div>
         </section>
 
-        <section class="view" id="view-profile-editor">
+        <section class="view" id="view-profile-editor" aria-labelledby="editor-page-title">
           <div class="profile-editor-head">
-            <button class="editor-back" id="editor-back" type="button">‹ 返回</button>
-            <div><h2>修改环境 <span id="editor-profile-id"></span></h2><p>平台账号 · 代理 · 指纹 · 偏好 — 前后端完整生效；可配合云备份跨设备恢复</p></div>
+            <button class="editor-back" id="editor-back" type="button" aria-label="返回环境管理" title="返回环境管理">‹</button>
+            <div class="profile-editor-title">
+              <h2 id="editor-page-title">修改环境 <span id="editor-profile-id"></span></h2>
+            </div>
           </div>
-          <div class="editor-tabs" role="tablist">
-            <button class="active" type="button" data-editor-tab="basic">平台账号配置</button>
-            <button type="button" data-editor-tab="proxy">代理配置</button>
-            <button type="button" data-editor-tab="privacy">指纹配置</button>
-            <button type="button" data-editor-tab="advanced">偏好设置</button>
+          <div class="editor-tabs" role="tablist" aria-label="环境设置分类">
+            <button class="active" id="editor-tab-basic" role="tab" aria-selected="true" aria-controls="editor-panel-basic" tabindex="0" type="button" data-editor-tab="basic">平台账号配置</button>
+            <button id="editor-tab-proxy" role="tab" aria-selected="false" aria-controls="editor-panel-proxy" tabindex="-1" type="button" data-editor-tab="proxy">代理配置</button>
+            <button id="editor-tab-privacy" role="tab" aria-selected="false" aria-controls="editor-panel-privacy" tabindex="-1" type="button" data-editor-tab="privacy">指纹配置</button>
+            <button id="editor-tab-advanced" role="tab" aria-selected="false" aria-controls="editor-panel-advanced" tabindex="-1" type="button" data-editor-tab="advanced">偏好设置</button>
           </div>
           <div class="environment-editor">
-            <form id="profile-editor-form" class="editor-form">
+            <form id="profile-editor-form" class="editor-form" aria-label="环境设置">
               <input id="editor-id" type="hidden">
               <input id="editor-name" type="hidden">
-              <section class="editor-panel active" data-editor-panel="basic">
-                <h3>平台账号配置</h3>
+              <section class="editor-panel active" id="editor-panel-basic" role="tabpanel" aria-labelledby="editor-tab-basic" tabindex="0" data-editor-panel="basic">
+                <div class="editor-panel-heading">
+                  <div><span class="editor-panel-kicker">01 / 核心资料</span><h3>平台账号配置</h3><p>设置启动入口、账号信息和站点数据。</p></div>
+                  <span class="editor-panel-index" aria-hidden="true">01</span>
+                </div>
+                <div class="editor-section-heading"><span>启动入口</span><small>决定环境打开时访问的第一个站点</small></div>
                 <div class="form-two platform-row">
                   <label class="platform-select-label">* 平台
                     <select id="editor-platform-type" class="platform-select">
@@ -183,6 +189,7 @@
                   </label>
                 </div>
                 <p class="network-mode-hint">选择预设平台会写入指定地址；选「空白页」则启动不打开站点；「其他平台」可手填任意 URL。</p>
+                <div class="editor-section-heading"><span>账号资料</span><small>用于启动页展示和站点登录辅助</small></div>
                 <label>窗口名称<input id="editor-title" maxlength="120" placeholder="例如：Gmail"></label>
                 <div class="form-two">
                   <label>选择分组<select id="editor-group"></select></label>
@@ -193,10 +200,11 @@
                   <label>密码<input id="editor-platform-pass" type="password" autocomplete="new-password" placeholder="平台登录密码"></label>
                 </div>
                 <label>2FA 密钥<input id="editor-platform-2fa" autocomplete="off" placeholder="TOTP 密钥（可选）"></label>
+                <div class="editor-section-heading"><span>站点数据</span><small>保存后下次启动导入到当前环境</small></div>
                 <label>Cookie JSON<textarea id="editor-cookies" rows="5" placeholder='[{"name":"session","value":"...","domain":".example.com","path":"/"}]'></textarea>
                   <small>选填，支持 JSON 数组。保存后下次启动导入；开启云备份后关闭窗口会自动刷新。</small>
                 </label>
-                <div class="storage-actions" style="margin-top:4px;margin-bottom:12px">
+                <div class="storage-actions editor-cookie-actions">
                   <button class="outline" type="button" id="editor-cookie-export">导出 Cookie</button>
                   <button class="outline" type="button" id="editor-cookie-import-file">从文件导入 Cookie</button>
                   <button class="outline" type="button" id="editor-clear-cache-cookie">清除缓存及 Cookie</button>
@@ -219,8 +227,12 @@
                   </select></label>
                 </div>
               </section>
-              <section class="editor-panel" data-editor-panel="proxy">
-                <h3>代理配置</h3>
+              <section class="editor-panel" id="editor-panel-proxy" role="tabpanel" aria-labelledby="editor-tab-proxy" tabindex="0" hidden data-editor-panel="proxy">
+                <div class="editor-panel-heading">
+                  <div><span class="editor-panel-kicker">02 / 出口网络</span><h3>代理配置</h3><p>配置代理库、连接策略与出口检测。</p></div>
+                  <span class="editor-panel-index" aria-hidden="true">02</span>
+                </div>
+                <div class="editor-section-heading"><span>连接策略</span><small>先选择网络模式，再填写代理参数</small></div>
                 <label class="check-row"><input id="editor-proxy-check-start" type="checkbox"> 每次启动检测出口 IP（动态代理建议开启）</label>
                 <p class="network-mode-hint">本地直连 = 本机网络；代理模式 = HTTP / HTTPS / SOCKS5。</p>
                 <div class="segmented" id="editor-network-mode" role="radiogroup" aria-label="网络模式">
@@ -230,14 +242,15 @@
                 <label>代理库节点<select id="editor-proxy-library"><option value="">手动填写代理（不关联代理库）</option></select></label>
                 <div class="network-mode-hint" id="editor-proxy-library-status">未关联代理库节点</div>
                 <div id="editor-proxy-fields">
+                  <div class="editor-section-heading"><span>代理参数</span><small>支持快捷解析，也可以逐项填写</small></div>
                   <label>快捷智能粘贴（自动解析协议/主机/端口/账号密码）
-                    <div style="display:flex;gap:6px;align-items:center;">
-                      <input id="editor-proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080 或 host:port:user:pass" autocomplete="off" style="flex:1;">
+                    <div class="proxy-raw-row">
+                      <input class="proxy-raw-input" id="editor-proxy-raw" placeholder="例如 socks5://user:pass@127.0.0.1:1080 或 host:port:user:pass" autocomplete="off">
                       <button type="button" class="outline mini-btn" id="editor-proxy-raw-paste-btn">粘贴解析</button>
                       <button type="button" class="outline mini-btn" id="editor-proxy-import-and-bind-btn" title="将当前代理存入代理库并直接与当前环境绑定">入库并绑定</button>
                     </div>
                   </label>
-                  <label class="check-row" style="margin-top:-4px;margin-bottom:8px;"><input id="editor-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便其他环境复用）</label>
+                  <label class="check-row proxy-library-toggle"><input id="editor-proxy-save-to-library" type="checkbox"> 同时保存到代理库（方便其他环境复用）</label>
                   <div class="form-two">
                     <label>代理类型<select id="editor-proxy-type"><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
                     <label>IP 查询通道<select id="editor-ip-channel"><option value="ip-api">IP-API</option><option value="ip2location">IP2Location</option><option value="ifconfig-me">ifconfig.me（HTTPS）</option></select></label>
@@ -283,6 +296,7 @@
                       <input id="editor-proxy-tls-chrome-major" type="number" min="80" max="200" placeholder="空=跟随 UA">
                     </label>
                   </div>
+                  <div class="editor-section-heading"><span>检测与对齐</span><small>检查出口并将网络信息同步到指纹设置</small></div>
                   <div class="settings-row"><span>使用系统代理</span>
                     <select id="editor-system-proxy">
                       <option value="global">跟随全局</option>
@@ -292,7 +306,7 @@
                   </div>
                   <label class="check-row"><input id="editor-direct-bypass" type="checkbox"> 直连白名单（部分域名不走代理）</label>
                   <label>白名单（逗号/换行分隔）<textarea id="editor-bypass-list" rows="2" placeholder="*.local, intranet.company.com"></textarea></label>
-                  <div class="actions" style="margin:8px 0;display:flex;gap:8px;flex-wrap:wrap">
+                  <div class="editor-tool-actions">
                     <button class="outline" id="editor-test-proxy" type="button">代理检测</button>
                     <button class="outline" id="editor-apply-proxy-fp" type="button">用代理填充指纹</button>
                     <button class="outline" id="editor-refresh-proxy" type="button">刷新代理 IP</button>
@@ -300,8 +314,12 @@
                   <div class="proxy-test-result" id="editor-proxy-result">尚未检测</div>
                 </div>
               </section>
-              <section class="editor-panel" data-editor-panel="privacy">
-                <h3>指纹配置</h3>
+              <section class="editor-panel" id="editor-panel-privacy" role="tabpanel" aria-labelledby="editor-tab-privacy" tabindex="0" hidden data-editor-panel="privacy">
+                <div class="editor-panel-heading">
+                  <div><span class="editor-panel-kicker">03 / 浏览器指纹</span><h3>指纹配置</h3><p>让设备、语言、位置和图形能力保持一致。</p></div>
+                  <span class="editor-panel-index" aria-hidden="true">03</span>
+                </div>
+                <div class="editor-section-heading"><span>浏览器标识</span><small>控制 User-Agent 与指纹刷新策略</small></div>
                 <label class="check-row"><input id="editor-refresh-fingerprint" type="checkbox"> 每次打开刷新指纹</label>
                 <label>User-Agent
                   <textarea id="editor-user-agent" rows="2" placeholder="留空 = 按环境 ID 自动生成"></textarea>
@@ -310,9 +328,10 @@
                   <button type="button" class="outline" id="editor-ua-generate">按系统生成 UA</button>
                   <button type="button" class="outline" id="editor-ua-random">随机 UA</button>
                   <button type="button" class="outline" id="editor-ua-clear">跟随自动</button>
-                  <label class="ua-ver">Chrome 主版本 <input id="editor-ua-chrome-major" type="number" min="100" max="200" value="131" style="width:72px"></label>
+                  <label class="ua-ver">Chrome 主版本 <input class="ua-version-input" id="editor-ua-chrome-major" type="number" min="100" max="200" value="131"></label>
                 </div>
                 <pre class="ua-meta-preview" id="editor-ua-meta" hidden></pre>
+                <div class="editor-section-heading"><span>区域与显示</span><small>设置语言、时区、地理位置和窗口参数</small></div>
                 <div class="settings-row"><span data-i18n="editor.langMode">浏览器语言</span>
                   <select id="editor-language-mode" class="language-mode-select">
                     <option value="ip" selected data-i18n="editor.lang.ip">基于出口 IP 所在地（如日本→日语）</option>
@@ -343,12 +362,13 @@
                 </div>
                 <div class="settings-row"><span>地理位置</span>
                   <select id="editor-geo-mode"><option value="ip">基于出口 IP</option><option value="prompt">询问</option><option value="disabled">禁用</option><option value="custom">自定义</option></select>
-                  <label class="check-row" style="margin:0"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 生成坐标</label>
+                  <label class="check-row geo-ip-toggle"><input id="editor-geo-from-ip" type="checkbox" checked> 基于 IP 生成坐标</label>
                 </div>
                 <div class="form-three geo-custom"><label>纬度<input id="editor-latitude" type="number" step="0.000001" min="-90" max="90"></label><label>经度<input id="editor-longitude" type="number" step="0.000001" min="-180" max="180"></label><label>精度（米）<input id="editor-accuracy" type="number" min="1" max="100000" value="100"></label></div>
                 <div class="settings-row"><span>分辨率</span><select id="editor-resolution"><option value="1280x820">1280 × 820</option><option value="1366x768">1366 × 768</option><option value="1440x900">1440 × 900</option><option value="1920x1080">1920 × 1080</option><option value="custom">自定义</option></select><input id="editor-width" type="number" min="640" max="7680" placeholder="宽"><input id="editor-height" type="number" min="480" max="4320" placeholder="高"></div>
                 <div class="settings-row"><span>字体</span><select id="editor-font-mode"><option value="default">系统默认</option><option value="custom">自定义字号</option></select><input id="editor-font-size" type="number" min="9" max="36" value="16"></div>
                 <div class="settings-row"><span>WebRTC</span><select id="editor-webrtc"><option value="proxy">替换（仅代理）</option><option value="real">真实</option><option value="disabled">禁用</option></select></div>
+                <div class="editor-section-heading"><span>设备与图形</span><small>使用同一设备档案生成硬件和渲染特征</small></div>
                 <div class="privacy-grid">
                   <label title="真实机型：CPU 核数、内存、GPU、屏幕与像素比取自同一台真实机器，避免出现现实中不存在的硬件组合">设备档案<select id="editor-device-profile"><option value="persona">真实机型</option><option value="default">独立随机</option></select></label>
                   <label>Canvas<select id="editor-canvas"><option value="noise">随机</option><option value="real">真实</option><option value="blocked">关闭</option></select></label>
@@ -367,7 +387,7 @@
                   <label>设备名称<input id="editor-device-name" placeholder="自定义设备名"></label>
                   <label>Do Not Track<select id="editor-dnt-mode"><option value="default">默认</option><option value="on">开启</option><option value="off">关闭</option></select></label>
                 </div>
-                <div class="advanced-card" style="margin-top:4px">
+                <div class="advanced-card editor-stability-card">
                   <strong>站点稳定性</strong>
                   <p class="network-mode-hint">高风险站点降低 Canvas/WebGL 噪声漂移；开启后「每次打开刷新指纹」在稳定性模式非关闭时不再生效。</p>
                   <div class="form-two">
@@ -408,8 +428,11 @@
                 <label>允许被扫描的端口（可选，逗号分隔）<input id="editor-port-scan-allow" placeholder="例如：4000,4001（1–65535）"></label>
                 <label class="check-row"><input id="editor-cf-optimize" type="checkbox" checked> Cloudflare 验证优化 — 减少五秒盾卡住（可能略增被识别概率）</label>
               </section>
-              <section class="editor-panel" data-editor-panel="advanced">
-                <h3>偏好设置</h3>
+              <section class="editor-panel" id="editor-panel-advanced" role="tabpanel" aria-labelledby="editor-tab-advanced" tabindex="0" hidden data-editor-panel="advanced">
+                <div class="editor-panel-heading">
+                  <div><span class="editor-panel-kicker">04 / 工作偏好</span><h3>偏好设置</h3><p>管理云同步、标签页、站点行为和本地数据。</p></div>
+                  <span class="editor-panel-index" aria-hidden="true">04</span>
+                </div>
                 <div class="advanced-card">
                   <strong>云备份</strong>
                   <p class="network-mode-hint">全局网盘在「本地设置 → 云同步」配置；此处仅控制<strong>本环境</strong>是否参与。</p>
@@ -419,7 +442,7 @@
                   <label class="check-row"><input id="editor-sync-ls" type="checkbox"> 同步 Local Storage（部分站点存登录态）</label>
                   <label class="check-row"><input id="editor-sync-passwords" type="checkbox"> 同步已保存的用户名密码</label>
                   <label class="check-row"><input id="editor-sync-ext" type="checkbox"> 同步插件应用数据（数字货币钱包建议关闭）</label>
-                  <div class="storage-actions" style="margin-top:10px">
+                  <div class="storage-actions editor-cloud-actions">
                     <button class="outline" type="button" id="editor-cloud-push-one">立即推送此环境到云</button>
                     <button class="outline" type="button" id="editor-cloud-pull-one">从云拉取并合并此环境</button>
                   </div>
@@ -470,13 +493,16 @@
                   <label class="check-row"><input id="editor-clear-cache" type="checkbox"> 启动时清除缓存</label>
                 </div>
               </section>
-              <div class="editor-actions"><button class="outline" id="editor-cancel" type="button">取消</button><button class="primary" type="submit">立即保存</button></div>
+              <div class="editor-actions">
+                <span class="editor-save-state" id="editor-save-state" data-state="saved" role="status" aria-live="polite">已保存</span>
+                <div class="editor-action-buttons"><button class="outline" id="editor-cancel" type="button">取消</button><button class="primary" id="editor-save" type="submit">保存</button></div>
+              </div>
             </form>
-            <aside class="profile-summary">
-              <div class="summary-head"><strong>概要</strong><button id="editor-system-defaults" type="button"><i data-lucide="refresh-cw"></i>读取本机默认值</button></div>
-              <dl id="editor-summary"></dl>
-              <section class="environment-audit" id="editor-audit"></section>
-              <p>保存后，运行中的环境需要重启才能应用浏览器级设置。</p>
+            <aside class="profile-summary" aria-label="当前环境概要">
+              <div class="summary-head"><div class="summary-title"><strong>当前概要</strong><span class="editor-summary-badge">实时</span></div><button id="editor-system-defaults" type="button" title="读取本机默认值"><i data-lucide="refresh-cw" aria-hidden="true"></i>读取本机默认值</button></div>
+              <dl id="editor-summary" aria-live="polite"></dl>
+              <section class="environment-audit" id="editor-audit" aria-live="polite"></section>
+              <p class="summary-note"><span class="summary-note-mark" aria-hidden="true">i</span><span>保存后，运行中的环境需要重启才能应用浏览器级设置。</span></p>
             </aside>
           </div>
         </section>
@@ -1400,6 +1426,6 @@
   </form></dialog><dialog id="add-app-dialog"><div class="dialog-head"><div><h2>&#28155;&#21152;&#24212;&#29992;</h2><p>&#20174;&#26412;&#22320;&#30446;&#24405;&#25110; Chrome &#24212;&#29992;&#21830;&#24215;&#28155;&#21152;</p></div><button id="close-add-app">&times;</button></div><div class="store-source-tabs"><button class="outline" id="choose-extension-folder">&#23433;&#35013;&#21253;&#30446;&#24405;</button><button class="primary" type="button">Chrome &#24212;&#29992;&#21830;&#24215;</button></div><label>Chrome &#24212;&#29992;&#21830;&#24215; URL<input id="chrome-store-url" placeholder="https://chromewebstore.google.com/detail/.../extension-id"></label><label class="assign-item"><input id="store-assign-all" type="checkbox" checked> &#28155;&#21152;&#21040;&#25152;&#26377;&#29615;&#22659;&#24182;&#37325;&#21551;&#27491;&#22312;&#36816;&#34892;&#30340;&#29615;&#22659;</label><p class="store-note">&#21482;&#25509;&#21463; Chrome Web Store &#38142;&#25509;&#65307;&#19979;&#36733;&#21518;&#20250;&#26657;&#39564; CRX &#26684;&#24335;&#21644;&#25991;&#20214;&#36335;&#24452;&#12290;</p><div class="dialog-actions"><button class="outline" id="cancel-add-app">&#21462;&#28040;</button><button class="primary" id="add-store-submit">&#30830;&#23450;&#28155;&#21152;</button></div></dialog><div class="toast" id="toast"></div>
   <script src="environment-audit.js?v=20260719-environment-audit"></script>
   <script src="assets/vendor/lucide.min.js"></script>
-  <script src="renderer.js?v=20260720-nes-light"></script>
+  <script src="renderer.js?v=20260915-editor-a11y"></script>
 </body>
 </html>

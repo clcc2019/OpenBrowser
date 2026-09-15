@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
 const { calculateIpHealthScore } = require('./ip-health-score');
-const { lookupDirectCountry, parseProxy, startAuthenticatedProxy } = require('../proxy-forwarder');
+const { lookupDirectCountry, parseProxy, startAuthenticatedProxy, normalizeTimezoneValue } = require('../proxy-forwarder');
 const { fpLog } = require('./fingerprint-debug-log');
 const dnsPromises = dns.promises;
 
@@ -106,6 +106,7 @@ function decorateNetwork(network) {
   if (!network || typeof network !== 'object') return network;
   return {
     ...network,
+    timezone: normalizeTimezoneValue(network.timezone),
     healthScore: calculateIpHealthScore(network),
   };
 }
@@ -675,11 +676,10 @@ class StartPageServer {
     const profileId = String(profile.id || '');
     const serial = String(profile.number || profile.serial || extras.serial || profileId);
     const network = decorateNetwork(extras.network || profile.network || null);
-    const timezone = extras.timezone
+    const timezone = normalizeTimezoneValue(extras.timezone
       || profile.exitTimezone
       || network?.timezone
-      || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
-      || '';
+      || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : ''));
 
     const session = {
       pid: profileId,

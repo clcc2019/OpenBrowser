@@ -1592,7 +1592,7 @@ function editorDraft(strict = true) {
       return mode;
     })(),
     langFromIp: ($('#editor-language-mode')?.value || 'ip') === 'ip',
-    timezoneFromIp: true,
+    timezoneFromIp: ($('#editor-timezone-mode')?.value || 'ip') === 'ip',
     geoFromIp: $('#editor-geo-from-ip')?.checked !== false,
     fontMode: $('#editor-font-mode')?.value || 'default',
     fontSize: Number($('#editor-font-size')?.value) || 16,
@@ -1803,9 +1803,9 @@ function renderEditorSummary() {
   };
   const values = [
     [tx('浏览器'), 'Google Chrome'], [tx('系统平台'), draft.os], [tx('分组'), groupNameOf(draft)], ['User-Agent', draft.userAgent || 'Chrome 默认'], [tx('网络'), maskProxy(draft.proxy)], ['WebRTC', labels.webrtc[privacy.webrtc]],
-    [tx('时区'), labels.timezoneMode[privacy.timezoneMode]], [tx('地理位置'), labels.geoMode[privacy.geoMode]], [tx('语言'), draft.language], [tx('界面语言'), privacy.uiLanguage === 'profile' ? '跟随语言' : privacy.uiLanguage],
-    [tx('分辨率'), draft.screenMode === 'auto' ? tx('跟随当前电脑') : draft.width + ' × ' + draft.height], [tx('字体'), privacy.fontMode === 'custom' ? privacy.fontSize + 'px' : '默认'], ['Canvas', labels.canvas[privacy.canvas]],
-    ['WebGL', labels.webgl[privacy.webgl]], ['WebGPU', privacy.webgpu === 'blocked' ? '禁用' : (privacy.webgpu === 'webgl' ? '基于 WebGL' : '真实')], ['AudioContext', labels.audio[privacy.audio]], [tx('媒体设备'), labels.media[privacy.media]],
+    [tx('时区'), labels.timezoneMode[privacy.timezoneMode] || privacy.timezone || tx('未设置')], [tx('地理位置'), labels.geoMode[privacy.geoMode] || tx('未设置')], [tx('语言'), draft.language], [tx('界面语言'), privacy.uiLanguage === 'profile' ? '跟随语言' : privacy.uiLanguage],
+    [tx('分辨率'), draft.screenMode === 'auto' ? tx('跟随当前电脑') : draft.width + ' × ' + draft.height], [tx('字体'), privacy.fontMode === 'custom' ? privacy.fontSize + 'px' : '默认'], ['Canvas', labels.canvas[privacy.canvas] || tx('未设置')],
+    ['WebGL', labels.webgl[privacy.webgl] || tx('未设置')], ['WebGPU', privacy.webgpu === 'blocked' ? '禁用' : (privacy.webgpu === 'webgl' ? '基于 WebGL' : '真实')], ['AudioContext', labels.audio[privacy.audio] || tx('未设置')], [tx('媒体设备'), labels.media[privacy.media] || tx('未设置')],
     [tx('电池'), privacy.battery === 'blocked' ? '关闭' : (privacy.battery === 'real' ? '真实' : '随机')],
     [tx('站点稳定性'), privacy.stabilityMode === 'force' ? '强制' : (privacy.stabilityMode === 'off' ? '关闭' : '自动')],
     [tx('代理未就绪'), draft.proxyMeta?.notReadyPolicy === 'direct' ? '回退直连' : (draft.proxyMeta?.notReadyPolicy === 'continue' ? '继续' : '阻断')],
@@ -1884,18 +1884,24 @@ function markEditorDirty() {
 
 function setEditorTab(tab, { focus = false } = {}) {
   const buttons = $$('[data-editor-tab]');
+  const panels = $$('[data-editor-panel]');
   const activeButton = buttons.find((button) => button.dataset.editorTab === tab) || buttons[0];
   const activeTab = activeButton?.dataset.editorTab;
   buttons.forEach((button) => {
     const active = button === activeButton;
     button.classList.toggle('active', active);
+    button.setAttribute('role', 'tab');
     button.setAttribute('aria-selected', String(active));
     button.tabIndex = active ? 0 : -1;
+    const panel = panels.find((candidate) => candidate.dataset.editorPanel === button.dataset.editorTab);
+    if (panel) button.setAttribute('aria-controls', panel.id || '');
   });
-  $$('[data-editor-panel]').forEach((panel) => {
+  panels.forEach((panel) => {
     const active = panel.dataset.editorPanel === activeTab;
     panel.classList.toggle('active', active);
     panel.hidden = !active;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-hidden', String(!active));
   });
   if (focus) activeButton?.focus();
 }

@@ -7,7 +7,7 @@ const { spawn, execFileSync } = require('child_process');
 const cdp = require('./cdp');
 const { addChromeStoreExtension } = require('./store-extension');
 const { reconcileOnConnection, portConnection } = require('./extension-pipe');
-const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError, normalizeIpLookupChannel } = require('./proxy-forwarder');
+const { parseProxy, displayProxy, startAuthenticatedProxy, lookupProxyCountry, lookupDirectCountry, extractProxyFromApi, invokeProxyRefresh, classifyProxyError, normalizeIpLookupChannel, normalizeTimezoneValue } = require('./proxy-forwarder');
 const { resolveProfileLanguage, localeFromCountryCode } = require('./automation/locale-from-country');
 const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-protocol');
 const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
@@ -707,7 +707,7 @@ class BrowserEngine {
       group_name: String(value.group_name || value.groupName || '').slice(0, 40),
       language: String(value.language || 'en-US').slice(0, 20), width, height,
       userAgent: String(value.userAgent || '').replace(/[\r\n]/g, ' ').slice(0, 1000), cookies: String(value.cookies || '').slice(0, 500000), note: String(value.note || '').slice(0, 2000),
-      exitIp: String(value.exitIp || '').slice(0, 80), exitCountryCode: String(value.exitCountryCode || '').slice(0, 4), exitTimezone: String(value.exitTimezone || '').slice(0, 100),
+      exitIp: String(value.exitIp || '').slice(0, 80), exitCountryCode: String(value.exitCountryCode || '').slice(0, 4), exitTimezone: normalizeTimezoneValue(value.exitTimezone).slice(0, 100),
       exitLatitude: finite(value.exitLatitude), exitLongitude: finite(value.exitLongitude),
       exitCheckedAt: String(value.exitCheckedAt || '').slice(0, 40),
       exitLatencyMs: finite(value.exitLatencyMs),
@@ -1246,7 +1246,7 @@ class BrowserEngine {
     // merge IP-detected geo/tz into profile for fingerprint apply
     const enriched = {
       ...profile,
-      exitTimezone: profile.exitTimezone || network.timezone || '',
+      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || network.timezone),
       exitLatitude: profile.exitLatitude ?? network.latitude,
       exitLongitude: profile.exitLongitude ?? network.longitude,
     };
@@ -1434,7 +1434,7 @@ class BrowserEngine {
     const network = this.networkInfo.get(profile.id) || {};
     const enriched = {
       ...profile,
-      exitTimezone: profile.exitTimezone || network.timezone || '',
+      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || network.timezone),
       exitLatitude: profile.exitLatitude ?? network.latitude,
       exitLongitude: profile.exitLongitude ?? network.longitude,
     };
@@ -1625,7 +1625,20 @@ class BrowserEngine {
   async ensureExitNetworkForLocale(profile) {
     if (!this.needsExitNetworkForLocale(profile)) return null;
     let network = this.networkInfo.get(profile.id);
-    if (network?.countryCode || network?.ip) return network;
+    const privacy = profile.privacy || {};
+    const languageMode = privacy.languageMode || (privacy.langFromIp !== false ? 'ip' : '');
+    const timezoneMode = privacy.timezoneMode || 'ip';
+    const geoMode = privacy.geoMode || 'ip';
+    const hasCountry = Boolean(String(network?.countryCode || '').trim());
+    const hasTimezone = Boolean(normalizeTimezoneValue(network?.timezone));
+    const hasGeo = network?.latitude != null
+      && network?.longitude != null
+      && Number.isFinite(Number(network.latitude))
+      && Number.isFinite(Number(network.longitude));
+    const needsCountry = languageMode === 'ip' && !hasCountry;
+    const needsTimezone = timezoneMode === 'ip' && !hasTimezone;
+    const needsGeo = (geoMode === 'ip' || geoMode === 'allow') && !hasGeo;
+    if ((network?.countryCode || network?.ip) && !needsCountry && !needsTimezone && !needsGeo) return network;
     const proxyRaw = String(profile.proxy || '');
     const isDirect = profile.networkMode === 'direct' || !proxyRaw || /^(direct|offline|none)$/i.test(proxyRaw);
     try {
@@ -1638,9 +1651,14 @@ class BrowserEngine {
         this.emit({ type: 'status', id: profile.id, running: this.running.has(profile.id), network });
       }
       if (network) {
+        const normalizedTimezone = normalizeTimezoneValue(network.timezone);
+        if (normalizedTimezone !== network.timezone) {
+          network = { ...network, timezone: normalizedTimezone };
+          this.networkInfo.set(profile.id, network);
+        }
         profile.exitIp = network.ip || profile.exitIp;
         profile.exitCountryCode = network.countryCode || profile.exitCountryCode;
-        profile.exitTimezone = network.timezone || profile.exitTimezone;
+        profile.exitTimezone = normalizedTimezone || profile.exitTimezone;
         profile.exitLatitude = network.latitude ?? profile.exitLatitude;
         profile.exitLongitude = network.longitude ?? profile.exitLongitude;
         profile.exitCheckedAt = network.checkedAt || profile.exitCheckedAt;
@@ -1669,6 +1687,8 @@ class BrowserEngine {
     };
     const privacy = { ...(profile.privacy || {}) };
     const language = resolveProfileLanguage(profile, network);
+    const networkTimezone = normalizeTimezoneValue(network.timezone);
+    const storedTimezone = normalizeTimezoneValue(profile.exitTimezone);
     const next = {
       ...profile,
       language,
@@ -1679,12 +1699,12 @@ class BrowserEngine {
       },
       exitIp: network.ip || profile.exitIp || '',
       exitCountryCode: network.countryCode || profile.exitCountryCode || '',
-      exitTimezone: network.timezone || profile.exitTimezone || '',
+      exitTimezone: networkTimezone || storedTimezone || '',
       exitLatitude: network.latitude ?? profile.exitLatitude,
       exitLongitude: network.longitude ?? profile.exitLongitude,
     };
-    if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && network.timezone) {
-      next.privacy = { ...next.privacy, timezone: network.timezone };
+    if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && networkTimezone) {
+      next.privacy = { ...next.privacy, timezone: networkTimezone };
     }
     if ((privacy.geoMode === 'ip' || privacy.geoMode === 'allow' || !privacy.geoMode)
       && Number.isFinite(Number(network.latitude))
@@ -1878,10 +1898,11 @@ class BrowserEngine {
         pageNetwork = this.networkInfo.get(profile.id) || null;
       }
     }
-    const timezone = profile.exitTimezone
-      || pageNetwork?.timezone
-      || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : '')
-      || '';
+    const timezone = normalizeTimezoneValue(
+      profile.privacy?.timezoneMode === 'custom'
+        ? profile.privacy.timezone
+        : profile.exitTimezone || pageNetwork?.timezone || ''
+    );
     const fpForStart = (() => {
       try {
         return buildFingerprint({
@@ -2800,7 +2821,7 @@ class BrowserEngine {
       ...profile,
       fingerprintLaunchSeed: allowSeedRefresh ? crypto.randomBytes(16).toString('hex') : '',
       kernelVersion: browser.version,
-      exitTimezone: profile.exitTimezone || pageNetwork.timezone || '',
+      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || pageNetwork.timezone),
       exitLatitude: profile.exitLatitude ?? pageNetwork.latitude,
       exitLongitude: profile.exitLongitude ?? pageNetwork.longitude,
     });
@@ -3640,6 +3661,7 @@ class BrowserEngine {
 
   fingerprintPatchFromNetwork(network = {}, profile = {}) {
     const privacy = { ...(profile.privacy || {}) };
+    const timezone = normalizeTimezoneValue(network.timezone);
     const language = resolveProfileLanguage({
       ...profile,
       privacy: { ...privacy, languageMode: privacy.languageMode || 'ip' },
@@ -3647,16 +3669,16 @@ class BrowserEngine {
     const patch = {
       exitIp: network.ip || '',
       exitCountryCode: network.countryCode || '',
-      exitTimezone: network.timezone || '',
+      exitTimezone: timezone,
       exitLatitude: network.latitude ?? null,
       exitLongitude: network.longitude ?? null,
       exitCheckedAt: network.checkedAt || new Date().toISOString(),
       language,
       privacy: { ...privacy },
     };
-    if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && network.timezone) {
+    if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && timezone) {
       patch.privacy.timezoneMode = 'ip';
-      patch.privacy.timezone = network.timezone;
+      patch.privacy.timezone = timezone;
     }
     if ((privacy.languageMode === 'ip' || privacy.langFromIp !== false) && language) {
       patch.privacy.languageMode = privacy.languageMode || 'ip';
@@ -3666,7 +3688,11 @@ class BrowserEngine {
   }
 
   applyNetworkToProfile(profile, network, { persist = false } = {}) {
-    const patch = this.fingerprintPatchFromNetwork(network, profile);
+    const timezone = normalizeTimezoneValue(network?.timezone);
+    const normalizedNetwork = network && typeof network === 'object'
+      ? { ...network, timezone }
+      : network;
+    const patch = this.fingerprintPatchFromNetwork(normalizedNetwork, profile);
     const next = this.sanitizeProfile({
       ...profile,
       ...patch,
@@ -3676,10 +3702,10 @@ class BrowserEngine {
       },
     });
     this.profiles.set(next.id, next);
-    this.networkInfo.set(next.id, network);
+    this.networkInfo.set(next.id, normalizedNetwork);
     if (persist) this.persist().catch(() => {});
-    this.emit({ type: 'status', id: next.id, running: this.running.has(next.id), network, profile: next });
-    return { profile: next, network, patch };
+    this.emit({ type: 'status', id: next.id, running: this.running.has(next.id), network: normalizedNetwork, profile: next });
+    return { profile: next, network: normalizedNetwork, patch };
   }
 
   async testProxy(raw, options = {}) {

@@ -3,6 +3,73 @@ const tls = require('tls');
 
 const IP_LOOKUP_CHANNELS = Object.freeze(['ip-api', 'ip2location', 'ifconfig-me']);
 
+const TIMEZONE_VALUE_KEYS = Object.freeze([
+  'id',
+  'name',
+  'timezone',
+  'time_zone',
+  'timeZone',
+  'timezoneId',
+  'timezone_id',
+  'tz',
+  'zone',
+  'identifier',
+  'iana',
+]);
+
+function timezoneCandidates(value, seen = new Set(), depth = 0) {
+  if (value == null || depth > 4) return [];
+  if (typeof value === 'string' || typeof value === 'number') return [String(value)];
+  if (Array.isArray(value)) return value.flatMap((item) => timezoneCandidates(item, seen, depth + 1));
+  if (typeof value !== 'object') return [];
+  if (seen.has(value)) return [];
+  seen.add(value);
+  return TIMEZONE_VALUE_KEYS
+    .filter((key) => Object.prototype.hasOwnProperty.call(value, key))
+    .flatMap((key) => timezoneCandidates(value[key], seen, depth + 1));
+}
+
+/**
+ * Convert provider-specific timezone values to a CDP-safe IANA timezone id.
+ * Providers do not agree on the shape: ipwho returns { id }, while other
+ * sources use timezone, time_zone, timeZone, timezoneId, or tz.
+ */
+function normalizeTimezoneValue(value) {
+  for (const rawValue of timezoneCandidates(value)) {
+    let candidate = String(rawValue).trim().replace(/^['"`]+|['"`]+$/g, '');
+    if (!candidate) continue;
+    // A few feeds append the abbreviation, for example "Asia/Shanghai (CST)".
+    candidate = candidate.replace(/\s+\([^)]*\)\s*$/, '').trim();
+    if (/^(?:z|utc|gmt)$/i.test(candidate)) return 'UTC';
+    // Chromium's Emulation.setTimezoneOverride expects an IANA id, not a
+    // bare numeric offset. Do not let Intl's offset extension through here.
+    if (/^[+-]\d{2}:?\d{2}$/.test(candidate)) continue;
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format();
+      return candidate;
+    } catch (_) {
+      // Try the next provider field or nested object value.
+    }
+  }
+  return '';
+}
+
+function timezoneFromLookup(value = {}) {
+  if (!value || typeof value !== 'object') return normalizeTimezoneValue(value);
+  return normalizeTimezoneValue([
+    value.timezone,
+    value.time_zone,
+    value.timeZone,
+    value.timezoneId,
+    value.timezone_id,
+    value.tz,
+    value.zone,
+    value.location,
+    value.geo,
+    value.data,
+  ]);
+}
+
 function normalizeIpLookupChannel(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'ifconfig' || raw === 'ifconfig.me' || raw === 'ifconfig-me') return 'ifconfig-me';
@@ -751,7 +818,7 @@ function normalizeIpApiResult(value) {
     region: String(value.regionName || ''),
     city: String(value.city || ''),
     zip: String(value.zip || ''),
-    timezone: String(value.timezone || ''),
+    timezone: timezoneFromLookup(value),
     latitude: Number.isFinite(Number(value.lat)) ? Number(value.lat) : null,
     longitude: Number.isFinite(Number(value.lon)) ? Number(value.lon) : null,
     isp: String(value.isp || ''),
@@ -783,7 +850,7 @@ function normalizeIpPureResult(value) {
     country: String(value.country || ''),
     countryCode: String(value.countryCode || '').toUpperCase(),
     city: String(value.city || ''),
-    timezone: String(value.timezone || ''),
+    timezone: timezoneFromLookup(value),
     latitude: Number.isFinite(Number(value.latitude)) ? Number(value.latitude) : null,
     longitude: Number.isFinite(Number(value.longitude)) ? Number(value.longitude) : null,
     postalCode: String(value.postalCode || ''),
@@ -887,7 +954,7 @@ function normalizeIpInfoResult(value) {
     region: regionCity,
     city,
     zip: String(value.postal || value.zip || ''),
-    timezone: String(value.timezone || ''),
+    timezone: timezoneFromLookup(value),
     latitude: Number.isFinite(Number(value.latitude ?? value.loc?.split?.(',')?.[0]))
       ? Number(value.latitude ?? value.loc.split(',')[0])
       : null,
@@ -990,7 +1057,9 @@ function mergeNetworkLookups(parts = []) {
     region: firstFilled(pick('region'), ''),
     city: firstFilled(pick('city'), ''),
     zip: firstFilled(pick('zip'), pick('postalCode'), ''),
-    timezone: firstFilled(pick('timezone'), ''),
+    timezone: sameIp.map((item) => timezoneFromLookup(item)).find(Boolean)
+      || list.map((item) => timezoneFromLookup(item)).find(Boolean)
+      || '',
     latitude: pick('latitude'),
     longitude: pick('longitude'),
     isp: firstFilled(pick('isp'), ''),
@@ -1279,9 +1348,7 @@ function normalizeIpWhoResult(value) {
   if (value.success === false || !ip || !/^[A-Z]{2}$/.test(countryCode)) {
     throw new Error(String(value.message || 'Direct exit lookup response was incomplete'));
   }
-  const tz = value.timezone && typeof value.timezone === 'object'
-    ? String(value.timezone.id || value.timezone.name || '')
-    : String(value.timezone || '');
+  const tz = timezoneFromLookup(value);
   return {
     ip,
     country: String(value.country || ''),
@@ -1440,6 +1507,8 @@ module.exports = {
   lookupProxyCountry,
   lookupDirectCountry,
   mergeNetworkLookups,
+  normalizeTimezoneValue,
+  timezoneFromLookup,
   parseCloudflareTrace,
   normalizeIpInfoResult,
   normalizeIfconfigMeResult,

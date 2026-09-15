@@ -220,3 +220,514 @@ html[data-ui-theme="merge-gateway"] :is(button, a, input, select, textarea):focu
   html[data-ui-theme="merge-gateway"] :is(#view-groups, #view-proxies) .table-card { overflow-x: auto; }
   html[data-ui-theme="merge-gateway"] #view-api-mcp .rpa-code-line code { white-space: normal; overflow-wrap: anywhere; }
 }
+
+/* Environment editor v2: a focused workbench with explicit form hierarchy. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor {
+  --editor-canvas: var(--xai-warm);
+  --editor-surface: var(--xai-white);
+  --editor-border: var(--xai-border-subtle);
+  --editor-muted: var(--xai-secondary);
+  background: var(--editor-canvas);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: var(--xai-space-3);
+  min-height: 64px;
+  padding: var(--xai-space-3) var(--xai-page-gutter);
+  background: var(--editor-surface);
+  border-bottom: 1px solid var(--editor-border);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-title {
+  display: grid;
+  align-content: center;
+  min-width: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 22px;
+  line-height: 28px;
+  letter-spacing: -.45px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 50px;
+  padding: 6px var(--xai-page-gutter);
+  overflow-x: auto;
+  background: var(--editor-canvas);
+  border-bottom: 1px solid var(--editor-border);
+  box-shadow: none;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button {
+  display: inline-flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  min-width: 140px;
+  max-width: clamp(180px, 14vw, 240px);
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--xai-radius-control);
+  color: var(--editor-muted);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 550;
+  white-space: nowrap;
+  text-align: center;
+  transition: color var(--xai-duration-default) var(--xai-ease-standard), background-color var(--xai-duration-default) var(--xai-ease-standard), border-color var(--xai-duration-default) var(--xai-ease-standard), transform var(--xai-duration-fast) var(--xai-ease-out);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button:hover {
+  color: var(--xai-ink-console);
+  background: var(--xai-fill-hover);
+  border-color: var(--editor-border);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button.active {
+  color: var(--xai-inverse) !important;
+  background: var(--xai-ink-console) !important;
+  border-color: var(--xai-ink-console) !important;
+  box-shadow: var(--xai-shadow-button);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button:active {
+  transform: translateY(1px);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 22vw, 380px);
+  gap: var(--xai-space-6);
+  width: 100%;
+  max-width: none;
+  margin-inline: auto;
+  padding: var(--xai-space-6) var(--xai-page-gutter) var(--xai-space-8);
+  background: var(--editor-canvas) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form {
+  min-width: 0;
+  padding: 0;
+  background: transparent !important;
+  border: 0;
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+  display: block;
+  overflow: visible;
+  padding: var(--xai-space-6);
+  background: var(--editor-surface);
+  border: 1px solid var(--xai-border);
+  border-radius: var(--xai-radius-card);
+  box-shadow: var(--xai-shadow-card);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-heading {
+  margin-bottom: var(--xai-space-6);
+  padding-bottom: var(--xai-space-4);
+  border-bottom: 1px solid var(--editor-border);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-heading h3 {
+  margin: 4px 0 3px;
+  color: var(--xai-ink-console);
+  font: 500 20px/27px var(--xai-font-display);
+  letter-spacing: -.3px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-heading p {
+  color: var(--editor-muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-index {
+  width: 32px;
+  height: 32px;
+  color: var(--editor-muted);
+  border-color: var(--xai-border);
+  font: 500 12px/1 var(--xai-font-mono);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-section-heading {
+  gap: 4px 10px;
+  margin: var(--xai-space-5) 0 var(--xai-space-3);
+  padding-bottom: var(--xai-space-2);
+  border-bottom: 1px solid var(--editor-border);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-section-heading span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--xai-ink-console);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-section-heading span::before {
+  width: 4px;
+  height: 15px;
+  content: "";
+  border-radius: 999px;
+  background: var(--xai-orange);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-section-heading small {
+  color: var(--editor-muted);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form label:not(.check-row) {
+  margin-bottom: var(--xai-space-3);
+  color: var(--xai-ink-console);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form label small,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .network-mode-hint {
+  color: var(--editor-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .segmented label {
+  color: var(--editor-muted);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .segmented label:has(input:checked) {
+  color: var(--xai-inverse);
+  background: var(--xai-ink-console);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form select,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form textarea,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .themed-select-button {
+  min-height: 40px;
+  padding: 9px 11px;
+  color: var(--xai-ink-console);
+  background: var(--xai-white);
+  border: 1px solid var(--xai-border-hover);
+  border-radius: var(--xai-radius-control);
+  font-size: 13px;
+  line-height: 18px;
+  transition: border-color var(--xai-duration-default) var(--xai-ease-standard), box-shadow var(--xai-duration-default) var(--xai-ease-standard), background-color var(--xai-duration-default) var(--xai-ease-standard);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form input:focus,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form select:focus,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form textarea:focus,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .themed-select-button:focus {
+  border-color: var(--xai-orange);
+  box-shadow: 0 0 0 3px var(--xai-orange-soft);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .themed-select,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .themed-select-button {
+  width: 100%;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .form-two,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .form-three,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .privacy-grid {
+  gap: var(--xai-space-3);
+  margin-bottom: var(--xai-space-3);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .settings-row {
+  grid-template-columns: minmax(126px, 162px) minmax(0, 1fr);
+  gap: var(--xai-space-3);
+  margin-bottom: var(--xai-space-3);
+  padding: var(--xai-space-2) var(--xai-space-2-5);
+  background: var(--xai-warm);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--xai-radius-control);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .settings-row:has(> :nth-child(3):not(datalist)) {
+  grid-template-columns: minmax(126px, 162px) repeat(2, minmax(0, 1fr));
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .settings-row:has(> :nth-child(4):not(datalist)) {
+  grid-template-columns: minmax(126px, 162px) repeat(3, minmax(0, 1fr));
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .privacy-grid {
+  padding: var(--xai-space-4);
+  background: var(--xai-warm) !important;
+  border: 1px solid var(--editor-border) !important;
+  border-radius: var(--xai-radius-panel);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .privacy-grid label {
+  margin: 0;
+  font-size: 12px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .advanced-card {
+  margin: var(--xai-space-4) 0 0;
+  padding: var(--xai-space-4);
+  background: var(--xai-warm) !important;
+  border: 1px solid var(--editor-border) !important;
+  border-radius: var(--xai-radius-panel);
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .advanced-card > strong {
+  display: block;
+  margin-bottom: var(--xai-space-2);
+  color: var(--xai-ink-console);
+  font-size: 15px;
+  line-height: 21px;
+  font-weight: 650;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .check-row,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .check-grid label {
+  min-height: 36px;
+  gap: var(--xai-space-2) !important;
+  color: var(--xai-ink-console);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 400;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .check-row input,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .check-grid input {
+  flex: 0 0 18px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .proxy-raw-row {
+  gap: var(--xai-space-1-5);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .proxy-raw-row .mini-btn {
+  min-height: 40px;
+  padding-inline: var(--xai-space-2);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tool-actions,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .ua-tools,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .storage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--xai-space-2);
+  margin: var(--xai-space-2) 0 var(--xai-space-4);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tool-actions button,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .ua-tools button,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .storage-actions button {
+  min-height: 36px;
+  font-size: 12px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .ua-tools .ua-ver {
+  min-height: 36px;
+  display: inline-flex !important;
+  align-items: center;
+  gap: var(--xai-space-1-5);
+  margin: 0 !important;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .ua-tools .ua-version-input,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .ua-tools #editor-ua-chrome-major {
+  width: 82px !important;
+  min-width: 82px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .proxy-test-result {
+  margin: var(--xai-space-2) 0 var(--xai-space-3);
+  padding: var(--xai-space-3);
+  color: var(--editor-muted);
+  background: var(--xai-warm);
+  border: 1px solid var(--editor-border);
+  border-radius: var(--xai-radius-control);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary {
+  position: sticky;
+  top: var(--xai-space-6);
+  max-height: calc(100dvh - var(--xai-space-12));
+  padding: var(--xai-space-4);
+  overflow: auto;
+  background: var(--editor-surface);
+  border: 1px solid var(--xai-border);
+  border-radius: var(--xai-radius-card);
+  box-shadow: var(--xai-shadow-card);
+  scrollbar-gutter: stable;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head {
+  gap: var(--xai-space-2);
+  margin-bottom: var(--xai-space-3);
+  padding-bottom: var(--xai-space-3);
+  border-bottom: 1px solid var(--editor-border);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-title strong {
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 650;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-summary-badge {
+  color: var(--xai-success);
+  background: var(--xai-success-soft);
+  border-color: var(--xai-success-border);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary dl > div {
+  grid-template-columns: minmax(88px, .8fr) minmax(0, 1.2fr);
+  gap: var(--xai-space-2);
+  min-height: 36px;
+  align-items: center;
+  padding: var(--xai-space-2) 0;
+  border-bottom: 1px solid var(--editor-border);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary dt {
+  color: var(--editor-muted);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary dd {
+  color: var(--xai-ink-console);
+  font-size: 12px;
+  line-height: 17px;
+  font-weight: 550;
+  text-align: left;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-note {
+  margin: var(--xai-space-4) 0 0;
+  color: var(--editor-muted);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-note-mark {
+  color: var(--xai-orange);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xai-space-3);
+  margin: var(--xai-space-4) 0 0;
+  padding: var(--xai-space-3) 0 var(--xai-space-1);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0%), rgb(255 255 255 / 96%) 28%);
+  border-top: 1px solid var(--editor-border);
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-action-buttons {
+  display: flex;
+  align-items: center;
+  gap: var(--xai-space-2);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-action-buttons button {
+  min-width: 100px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--xai-space-1-5);
+  color: var(--editor-muted);
+  font-size: 12px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-save-state[data-state="saved"] { color: var(--xai-success); }
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-save-state[data-state="dirty"] { color: var(--xai-orange); }
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-save-state[data-state="error"] { color: var(--xai-danger); }
+
+@media (max-width: 1024px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary {
+    position: static;
+    max-height: none;
+  }
+}
+
+@media (max-width: 640px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    min-height: 60px;
+    padding-inline: var(--xai-space-4);
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+    padding-inline: var(--xai-space-4);
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button {
+    flex: 0 0 140px;
+    max-width: none;
+    min-height: 44px;
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+    padding: var(--xai-space-4);
+    border-radius: var(--xai-radius-panel);
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-save-state,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-action-buttons {
+    width: 100%;
+  }
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-action-buttons button {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor input,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor select,
+  html[data-ui-theme="merge-gateway"] #view-profile-editor textarea {
+    animation: none;
+    transition: none;
+  }
+}
