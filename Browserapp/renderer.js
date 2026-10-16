@@ -2183,6 +2183,24 @@ function useSystemEditorDefaults() {
   refreshUaMetaPreview().catch(() => {});
 }
 
+// Keep the custom timezone field searchable while accepting any valid IANA ID.
+// Chromium exposes the canonical list through Intl.supportedValuesOf.
+function populateTimezoneIndex() {
+  const list = $('#editor-timezone-options');
+  if (!list || list.childElementCount) return;
+  let zones = [];
+  try { zones = Intl.supportedValuesOf?.('timeZone') || []; } catch (_) {}
+  if (!zones.length) zones = ['UTC', 'Asia/Shanghai', 'Asia/Tokyo', 'Europe/London', 'Europe/Berlin', 'America/Los_Angeles', 'America/New_York'];
+  const fragment = document.createDocumentFragment();
+  for (const zone of zones) {
+    const option = document.createElement('option');
+    option.value = zone;
+    fragment.appendChild(option);
+  }
+  list.appendChild(fragment);
+}
+populateTimezoneIndex();
+
 function editorOsToUaKey(osLabel) {
   const s = String(osLabel || '');
   if (/mac/i.test(s)) return 'macos';

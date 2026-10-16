@@ -60,7 +60,7 @@ async function main() {
   assert.strictEqual(fields.platform, 'Win32');
   assert.ok(String(fields.accept_languages).includes('ja'));
   assert.strictEqual(fields.hardwareConcurrency, 8);
-  assert.strictEqual(fields.deviceMemory, 16);
+  assert.strictEqual(fields.deviceMemory, 8);
   assert.strictEqual(fields.webrtc_policy, 3);
   assert.strictEqual(fields.is_webgl_finger_printing_enable, true);
   assert.strictEqual(fields.machine, 'OB-Test-Host-01');
@@ -93,7 +93,7 @@ async function main() {
     const init = loadInitObject(await fsp.readFile(written.path));
     assert.strictEqual(init.platform, 'Win32');
     assert.strictEqual(init.hardwareConcurrency, 8);
-    assert.strictEqual(init.deviceMemory, 16);
+    assert.strictEqual(init.deviceMemory, 8);
     assert.strictEqual(init.local_port.type, 0);
     assert.strictEqual(init.black_white_list.type, 1);
     assert.strictEqual(init.is_garble_dom_event_trusted, false);

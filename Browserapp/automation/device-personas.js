@@ -21,7 +21,7 @@
 /** @type {DevicePersona[]} */
 const WINDOWS_PERSONAS = [
   {
-    os: 'windows', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 1,
+    os: 'windows', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (Intel)',
@@ -39,7 +39,7 @@ const WINDOWS_PERSONAS = [
     },
   },
   {
-    os: 'windows', cores: 12, memory: 16, colorDepth: 24, devicePixelRatio: 1,
+    os: 'windows', cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (NVIDIA)',
@@ -48,7 +48,7 @@ const WINDOWS_PERSONAS = [
     },
   },
   {
-    os: 'windows', cores: 16, memory: 32, colorDepth: 24, devicePixelRatio: 1,
+    os: 'windows', cores: 16, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 2560, height: 1440 },
     webgl: {
       vendor: 'Google Inc. (NVIDIA)',
@@ -57,7 +57,7 @@ const WINDOWS_PERSONAS = [
     },
   },
   {
-    os: 'windows', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 1.25,
+    os: 'windows', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1.25,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (AMD)',
@@ -76,8 +76,8 @@ const WINDOWS_PERSONAS = [
   },
 ];
 
-/** Apple hardware: Retina (2x) and 30-bit colour are the norm, not the exception. */
-const MACOS_PERSONAS = [
+/** Apple Silicon hardware: Retina (2x) and 30-bit colour are the norm, not the exception. */
+const MACOS_APPLE_PERSONAS = [
   {
     os: 'macos', cores: 8, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1440, height: 900 },
@@ -88,7 +88,7 @@ const MACOS_PERSONAS = [
     },
   },
   {
-    os: 'macos', cores: 10, memory: 16, colorDepth: 30, devicePixelRatio: 2,
+    os: 'macos', cores: 10, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1512, height: 982 },
     webgl: {
       vendor: 'Google Inc. (Apple)',
@@ -97,7 +97,7 @@ const MACOS_PERSONAS = [
     },
   },
   {
-    os: 'macos', cores: 12, memory: 32, colorDepth: 30, devicePixelRatio: 2,
+    os: 'macos', cores: 12, memory: 8, colorDepth: 30, devicePixelRatio: 2,
     screen: { width: 1728, height: 1117 },
     webgl: {
       vendor: 'Google Inc. (Apple)',
@@ -105,8 +105,16 @@ const MACOS_PERSONAS = [
       gpu: { vendor: 'apple', architecture: 'apple-m3' },
     },
   },
+];
+
+/**
+ * Intel Mac hardware: x86 Chrome builds must not receive an Apple Silicon GPU persona.
+ * Keeping this pool separate prevents the UA-CH architecture and WebGL identity from
+ * contradicting each other.
+ */
+const MACOS_INTEL_PERSONAS = [
   {
-    os: 'macos', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 2,
+    os: 'macos', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 2,
     screen: { width: 1680, height: 1050 },
     webgl: {
       vendor: 'Google Inc. (Intel)',
@@ -116,9 +124,12 @@ const MACOS_PERSONAS = [
   },
 ];
 
+/** Legacy merged pool kept for callers that only need the full macOS set. */
+const MACOS_PERSONAS = [...MACOS_APPLE_PERSONAS, ...MACOS_INTEL_PERSONAS];
+
 const LINUX_PERSONAS = [
   {
-    os: 'linux', cores: 8, memory: 16, colorDepth: 24, devicePixelRatio: 1,
+    os: 'linux', cores: 8, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 1920, height: 1080 },
     webgl: {
       vendor: 'Google Inc. (Intel)',
@@ -127,7 +138,7 @@ const LINUX_PERSONAS = [
     },
   },
   {
-    os: 'linux', cores: 12, memory: 32, colorDepth: 24, devicePixelRatio: 1,
+    os: 'linux', cores: 12, memory: 8, colorDepth: 24, devicePixelRatio: 1,
     screen: { width: 2560, height: 1440 },
     webgl: {
       vendor: 'Google Inc. (NVIDIA)',
@@ -220,8 +231,8 @@ function exclusiveFontsForOtherOs(os) {
 
 const PERSONAS_BY_OS = Object.freeze({
   windows: Object.freeze(WINDOWS_PERSONAS),
-  macos: Object.freeze(MACOS_PERSONAS),
-  macos_arm: Object.freeze(MACOS_PERSONAS),
+  macos: Object.freeze(MACOS_INTEL_PERSONAS),
+  macos_arm: Object.freeze(MACOS_APPLE_PERSONAS),
   linux: Object.freeze(LINUX_PERSONAS),
 });
 
@@ -245,7 +256,7 @@ function isCoherent(persona) {
   if (!persona) return false;
   const { cores, memory, colorDepth, devicePixelRatio, os, webgl } = persona;
   if (!Number.isInteger(cores) || cores < 2 || cores > 64) return false;
-  if (!Number.isInteger(memory) || memory < 4 || memory > 128) return false;
+  if (!Number.isInteger(memory) || memory < 4 || memory > 8) return false;
   // Memory tracks core count on real machines: no 4-core/32 GB or 16-core/4 GB laptops.
   if (cores <= 4 && memory > 16) return false;
   if (cores >= 12 && memory < 8) return false;
@@ -262,6 +273,10 @@ function isCoherent(persona) {
 }
 
 module.exports = {
+  WINDOWS_PERSONAS,
+  MACOS_PERSONAS,
+  MACOS_APPLE_PERSONAS,
+  MACOS_INTEL_PERSONAS,
   PERSONAS_BY_OS,
   OS_FONTS,
   personasForOs,

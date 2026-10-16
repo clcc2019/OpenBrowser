@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const { BrowserEngine } = require('./engine');
 const {
   mergeNetworkLookups,
@@ -14,6 +16,11 @@ function ok(name, condition) {
   passed += 1;
   console.log('  PASS  ' + name);
 }
+
+const editorHtml = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+const rendererSource = fs.readFileSync(path.join(__dirname, 'renderer.js'), 'utf8');
+ok('editor timezone input exposes the IANA datalist', editorHtml.includes('list="editor-timezone-options"') && editorHtml.includes('<datalist id="editor-timezone-options"></datalist>'));
+ok('editor timezone index is populated from Intl', rendererSource.includes('function populateTimezoneIndex()') && rendererSource.includes("Intl.supportedValuesOf?.('timeZone')"));
 
 const values = [
   [{ timezone: 'Asia/Shanghai' }, 'Asia/Shanghai'],

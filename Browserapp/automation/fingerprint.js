@@ -67,12 +67,18 @@ const WEBGL_PRESETS = {
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'rdna-2' } },
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
   ],
-  macos: [
+  // Keep Intel and Apple Silicon pools separate: the UA-CH architecture must agree with
+  // the GPU family exposed by WebGL.
+  macos_intel: [
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 640, OpenGL 4.1)', gpu: { vendor: 'intel', architecture: 'gen9' } },
+  ],
+  macos_apple: [
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1, OpenGL 4.1)', gpu: { vendor: 'apple', architecture: 'common-3' } },
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M2, OpenGL 4.1)', gpu: { vendor: 'apple', architecture: 'common-3' } },
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
-    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 640, OpenGL 4.1)', gpu: { vendor: 'intel', architecture: 'gen9' } },
   ],
+  // Legacy merged view for consumers that do not select an architecture explicitly.
+  get macos() { return [...this.macos_intel, ...this.macos_apple]; },
   linux: [
     { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 620 (KBL GT2), OpenGL 4.6)', gpu: { vendor: 'intel', architecture: 'gen9' } },
     { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, AMD Radeon RX 580 Series (RADV POLARIS10), OpenGL 4.6)', gpu: { vendor: 'amd', architecture: 'gcn-4' } },
@@ -591,7 +597,8 @@ function desktopOs(os) {
 }
 
 function webglPresetsForOs(os) {
-  if (os === 'macos' || os === 'macos_arm') return WEBGL_PRESETS.macos;
+  if (os === 'macos') return WEBGL_PRESETS.macos_intel;
+  if (os === 'macos_arm') return WEBGL_PRESETS.macos_apple;
   if (os === 'linux') return WEBGL_PRESETS.linux;
   return WEBGL_PRESETS.windows;
 }
@@ -626,9 +633,22 @@ function buildFingerprint(profile = {}) {
   let cores = hasCoresOverride
     ? Math.min(64, Math.max(1, Math.round(coresOverride)))
     : [4, 6, 8, 12, 16][u32(seed, 12) % 5];
+  // navigator.deviceMemory is quantised by Chromium to a small set of values and capped at
+  // 8GB. Values such as 16/32 were previously generated here even though the browser API can
+  // never expose them, making the native and JS layers disagree. Keep explicit overrides on the
+  // same quantised scale as generated values.
+  const DEVICE_MEMORY_STEPS = [0.25, 0.5, 1, 2, 4, 8];
+  const normalizeDeviceMemory = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric <= 0) return 8;
+    return DEVICE_MEMORY_STEPS.reduce((best, step) => (
+      Math.abs(step - numeric) < Math.abs(best - numeric) ? step : best
+    ), 8);
+  };
+  const memoryPool = [4, 8];
   let memory = hasMemoryOverride
-    ? Math.min(128, Math.max(1, Math.round(memoryOverride)))
-    : [4, 8, 8, 16, 32][u32(seed, 16) % 5];
+    ? normalizeDeviceMemory(memoryOverride)
+    : memoryPool[u32(seed, 16) % memoryPool.length];
   const width = Number(profile.width) || 1280;
   const height = Number(profile.height) || 820;
   let colorDepth = [24, 24, 30][u32(seed, 20) % 3];
@@ -709,7 +729,13 @@ function buildFingerprint(profile = {}) {
     }
   }
 
-  const uaOs = desktopOs(uaProfile.os) || desktopOs(parseOsFromUa(uaProfile.userAgent)) || 'windows';
+  let uaOs = desktopOs(uaProfile.os) || desktopOs(parseOsFromUa(uaProfile.userAgent)) || 'windows';
+  // The UA generator may attach an arm Client Hint to a generic macOS profile. Resolve the
+  // architecture before selecting the GPU/persona pool so Intel/AMD and Apple Silicon cannot
+  // cross over into one another.
+  const uaArchitecture = String(uaProfile.metadata?.architecture || '').toLowerCase();
+  if (uaOs === 'macos' && uaArchitecture === 'arm') uaOs = 'macos_arm';
+  else if (uaOs === 'macos_arm' && uaArchitecture && uaArchitecture !== 'arm') uaOs = 'macos';
   const webglOptions = webglPresetsForOs(uaOs);
   let webglPreset = webglOptions[u32(seed, 8) % webglOptions.length];
 
@@ -874,7 +900,7 @@ function buildFingerprint(profile = {}) {
     userAgentMetadata: uaProfile.metadata,
     languages: Array.isArray(fpIn.languages) ? fpIn.languages : languages,
     hardwareConcurrency: useRealCores ? null : (Number(fpIn.hardwareConcurrency) > 0 ? Number(fpIn.hardwareConcurrency) : cores),
-    deviceMemory: useRealMemory ? null : (Number(fpIn.deviceMemory) > 0 ? Number(fpIn.deviceMemory) : memory),
+    deviceMemory: useRealMemory ? null : (Number(fpIn.deviceMemory) > 0 ? normalizeDeviceMemory(fpIn.deviceMemory) : memory),
     screen: {
       width: screenWidth,
       height: screenHeight,
@@ -943,7 +969,7 @@ function buildFingerprint(profile = {}) {
     // Static noise identity vs dynamic exit-IP layer
     staticConfig: {
       hardwareConcurrency: useRealCores ? null : (Number(fpIn.hardwareConcurrency) > 0 ? Number(fpIn.hardwareConcurrency) : cores),
-      deviceMemory: useRealMemory ? null : (Number(fpIn.deviceMemory) > 0 ? Number(fpIn.deviceMemory) : memory),
+      deviceMemory: useRealMemory ? null : (Number(fpIn.deviceMemory) > 0 ? normalizeDeviceMemory(fpIn.deviceMemory) : memory),
       platform: fpIn.platform || uaProfile.platform || OS_PRESETS[uaOs].platformNav,
       langs: Array.isArray(fpIn.languages) ? fpIn.languages : languages,
       canvasMark: Number.isFinite(Number(fpIn.canvasId)) ? Number(fpIn.canvasId) : canvasId,
@@ -998,7 +1024,7 @@ function fingerprintConsistencyIssues(fp) {
   if (uaOs === 'windows' && /Apple M[0-9]|OpenGL 4\.1|Mesa|RADV/i.test(renderer)) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a Windows renderer.');
   }
-  if ((uaOs === 'macos' || uaOs === 'macos_arm') && (/Direct3D|D3D11|Mesa|RADV/i.test(renderer) || !/Apple|Intel/i.test(vendor + renderer))) {
+  if ((uaOs === 'macos' || uaOs === 'macos_arm') && (/Direct3D|D3D11|Mesa|RADV/i.test(renderer) || !/Apple|Intel|AMD/i.test(vendor + renderer))) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a macOS renderer.');
   }
   if (uaOs === 'linux' && (/Direct3D|D3D11|Apple M[0-9]/i.test(renderer) || !/Mesa|RADV|OpenGL/i.test(renderer))) {
@@ -1023,8 +1049,8 @@ function fingerprintConsistencyIssues(fp) {
   if (fp?.hardwareConcurrency != null && !(Number(fp.hardwareConcurrency) >= 1 && Number(fp.hardwareConcurrency) <= 64)) {
     add('cores-invalid', 'hardwareConcurrency must be between 1 and 64 when overridden.', 'error');
   }
-  if (fp?.deviceMemory != null && !(Number(fp.deviceMemory) >= 1 && Number(fp.deviceMemory) <= 128)) {
-    add('memory-invalid', 'deviceMemory must be between 1 and 128 when overridden.', 'error');
+  if (fp?.deviceMemory != null && !(Number(fp.deviceMemory) >= 1 && Number(fp.deviceMemory) <= 8)) {
+    add('memory-invalid', 'deviceMemory must be between 1 and 8 when overridden.', 'error');
   }
   return { ok: !issues.some((issue) => issue.severity === 'error'), issues };
 }
@@ -1039,7 +1065,7 @@ function buildInjectionScript(fp) {
     userAgent: fp.userAgent,
     languages: fp.languages,
     hardwareConcurrency: fp.hardwareConcurrency,
-    deviceMemory: fp.deviceMemory,
+    deviceMemory: fp.deviceMemory == null ? null : Math.min(8, Math.max(0.25, Number(fp.deviceMemory) || 8)),
     screen: fp.screen,
     webgl: {
       mode: fp.webgl?.mode,
@@ -1087,6 +1113,7 @@ function buildInjectionScript(fp) {
 (() => {
   try {
   const CFG = ${json};
+  const isIosPersona = CFG.platform === 'iPhone' || /iPhone|iPad|iPod/i.test(String(CFG.userAgent || ''));
   const seedNum = parseInt(String(CFG.seed || '1').slice(0, 8), 16) || 1;
   const noise = (n) => {
     let x = Math.sin((n + 1) * seedNum) * 10000;
@@ -1261,7 +1288,9 @@ function buildInjectionScript(fp) {
     webdriver: { get: () => false },
   };
   if (CFG.hardwareConcurrency != null) navPatch.hardwareConcurrency = { get: () => CFG.hardwareConcurrency };
-  if (CFG.deviceMemory != null) navPatch.deviceMemory = { get: () => CFG.deviceMemory };
+  if (CFG.deviceMemory != null && !isIosPersona) {
+    navPatch.deviceMemory = { get: () => Math.min(8, Math.max(0.25, Number(CFG.deviceMemory) || 8)) };
+  }
   if (CFG.doNotTrack != null) navPatch.doNotTrack = { get: () => CFG.doNotTrack };
   const forceNavProp = (target, key, desc) => {
     try {
@@ -1295,6 +1324,21 @@ function buildInjectionScript(fp) {
       } catch (_) {}
     }
   } catch (_) {}
+
+  if (isIosPersona) {
+    try {
+      if (typeof Navigator !== 'undefined' && Navigator.prototype) {
+        delete Navigator.prototype.deviceMemory;
+        delete Navigator.prototype.userAgentData;
+        delete Navigator.prototype.gpu;
+      }
+      if (typeof navigator !== 'undefined') {
+        delete navigator.deviceMemory;
+        delete navigator.userAgentData;
+        delete navigator.gpu;
+      }
+    } catch (_) {}
+  }
 
   // Hard override via window.navigator getter + Proxy.
   // Bind methods with Reflect.apply so pages never hit Illegal invocation
@@ -2018,7 +2062,7 @@ function buildWorkerInjectionScript(fp) {
     userAgentMetadata: fp.userAgentMetadata,
     languages: fp.languages,
     hardwareConcurrency: fp.hardwareConcurrency,
-    deviceMemory: fp.deviceMemory,
+    deviceMemory: fp.deviceMemory == null ? null : Math.min(8, Math.max(0.25, Number(fp.deviceMemory) || 8)),
     webgl: {
       mode: fp.webgl?.mode,
       metaMode: fp.webgl?.metaMode || 'noise',
@@ -2043,6 +2087,7 @@ function buildWorkerInjectionScript(fp) {
   });
   return `(() => {
   const CFG = ${json};
+  const isIosPersona = CFG.platform === 'iPhone' || /iPhone|iPad|iPod/i.test(String(CFG.userAgent || ''));
   const seedNum = parseInt(String(CFG.seed || '1').slice(0, 8), 16) || 1;
   const noise = (n) => { const x = Math.sin((n + 1) * seedNum) * 10000; return x - Math.floor(x); };
   const square = Math.max(2, Number(CFG.stability?.square) || 8);
@@ -2146,6 +2191,72 @@ function buildWorkerInjectionScript(fp) {
     }
     return desc;
   };
+  const stripStackFrame = (err, fn, frameName) => {
+    if (!err) return err;
+    if (typeof Error.captureStackTrace === 'function' && typeof fn === 'function') {
+      try { Error.captureStackTrace(err, fn); } catch (_) {}
+    }
+    if (typeof err.stack === 'string') {
+      const nl = String.fromCharCode(10);
+      const lines = err.stack.split(nl);
+      const baseName = (frameName && frameName.indexOf('get ') === 0) ? frameName.slice(4) : '';
+      if (lines.length > 1 && lines[1] && ((frameName && lines[1].indexOf(frameName) !== -1) || (baseName && lines[1].indexOf(baseName) !== -1))) {
+        lines.splice(1, 1);
+        try { err.stack = lines.join(nl); } catch (_) {}
+      }
+    }
+    return err;
+  };
+  const getWorkerRealmTypeError = (receiver) => {
+    try {
+      if (receiver && receiver.constructor) {
+        const ctor = receiver.constructor;
+        if (typeof ctor.constructor === 'function') {
+          const globalObject = ctor.constructor('return this')();
+          if (globalObject && globalObject.TypeError) return globalObject.TypeError;
+        }
+      }
+    } catch (_) {}
+    try {
+      if (typeof self !== 'undefined' && self.TypeError) return self.TypeError;
+    } catch (_) {}
+    try {
+      if (typeof globalThis !== 'undefined' && globalThis.TypeError) return globalThis.TypeError;
+    } catch (_) {}
+    return (typeof TypeError !== 'undefined' ? TypeError : Error);
+  };
+  const makeNativeWorkerGetter = (key, getValue) => {
+    let getter;
+    const holder = {
+      get [key]() {
+        const isPrototype = (typeof WorkerNavigator !== 'undefined' && this === WorkerNavigator.prototype)
+          || (this && this.constructor && this.constructor.prototype === this)
+          || (this && Object.getPrototypeOf(this) === Object.prototype);
+        const isWorkerNavigator = Boolean(
+          this
+          && !isPrototype
+          && (typeof WorkerNavigator === 'undefined' || this !== WorkerNavigator.prototype)
+          && (
+            this === (typeof navigator !== 'undefined' ? navigator : null)
+            || (typeof WorkerNavigator !== 'undefined' && (this instanceof WorkerNavigator || WorkerNavigator.prototype.isPrototypeOf(this)))
+            || (this.constructor && this.constructor.name === 'WorkerNavigator' && this !== this.constructor.prototype)
+          )
+        );
+        if (!isWorkerNavigator) {
+          const RealmTypeError = getWorkerRealmTypeError(this);
+          const error = new RealmTypeError('Illegal invocation');
+          stripStackFrame(error, getter, 'get ' + key);
+          throw error;
+        }
+        return getValue.call(this);
+      },
+    };
+    getter = Object.getOwnPropertyDescriptor(holder, key).get;
+    try { Object.defineProperty(getter, 'name', { configurable: true, value: 'get ' + key }); } catch (_) {}
+    try { Object.defineProperty(getter, 'length', { configurable: true, value: 0 }); } catch (_) {}
+    try { sources.set(getter, 'function get ' + key + '() { [native code] }'); } catch (_) {}
+    return getter;
+  };
   try {
     const patched = nativeLike(function toString() {
       if (sources.has(this)) return sources.get(this);
@@ -2172,9 +2283,36 @@ function buildWorkerInjectionScript(fp) {
         language: (CFG.languages || [])[0] || 'en-US',
       };
       if (CFG.hardwareConcurrency != null) navValues.hardwareConcurrency = CFG.hardwareConcurrency;
-      if (CFG.deviceMemory != null) navValues.deviceMemory = CFG.deviceMemory;
+      if (CFG.deviceMemory != null) navValues.deviceMemory = Math.min(8, Math.max(0.25, Number(CFG.deviceMemory) || 8));
       for (const [key, value] of Object.entries(navValues)) {
-        try { Object.defineProperty(navProto, key, nativeAccessor(key, { configurable: true, enumerable: true, get: () => value })); } catch (_) {}
+        if (!(key in navProto)) continue;
+        const getter = makeNativeWorkerGetter(key, () => value);
+        try {
+          Object.defineProperty(navProto, key, {
+            configurable: true,
+            enumerable: true,
+            get: getter,
+          });
+        } catch (_) {}
+      }
+      if (isIosPersona) {
+        try {
+          if (typeof WorkerNavigator !== 'undefined' && WorkerNavigator.prototype) {
+            delete WorkerNavigator.prototype.userAgentData;
+            delete WorkerNavigator.prototype.gpu;
+            delete WorkerNavigator.prototype.deviceMemory;
+          }
+          if (typeof self !== 'undefined' && self.navigator) {
+            delete self.navigator.userAgentData;
+            delete self.navigator.gpu;
+            delete self.navigator.deviceMemory;
+          }
+          if (typeof self !== 'undefined') {
+            delete self.GPU;
+            delete self.GPUAdapter;
+            delete self.GPUDevice;
+          }
+        } catch (_) {}
       }
       const metadata = CFG.userAgentMetadata || {};
       const brands = Object.freeze((metadata.brands || []).map((item) => Object.freeze({ brand: String(item.brand), version: String(item.version) })));
@@ -2203,7 +2341,13 @@ function buildWorkerInjectionScript(fp) {
         },
         toJSON() { return { brands, mobile: Boolean(metadata.mobile), platform: String(metadata.platform || '') }; },
       });
-      try { Object.defineProperty(navProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData })); } catch (_) {}
+      if (!isIosPersona) {
+        try {
+          if ('userAgentData' in navProto) {
+            Object.defineProperty(navProto, 'userAgentData', nativeAccessor('userAgentData', { configurable: true, enumerable: true, get: () => uaData }));
+          }
+        } catch (_) {}
+      }
     }
   } catch (_) {}
   const canvasMark = Number(CFG.canvas?.mark) || 1;

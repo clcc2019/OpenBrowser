@@ -358,7 +358,8 @@
                 <input type="checkbox" id="editor-lang-from-ip" checked hidden>
                 <div class="settings-row"><span>时区</span>
                   <select id="editor-timezone-mode"><option value="ip">基于出口 IP</option><option value="real">系统真实</option><option value="custom">自定义</option></select>
-                  <input id="editor-timezone" placeholder="Asia/Shanghai">
+                  <input id="editor-timezone" list="editor-timezone-options" placeholder="Asia/Shanghai" autocomplete="off">
+                  <datalist id="editor-timezone-options"></datalist>
                 </div>
                 <div class="settings-row"><span>地理位置</span>
                   <select id="editor-geo-mode"><option value="ip">基于出口 IP</option><option value="prompt">询问</option><option value="disabled">禁用</option><option value="custom">自定义</option></select>

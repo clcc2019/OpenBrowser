@@ -63,7 +63,7 @@ const GOLDEN = {
       "devicePixelRatio": 1
     },
     "webglVendor": "Google Inc. (NVIDIA)",
-    "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)",
     "languages": [
       "en-US"
     ],
@@ -87,8 +87,8 @@ const GOLDEN = {
       "pixelDepth": 30,
       "devicePixelRatio": 1
     },
-    "webglVendor": "Google Inc. (NVIDIA)",
-    "webglRenderer": "ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "webglVendor": "Google Inc. (Intel)",
+    "webglRenderer": "ANGLE (Intel, Intel(R) Arc(TM) A770 Graphics Direct3D11 vs_5_0 ps_5_0, D3D11)",
     "languages": [
       "en-US"
     ],
@@ -112,8 +112,8 @@ const GOLDEN = {
       "pixelDepth": 24,
       "devicePixelRatio": 2
     },
-    "webglVendor": "Google Inc. (AMD)",
-    "webglRenderer": "ANGLE (AMD, AMD Radeon RX 580 Series Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "webglVendor": "Google Inc. (Intel)",
+    "webglRenderer": "ANGLE (Intel, Intel(R) UHD Graphics 770 Direct3D11 vs_5_0 ps_5_0, D3D11)",
     "languages": [
       "en-US"
     ],
@@ -123,7 +123,7 @@ const GOLDEN = {
     "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "platform": "MacIntel",
     "hardwareConcurrency": 4,
-    "deviceMemory": 16,
+    "deviceMemory": 8,
     "screen": {
       "width": 1280,
       "height": 820,
@@ -137,8 +137,8 @@ const GOLDEN = {
       "pixelDepth": 30,
       "devicePixelRatio": 1.5
     },
-    "webglVendor": "Google Inc. (Apple)",
-    "webglRenderer": "ANGLE (Apple, Apple M2, OpenGL 4.1)",
+    "webglVendor": "Google Inc. (Intel)",
+    "webglRenderer": "ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 640, OpenGL 4.1)",
     "languages": [
       "en-US"
     ],
@@ -205,6 +205,10 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
   const mac = buildFingerprint(base('persona-mac', { userAgent: MAC_UA, privacy: { deviceProfile: 'persona' } }));
   ok('opted-in macOS profile uses a Metal GPU string', /Metal/.test(mac.webgl.renderer));
   ok('opted-in macOS profile is Retina (dpr >= 2)', mac.screen.devicePixelRatio >= 2);
+  ok('Intel macOS UA does not receive an Apple Silicon GPU', mac.userAgentMetadata.architecture !== 'arm' && !/Apple M[0-9]/i.test(mac.webgl.renderer));
+
+  const armMac = buildFingerprint(base('persona-mac-arm', { os: 'macos_arm', privacy: { deviceProfile: 'persona' } }));
+  ok('macOS arm profile pairs arm Client Hints with Apple GPU', armMac.userAgentMetadata.architecture === 'arm' && /Apple M[0-9]/i.test(armMac.webgl.renderer));
 }
 
 // --- 4. impossible pairings the old independent sampling could produce are gone ---
@@ -241,7 +245,7 @@ const MAC_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.
     privacy: { deviceProfile: 'persona', fingerprint: { cores: 24, memory: 64 } },
   }));
   ok('explicit cores override beats the persona', fp.hardwareConcurrency === 24);
-  ok('explicit memory override beats the persona', fp.deviceMemory === 64);
+  ok('explicit memory override is quantized to the 8GB API ceiling', fp.deviceMemory === 8);
 }
 
 // --- 6b. speech voices match the OS the profile claims ---
