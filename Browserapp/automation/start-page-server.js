@@ -430,6 +430,18 @@ function normalizeCountryCode(value) {
   return String(value || '').trim().toUpperCase();
 }
 
+// Chromium resolves origin hostnames through the proxy for these protocols. The DNS probe below
+// runs in the application process, so its resolver geography cannot be compared to the browser's
+// proxy exit as evidence of a browser DNS leak.
+const REMOTE_RESOLVING_PROXY_PROTOCOLS = new Set(['socks5', 'socks5h', 'socks5s', 'http', 'https']);
+
+function proxyResolvesRemotely(protocol) {
+  const raw = String(protocol || '').trim().toLowerCase();
+  if (!raw || /^(direct|offline|none)$/.test(raw)) return false;
+  const scheme = raw.split('://', 1)[0].replace(/:$/, '');
+  return REMOTE_RESOLVING_PROXY_PROTOCOLS.has(scheme);
+}
+
 async function fetchJsonUrl(url, { timeout = 12000, headers = {} } = {}) {
   const probe = await probeDirect(url, timeout, 200000);
   if (!probe.ok && !(probe.status >= 200 && probe.status < 500)) {
@@ -462,8 +474,10 @@ async function resolveDnsLeakProbes(testId, count = 12) {
   return { resolved: hosts.length, hosts };
 }
 
-function summarizeDnsLeak(rows = [], exitNetwork = null) {
+function summarizeDnsLeak(rows = [], exitNetwork = null, options = {}) {
   const list = Array.isArray(rows) ? rows : [];
+  const proxyProtocol = String(options.proxyProtocol || '').trim().toLowerCase();
+  const remoteResolvingProxy = proxyResolvesRemotely(proxyProtocol);
   const exitIp = String(exitNetwork?.ip || '').trim();
   const exitCountry = normalizeCountryCode(exitNetwork?.countryCode || exitNetwork?.countryUsage || '');
   const servers = [];
@@ -522,13 +536,21 @@ function summarizeDnsLeak(rows = [], exitNetwork = null) {
     label = '未观测到 DNS 服务器';
     detail = '已触发唯一探测域名，但结果服务未返回可识别的 DNS 解析器。可稍后重试。';
   } else if (countryMismatch) {
-    state = 'bad';
-    label = '可能存在 DNS 泄露';
-    detail = [
+    const regions = [
       exitCountry ? `出口地区 ${exitCountry}` : '',
       dnsCountries.length ? `DNS 地区 ${dnsCountries.join('/')}` : '',
       unique.slice(0, 4).map((item) => item.ip).join(', '),
     ].filter(Boolean).join(' · ');
+    if (remoteResolvingProxy) {
+      state = 'info';
+      label = '经代理远端解析';
+      detail = regions + '。探测使用应用进程的本机解析路径；浏览器通过 ' + proxyProtocol
+        + ' 代理在代理端解析域名，因此该地区差异本身不构成 DNS 泄露。';
+    } else {
+      state = 'bad';
+      label = '可能存在 DNS 泄露';
+      detail = regions;
+    }
   } else if (multiCountryDns) {
     state = 'warn';
     label = 'DNS 地区不一致';
@@ -592,7 +614,7 @@ async function lookupDnsLeak(options = {}) {
     const rows = await fetchJsonUrl(`https://bash.ws/dnsleak/test/${encodeURIComponent(testId)}?json`, {
       timeout: 15000,
     });
-    const summary = summarizeDnsLeak(rows, exitNetwork);
+    const summary = summarizeDnsLeak(rows, exitNetwork, { proxyProtocol: options.proxyProtocol });
     return {
       ...summary,
       testId,
@@ -1171,6 +1193,7 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
             countryCode: session?.countryCode || '',
             country: '',
           },
+          proxyProtocol: session?.proxyProtocol || (session?.networkMode === 'direct' ? 'direct' : ''),
         });
         return this.#json(res, 200, {
           ok: true,

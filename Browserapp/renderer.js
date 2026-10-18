@@ -1685,26 +1685,14 @@ function editorDraft(strict = true) {
     userAgent: ($('#editor-user-agent')?.value || '').trim(),
     cookies: strict ? editorCookies() : ($('#editor-cookies')?.value || '').trim(),
     language: (() => {
-      // 最终语言在 engine.start 时按出口 IP 解析（JP→ja-JP）；此处只存草稿/固定值
       const mode = $('#editor-language-mode')?.value || 'ip';
-      if (mode === 'ip') {
-        // 若已测过出口国家，先写入对应语言；否则保留原值，启动时再解析
-        const cc = editorNetworkResult?.countryCode || current.exitCountryCode || '';
-        if (cc) {
-          try {
-            // 与 engine locale-from-country 对齐的轻量映射（渲染进程不 require 该模块）
-            const map = { JP: 'ja-JP', CN: 'zh-CN', TW: 'zh-TW', HK: 'zh-HK', KR: 'ko-KR', US: 'en-US', GB: 'en-GB', DE: 'de-DE', FR: 'fr-FR', ES: 'es-ES', BR: 'pt-BR', RU: 'ru-RU', TH: 'th-TH', VN: 'vi-VN', ID: 'id-ID', SA: 'ar-SA', SG: 'en-SG', AU: 'en-AU', CA: 'en-CA', IN: 'en-IN', PH: 'en-PH', MX: 'es-MX', IT: 'it-IT', NL: 'nl-NL', PL: 'pl-PL', TR: 'tr-TR', UA: 'uk-UA', MY: 'ms-MY' };
-            const code = String(cc).toUpperCase();
-            if (map[code]) return map[code];
-          } catch (_) {}
-        }
-        return current.language || 'en-US';
-      }
-      if (mode === 'system') {
-        try { return Intl.DateTimeFormat().resolvedOptions().locale || 'en-US'; } catch (_) { return 'en-US'; }
-      }
-      if (/^[a-z]{2}(-[A-Za-z]{2})?$/i.test(mode)) return mode;
-      return current.language || 'en-US';
+      const resolveLanguage = window.OpenBrowserLocale?.resolveProfileLanguage;
+      if (typeof resolveLanguage !== 'function') return current.language || 'en-US';
+      return resolveLanguage({
+        ...current,
+        language: current.language || 'en-US',
+        privacy: { ...(current.privacy || {}), languageMode: mode },
+      }, editorNetworkResult || {});
     })(),
     tag: ($('#editor-tag')?.value || '').trim(),
     groupId: $('#editor-group')?.value || UNGROUPED_ID,
@@ -2681,6 +2669,8 @@ function renderGroupFilterChips() {
 }
 
 function updateProfileSelectionUi() {
+  const currentIds = new Set(ui.profiles.map((profile) => profile.id));
+  for (const id of selectedProfiles) if (!currentIds.has(id)) selectedProfiles.delete(id);
   const count = selectedProfiles.size;
   const bar = $('#profile-selection-bar');
   const label = $('#profile-selection-count');
@@ -2696,6 +2686,7 @@ function updateProfileSelectionUi() {
   const selectedOnPage = visibleCheckboxes.filter((input) => selectedProfiles.has(input.dataset.profileSelect)).length;
   const selectAll = $('#select-all-profiles');
   if (selectAll) {
+    selectAll.setAttribute('aria-label', t('profiles.selectPage'));
     selectAll.checked = visibleCheckboxes.length > 0 && selectedOnPage === visibleCheckboxes.length;
     selectAll.indeterminate = selectedOnPage > 0 && selectedOnPage < visibleCheckboxes.length;
   }
@@ -2786,7 +2777,7 @@ function renderProfiles() {
   for (const profile of visible) {
     const info = profileEngine(profile.id); const row = document.createElement('tr');
     row.dataset.profileId = profile.id;
-    const selectCell = document.createElement('td'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; selectCell.append(checkbox);
+    const selectCell = document.createElement('td'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) })); selectCell.append(checkbox);
     const idCell = element('td', 'col-num', displayProfileNumber(profile));
     const profileIdCell = element('td', 'col-profile-id', profile.id);
     profileIdCell.title = profile.id;
@@ -2855,7 +2846,15 @@ function renderProfiles() {
     profileRows.append(row);
   }
   table.append(profileRows);
-  $('#profile-empty').hidden = filtered.length !== 0;
+  const empty = $('#profile-empty');
+  const hasProfiles = ui.profiles.length > 0;
+  empty.hidden = filtered.length !== 0;
+  table.closest('table').hidden = filtered.length === 0;
+  if (filtered.length === 0) table.closest('.table-card').scrollLeft = 0;
+  $('#profile-empty-title').textContent = t(hasProfiles ? 'profiles.noResults' : 'profiles.empty');
+  $('#profile-empty-description').textContent = t(hasProfiles ? 'profiles.filterHint' : 'profiles.emptyHint');
+  $('#profile-clear-filters').hidden = !hasProfiles;
+  $('#profile-empty-create').hidden = hasProfiles;
   $('#profile-total').textContent = String(filtered.length);
   const totalLabel = document.querySelector('#profile-pagination .profile-total');
   if (totalLabel) {
@@ -3782,7 +3781,23 @@ document.addEventListener('change', async (event) => {
 $('#select-all-profiles').addEventListener('change', (event) => { for (const id of visibleProfilePageIds()) selectedProfiles[event.target.checked ? 'add' : 'delete'](id); scheduleRenderProfiles(); });
 $('#select-all-sessions').addEventListener('change', (event) => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const visible = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); for (const item of visible) event.target.checked ? selectedSessions.add(item.id) : selectedSessions.delete(item.id); if (!selectedSessions.has(preferredMasterId)) preferredMasterId = [...selectedSessions][0] || null; pushSyncSelection(); renderSessions(); });
 $('#sync-group').addEventListener('change', () => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const values = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); selectedSessions = new Set(values.map((item) => item.id)); preferredMasterId = values[0]?.id || null; pushSyncSelection(); renderSessions(); });
-$('#profile-search').addEventListener('input', () => { profilePage = 1; scheduleRenderProfiles(); }); $('#extension-search').addEventListener('input', scheduleRenderExtensions);
+$('#profile-search').addEventListener('input', () => { profilePage = 1; scheduleRenderProfiles(); });
+$('#profile-search').addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !event.target.value) return;
+  event.preventDefault();
+  event.target.value = '';
+  profilePage = 1;
+  scheduleRenderProfiles();
+});
+$('#profile-clear-filters').addEventListener('click', () => {
+  $('#profile-search').value = '';
+  activeGroupFilter = 'all';
+  profilePage = 1;
+  renderProfiles();
+  $('#profile-search').focus();
+});
+$('#profile-empty-create').addEventListener('click', () => $('#create-profile').click());
+$('#extension-search').addEventListener('input', scheduleRenderExtensions);
 $('#profile-page-size').addEventListener('change', (event) => { const value = Number(event.target.value); profilePageSize = PROFILE_PAGE_SIZES.includes(value) ? value : 10; profilePage = 1; try { localStorage.setItem(PROFILE_PAGE_SIZE_KEY, String(profilePageSize)); } catch (_) {} scheduleRenderProfiles(); });
 $('#profile-prev').addEventListener('click', () => { profilePage = Math.max(1, profilePage - 1); scheduleRenderProfiles(); });
 $('#profile-next').addEventListener('click', () => { profilePage += 1; scheduleRenderProfiles(); });
@@ -4402,6 +4417,27 @@ window.ops.onEvent(async (value) => {
   }
   if (value?.type === 'app-update-status') {
     applyVersionTrafficLight(value);
+  }
+  if (value?.type === 'profiles' && value.action === 'delete' && Array.isArray(value.ids)) {
+    const deletedIds = new Set(value.ids.map(String));
+    if (deletedIds.size) {
+      ui.profiles = ui.profiles.filter((profile) => !deletedIds.has(profile.id));
+      engineProfiles = engineProfiles.filter((profile) => !deletedIds.has(profile.id));
+      for (const id of deletedIds) {
+        selectedProfiles.delete(id);
+        selectedSessions.delete(id);
+      }
+      pendingDeleteProfiles = pendingDeleteProfiles.filter((id) => !deletedIds.has(id));
+      save();
+      if (deletedIds.has(editingProfileId)) {
+        editingProfileId = null;
+        switchView('profiles');
+      }
+      $('#select-all-profiles').checked = false;
+      scheduleRenderProfiles();
+      scheduleStatusRefresh();
+      scheduleSessionRefresh();
+    }
   }
   if (value?.type === 'profile-start-progress' && value.id) {
     if (value.error || value.starting === false) {

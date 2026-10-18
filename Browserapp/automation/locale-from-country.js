@@ -1,3 +1,4 @@
+(function (root) {
 'use strict';
 
 /**
@@ -122,8 +123,12 @@ function resolveProfileLanguage(profile = {}, network = {}) {
   return profile.language || 'en-US';
 }
 
-module.exports = {
+const api = {
   COUNTRY_TO_LOCALE,
   localeFromCountryCode,
   resolveProfileLanguage,
 };
+
+if (typeof module === 'object' && module.exports) module.exports = api;
+if (root) root.OpenBrowserLocale = api;
+})(typeof globalThis !== 'undefined' ? globalThis : this);

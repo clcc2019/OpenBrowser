@@ -325,19 +325,6 @@ async function preserveCorruptEngineState(filePath) {
   }
 }
 
-async function retryProxyOperation(operation, attempts = 3) {
-  let lastError;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try { return await operation(); }
-    catch (error) {
-      lastError = error;
-      if (/authentication failed|username or password|rejected available authentication/i.test(String(error?.message || '')) || attempt >= attempts) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 350 * attempt));
-    }
-  }
-  throw lastError;
-}
-
 async function assertExtensionTreeSafe(root) {
   const resolved = path.resolve(root);
   const rootStat = await fsp.lstat(resolved);
@@ -3560,55 +3547,64 @@ class BrowserEngine {
     if (!Array.isArray(ids) || ids.length > 200) throw new Error('Invalid profile selection');
     const safeIds = [...new Set(ids.map(assertProfileId))];
     const deleted = []; let stopped = 0;
-    for (const id of safeIds) {
-      if (!this.profiles.has(id)) continue;
-      if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
-        await this.stop(id);
-        stopped += 1;
-      }
-      if (deleteData) {
-        const profileRoot = this.profileRoot(id);
-        const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, profileRoot, id);
-        if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
-        if (fs.existsSync(profileRoot)) {
-          // Windows often holds Chrome locks (EBUSY/EPERM) briefly after Browser.close / taskkill.
-          let lastError = null;
-          for (let attempt = 0; attempt < 8; attempt += 1) {
-            try {
-              await fsp.rm(profileRoot, { recursive: true, force: true });
-              lastError = null;
-              break;
-            } catch (error) {
-              lastError = error;
-              if (!error || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(error.code)) throw error;
-              await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
-            }
-          }
-          if (lastError) throw lastError;
+    const emitDeleted = () => {
+      this.emit({ type: 'profiles', action: 'delete', ids: [...deleted] });
+      this.emit({ type: 'extensions' });
+    };
+    try {
+      for (const id of safeIds) {
+        if (!this.profiles.has(id)) continue;
+        if (this.running.has(id) || this.starting.has(id) || this.stopping.has(id)) {
+          await this.stop(id);
+          stopped += 1;
         }
+        if (deleteData) {
+          const profileRoot = this.profileRoot(id);
+          const rootCheck = await validateProfileRootSecure(this.profileDataRootPath, profileRoot, id);
+          if (!rootCheck.ok) throw new Error('Isolation error: ' + rootCheck.message);
+          if (fs.existsSync(profileRoot)) {
+            // Windows often holds Chrome locks (EBUSY/EPERM) briefly after Browser.close / taskkill.
+            let lastError = null;
+            for (let attempt = 0; attempt < 8; attempt += 1) {
+              try {
+                await fsp.rm(profileRoot, { recursive: true, force: true });
+                lastError = null;
+                break;
+              } catch (error) {
+                lastError = error;
+                if (!error || !['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(error.code)) throw error;
+                await new Promise((resolve) => setTimeout(resolve, 120 * (attempt + 1)));
+              }
+            }
+            if (lastError) throw lastError;
+          }
+        }
+        // Commit in-memory deletion only after the profile directory is gone.
+        // Persist each successful item so a later batch failure cannot leave the
+        // durable profile list disagreeing with already-deleted directories.
+        const previousProfile = this.profiles.get(id);
+        const previousAssignments = this.assignments.get(id);
+        const previousNetwork = this.networkInfo.get(id);
+        const hadAssignments = this.assignments.has(id);
+        const hadNetwork = this.networkInfo.has(id);
+        this.profiles.delete(id);
+        this.assignments.delete(id);
+        this.networkInfo.delete(id);
+        try {
+          await this.persist();
+        } catch (error) {
+          if (previousProfile) this.profiles.set(id, previousProfile);
+          if (hadAssignments) this.assignments.set(id, previousAssignments);
+          if (hadNetwork) this.networkInfo.set(id, previousNetwork);
+          throw error;
+        }
+        deleted.push(id);
       }
-      // Commit in-memory deletion only after the profile directory is gone.
-      // Persist each successful item so a later batch failure cannot leave the
-      // durable profile list disagreeing with already-deleted directories.
-      const previousProfile = this.profiles.get(id);
-      const previousAssignments = this.assignments.get(id);
-      const previousNetwork = this.networkInfo.get(id);
-      const hadAssignments = this.assignments.has(id);
-      const hadNetwork = this.networkInfo.has(id);
-      this.profiles.delete(id);
-      this.assignments.delete(id);
-      this.networkInfo.delete(id);
-      try {
-        await this.persist();
-      } catch (error) {
-        if (previousProfile) this.profiles.set(id, previousProfile);
-        if (hadAssignments) this.assignments.set(id, previousAssignments);
-        if (hadNetwork) this.networkInfo.set(id, previousNetwork);
-        throw error;
-      }
-      deleted.push(id);
+    } catch (error) {
+      if (deleted.length) emitDeleted();
+      throw error;
     }
-    this.emit({ type: 'profiles', action: 'delete', ids: deleted }); this.emit({ type: 'extensions' });
+    emitDeleted();
     return { success: true, deleted: deleted.length, stopped, dataDeleted: Boolean(deleteData), ids: deleted };
   }
 
@@ -3709,6 +3705,31 @@ class BrowserEngine {
   }
 
   async testProxy(raw, options = {}) {
+    this._proxyTests ||= new Map();
+    const profile = this.sanitizeProfile(raw);
+    const forcedRaw = String(options.proxy || options.forcedProxy || '').trim();
+    const key = JSON.stringify([
+      profile.id,
+      profile.proxy,
+      profile.proxyMeta,
+      forcedRaw,
+      options.proxySource || '',
+      options.allowExtract !== false,
+      options.totalTimeoutMs || 6500,
+      options.attemptTimeoutMs || 2200,
+    ]);
+    const active = this._proxyTests.get(key);
+    if (active) return active;
+    const task = this._performProxyTest(profile, options);
+    this._proxyTests.set(key, task);
+    try {
+      return await task;
+    } finally {
+      if (this._proxyTests.get(key) === task) this._proxyTests.delete(key);
+    }
+  }
+
+  async _performProxyTest(raw, options = {}) {
     const profile = this.sanitizeProfile(raw);
     const forcedRaw = String(options.proxy || options.forcedProxy || '').trim();
     let resolved;
@@ -3720,9 +3741,11 @@ class BrowserEngine {
       resolved = await this.resolveProfileProxyConfig(profile, { allowExtract: options.allowExtract !== false });
     }
     try {
-      const result = await retryProxyOperation(() => lookupProxyCountry(resolved.config, {
+      const result = await lookupProxyCountry(resolved.config, {
         ipChannel: profile.proxyMeta?.ipChannel,
-      }));
+        totalTimeoutMs: options.totalTimeoutMs || 6500,
+        attemptTimeoutMs: options.attemptTimeoutMs || 2200,
+      });
       return {
         ...result,
         protocol: resolved.config.protocol,

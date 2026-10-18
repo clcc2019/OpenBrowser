@@ -122,6 +122,26 @@ const MACOS_INTEL_PERSONAS = [
       gpu: { vendor: 'intel', architecture: 'gen-9' },
     },
   },
+  {
+    // MacBook Pro 16" (2019): Intel CPU with Radeon Pro 5500M discrete GPU.
+    os: 'macos', cores: 8, memory: 8, colorDepth: 30, devicePixelRatio: 2,
+    screen: { width: 1728, height: 1117 },
+    webgl: {
+      vendor: 'Google Inc. (AMD)',
+      renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5500M, Unspecified Version)',
+      gpu: { vendor: 'amd', architecture: 'rdna-1' },
+    },
+  },
+  {
+    // iMac Pro (2017): Intel Xeon with Radeon Pro Vega 56.
+    os: 'macos', cores: 10, memory: 8, colorDepth: 30, devicePixelRatio: 2,
+    screen: { width: 2560, height: 1440 },
+    webgl: {
+      vendor: 'Google Inc. (AMD)',
+      renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro Vega 56, Unspecified Version)',
+      gpu: { vendor: 'amd', architecture: 'vega' },
+    },
+  },
 ];
 
 /** Legacy merged pool kept for callers that only need the full macOS set. */

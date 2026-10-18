@@ -1619,6 +1619,19 @@ app.whenReady().then(async () => {
     console.error('OpenBrowser start page server failed:', error.message);
   }
   engine.on((value) => {
+    if (value?.type === 'profiles' && value.action === 'delete' && Array.isArray(value.ids)) {
+      const deletedIds = new Set(value.ids.map(String));
+      const syncAffected = deletedIds.has(syncState.master)
+        || [...(syncState.selected || []), ...syncSelection].some((id) => deletedIds.has(id));
+      syncSelection = syncSelection.filter((id) => !deletedIds.has(id));
+      syncState = {
+        ...syncState,
+        master: syncAffected ? null : syncState.master,
+        selected: (syncState.selected || []).filter((id) => !deletedIds.has(id)),
+      };
+      if (syncAffected && syncState.active) endSync();
+      else if (syncAffected) emit({ type: 'sync-state', ...syncSnapshot() });
+    }
     emit(value);
     // Hub/ix style: when an opted-in profile closes, auto-push that env to cloud
     if (value?.type === 'profile-closed' && value.cloudBackup && value.profile?.id) {
@@ -1810,12 +1823,11 @@ app.whenReady().then(async () => {
     return { success: true, mode, ...applied };
   });
   registerTrustedIpc('profiles:sync', (_event, profiles) => engine.syncProfiles(profiles));
-  registerTrustedIpc('profiles:delete', async (_event, payload) => {
+  registerTrustedIpc('profiles:delete', (_event, payload) => {
     const ids = sanitizeIds(payload?.ids || []);
+    // Stop mirroring before a selected browser is stopped; the profile delete
+    // event prunes the selection only after deletion has actually committed.
     if (syncState.active && syncState.selected.some((id) => ids.includes(id))) endSync();
-    syncSelection = syncSelection.filter((id) => !ids.includes(id));
-    syncState = { ...syncState, selected: syncState.selected.filter((id) => !ids.includes(id)) };
-    emit({ type: 'sync-state', ...syncSnapshot() });
     return engine.deleteProfiles(ids, payload?.deleteData !== false);
   });
   registerTrustedIpc('profiles:start', (_event, profile) => engine.start(profile));

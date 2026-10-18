@@ -433,13 +433,47 @@ class BufferedReader {
 
 function connectSocket(host, port, timeout = 8000, signal = null) {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) return reject(new Error('Proxy bridge closed'));
+    if (signal?.aborted) return reject(signal.reason instanceof Error ? signal.reason : new Error('Proxy bridge closed'));
     const socket = net.connect({ host, port });
-    const onError = (error) => { socket.off('connect', onConnect); reject(error); };
-    const onConnect = () => { socket.off('error', onError); socket.setTimeout(0); socket.setKeepAlive(true, 10000); resolve(socket); };
+    let connected = false;
+    let settled = false;
+    const removeAbortListener = () => signal?.removeEventListener('abort', onAbort);
+    const cleanupBeforeConnect = () => {
+      socket.off('connect', onConnect);
+      socket.off('error', onError);
+      socket.off('close', onClose);
+      removeAbortListener();
+    };
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanupBeforeConnect();
+      socket.destroy();
+      reject(error);
+    };
+    const onError = (error) => fail(error);
+    const onClose = () => {
+      removeAbortListener();
+      if (!connected) fail(new Error('Proxy connection closed before connect'));
+    };
+    const onConnect = () => {
+      if (settled) return socket.destroy();
+      connected = true;
+      settled = true;
+      socket.off('error', onError);
+      socket.setTimeout(0);
+      socket.setKeepAlive(true, 10000);
+      resolve(socket);
+    };
+    const onAbort = () => {
+      const error = signal.reason instanceof Error ? signal.reason : new Error('Proxy bridge closed');
+      if (connected) socket.destroy(error);
+      else fail(error);
+    };
     socket.setTimeout(timeout, () => socket.destroy(new Error('Proxy connection timed out')));
-    signal?.addEventListener('abort', () => socket.destroy(new Error('Proxy bridge closed')), { once: true });
-    socket.once('error', onError); socket.once('connect', onConnect);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    socket.once('error', onError); socket.once('connect', onConnect); socket.once('close', onClose);
+    if (signal?.aborted) onAbort();
   });
 }
 
@@ -724,13 +758,31 @@ function bridgeResult(server, sockets, protocol, onClose = () => {}) {
 
 async function startAuthenticatedProxy(config, onStatus = () => {}) {
   if (!config) throw new Error('Proxy configuration is required');
-  if (config.protocol === 'socks5') return startHttpToSocks5Bridge(config, onStatus);
-  if (['http', 'https'].includes(config.protocol)) return startHttpBridge(config, onStatus);
-  throw new Error('SOCKS4 bridge is not supported');
+  const signal = config.probeSignal;
+  if (signal?.aborted) throw new Error('Proxy probe cancelled');
+  let bridge;
+  if (config.protocol === 'socks5') bridge = await startHttpToSocks5Bridge(config, onStatus);
+  else if (['http', 'https'].includes(config.protocol)) bridge = await startHttpBridge(config, onStatus);
+  else throw new Error('SOCKS4 bridge is not supported');
+  if (!signal) return bridge;
+
+  const close = bridge.close;
+  let closing;
+  const abort = () => { bridge.close().catch(() => {}); };
+  bridge.close = () => {
+    signal.removeEventListener('abort', abort);
+    return closing ||= Promise.resolve(close.call(bridge));
+  };
+  signal.addEventListener('abort', abort, { once: true });
+  if (signal.aborted) {
+    await bridge.close();
+    throw new Error('Proxy probe cancelled');
+  }
+  return bridge;
 }
 
-async function connectBridge(bridge, hostname, port) {
-  const socket = await connectSocket('127.0.0.1', bridge.port); const reader = new BufferedReader(socket);
+async function connectBridge(bridge, hostname, port, signal = null) {
+  const socket = await connectSocket('127.0.0.1', bridge.port, 8000, signal); const reader = new BufferedReader(socket);
   if (bridge.protocol === 'http') {
     socket.write('CONNECT ' + hostname + ':' + port + ' HTTP/1.1\r\nHost: ' + hostname + ':' + port + '\r\nConnection: close\r\n\r\n');
     const header = await reader.readUntil('\r\n\r\n'); const status = Number(header.toString('latin1').split('\r\n', 1)[0].match(/\s(\d{3})(?:\s|$)/)?.[1] || 0);
@@ -755,16 +807,39 @@ function decodeChunked(buffer) {
 }
 
 async function requestProxyHttp(config, hostname, pathname) {
+  const signal = config.probeSignal;
   const bridge = await startAuthenticatedProxy(config); let socket;
   try {
-    socket = bridge.protocol === 'http' ? await connectSocket('127.0.0.1', bridge.port) : await connectBridge(bridge, hostname, 80);
+    socket = bridge.protocol === 'http'
+      ? await connectSocket('127.0.0.1', bridge.port, 8000, signal)
+      : await connectBridge(bridge, hostname, 80, signal);
     const target = bridge.protocol === 'http' ? 'http://' + hostname + pathname : pathname;
     socket.write('GET ' + target + ' HTTP/1.1\r\nHost: ' + hostname + '\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nUser-Agent: OpenBrowser/2.0\r\n\r\n');
     const chunks = await new Promise((resolve, reject) => {
-      const values = []; const timer = setTimeout(() => { socket.destroy(); reject(new Error('Proxy exit lookup timed out')); }, 15000);
+      const values = [];
+      let settled = false;
+      const timer = setTimeout(() => { socket.destroy(); finish(new Error('Proxy exit lookup timed out')); }, 15000);
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const onAbort = () => {
+        socket.destroy();
+        finish(signal?.reason instanceof Error ? signal.reason : new Error('Proxy probe cancelled'));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
       socket.on('data', (chunk) => values.push(chunk));
-      socket.once('end', () => { clearTimeout(timer); resolve(values); });
-      socket.once('error', (error) => { clearTimeout(timer); reject(error); });
+      socket.once('end', () => finish(null, values));
+      socket.once('error', (error) => finish(error));
+      socket.once('close', () => finish(new Error('Proxy probe connection closed')));
     });
     const response = Buffer.concat(chunks); const marker = response.indexOf('\r\n\r\n');
     if (marker < 0) throw new Error('Invalid proxy exit lookup response');
@@ -778,20 +853,39 @@ async function requestProxyHttp(config, hostname, pathname) {
 }
 
 async function requestProxyHttps(config, hostname, pathname) {
+  const signal = config.probeSignal;
   const bridge = await startAuthenticatedProxy(config); let socket; let secure;
   try {
-    socket = await connectBridge(bridge, hostname, 443);
+    socket = await connectBridge(bridge, hostname, 443, signal);
     secure = tls.connect({ socket, servername: hostname, rejectUnauthorized: true });
     const response = await new Promise((resolve, reject) => {
       const chunks = [];
-      const timer = setTimeout(() => { secure.destroy(); reject(new Error('HTTPS proxy request timed out')); }, 15000);
-      const cleanup = () => clearTimeout(timer);
+      let settled = false;
+      const timer = setTimeout(() => { secure.destroy(); finish(new Error('HTTPS proxy request timed out')); }, 15000);
+      const cleanup = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (error) reject(error);
+        else resolve(value);
+      };
+      const onAbort = () => {
+        secure.destroy();
+        finish(signal?.reason instanceof Error ? signal.reason : new Error('Proxy probe cancelled'));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
       secure.once('secureConnect', () => {
         secure.write('GET ' + pathname + ' HTTP/1.1\r\nHost: ' + hostname + '\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nUser-Agent: OpenBrowser/2.0\r\n\r\n');
       });
       secure.on('data', (chunk) => chunks.push(chunk));
-      secure.once('end', () => { cleanup(); resolve(Buffer.concat(chunks)); });
-      secure.once('error', (error) => { cleanup(); reject(error); });
+      secure.once('end', () => finish(null, Buffer.concat(chunks)));
+      secure.once('error', (error) => finish(error));
+      secure.once('close', () => finish(new Error('Proxy probe connection closed')));
     });
     const marker = response.indexOf('\r\n\r\n');
     if (marker < 0) throw new Error('Invalid HTTPS proxy response');
@@ -1094,6 +1188,46 @@ async function raceSettledValues(tasks, { minWaitMs = 0, maxWaitMs = 10000 } = {
   return results;
 }
 
+async function runProxyProbes(tasks, { totalTimeoutMs = 6500, attemptTimeoutMs = 2200, concurrency = 3 } = {}) {
+  const deadline = Date.now() + Math.max(1, Number(totalTimeoutMs) || 6500);
+  const attemptLimit = Math.max(1, Number(attemptTimeoutMs) || 2200);
+  const batchSize = Math.max(1, Math.min(tasks.length || 1, Number(concurrency) || 3));
+  const values = [];
+  const errors = [];
+
+  for (let offset = 0; offset < tasks.length; offset += batchSize) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    const timeoutMs = Math.min(remaining, attemptLimit);
+    const batch = tasks.slice(offset, offset + batchSize);
+    await Promise.all(batch.map(async (task) => {
+      const controller = new AbortController();
+      let timer;
+      try {
+        const value = await Promise.race([
+          Promise.resolve().then(() => task(controller.signal)),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              const error = Object.assign(new Error('Proxy probe timed out'), { code: 'PROXY_PROBE_TIMEOUT' });
+              controller.abort(error);
+              reject(error);
+            }, timeoutMs);
+          }),
+        ]);
+        if (value) values.push(value);
+      } catch (error) {
+        errors.push(error);
+      } finally {
+        clearTimeout(timer);
+        controller.abort();
+      }
+    }));
+  }
+
+  values.errors = errors;
+  return values;
+}
+
 function classifyProxyError(error) {
   const msg = String(error && error.message ? error.message : error || '');
   if (/authentication failed|username or password|407|rejected available authentication/i.test(msg)) return 'auth';
@@ -1314,26 +1448,47 @@ async function lookupProxyCountry(config, options = {}) {
   const ipChannel = normalizeIpLookupChannel(options.ipChannel || options.channel);
   try {
     const fallbackLookups = [
-      () => lookupProxyIpApi(config),
-      () => lookupProxyIpWho(config),
-      () => lookupProxyIpInfo(config),
-      () => lookupProxyCloudflareTrace(config),
+      (probeConfig) => lookupProxyIpApi(probeConfig),
+      (probeConfig) => lookupProxyIpWho(probeConfig),
+      (probeConfig) => lookupProxyIpInfo(probeConfig),
+      (probeConfig) => lookupProxyCloudflareTrace(probeConfig),
     ];
     // ifconfig.me is IP-only; keep the existing geo providers in the same
     // request cycle so selecting it does not leave locale/timezone blank.
     const lookups = ipChannel === 'ifconfig-me'
-      ? [() => lookupProxyIfconfigMe(config), ...fallbackLookups]
-      : [...fallbackLookups, () => lookupProxyIfconfigMe(config)];
-    const parts = await raceSettledValues(lookups, { maxWaitMs: 12000 });
-    if (!parts.length) throw new Error('Proxy exit lookup failed on all sources');
+      ? [(probeConfig) => lookupProxyIfconfigMe(probeConfig), ...fallbackLookups]
+      : [...fallbackLookups, (probeConfig) => lookupProxyIfconfigMe(probeConfig)];
+    const tasks = lookups.map((lookup) => async (signal) => ({
+      kind: 'geo',
+      value: await lookup({ ...config, probeSignal: signal }),
+    }));
+    // Keep the project's existing risk enrichment while charging it to the
+    // same bounded probe budget as the geo providers.
+    tasks.push(async (signal) => ({
+      kind: 'risk',
+      value: await lookupIpPureProxy({ ...config, probeSignal: signal }),
+    }));
+    const probeResults = await runProxyProbes(tasks, {
+      totalTimeoutMs: options.totalTimeoutMs || 6500,
+      attemptTimeoutMs: options.attemptTimeoutMs || 2200,
+      concurrency: 3,
+    });
+    const parts = probeResults.filter((item) => item.kind === 'geo').map((item) => item.value);
+    const risk = probeResults.find((item) => item.kind === 'risk')?.value;
+    if (!parts.length) {
+      const probeError = (probeResults.errors || []).find((error) => classifyProxyError(error) !== 'unknown')
+        || probeResults.errors?.[0]
+        || new Error('Proxy exit lookup failed on all sources');
+      throw probeError;
+    }
     const result = mergeNetworkLookups(parts);
     const latencyMs = Date.now() - started;
-    return enrichWithIpPure({
+    return attachIpPure({
       ...result,
       ipChannel,
       latencyMs,
       networkType: networkTypeFromLookup(result),
-    }, () => lookupIpPureProxy(config));
+    }, risk);
   } catch (error) {
     const err = new Error(error.message || String(error));
     err.errorClass = classifyProxyError(error);

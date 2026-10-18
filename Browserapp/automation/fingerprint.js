@@ -69,13 +69,19 @@ const WEBGL_PRESETS = {
   ],
   // Keep Intel and Apple Silicon pools separate: the UA-CH architecture must agree with
   // the GPU family exposed by WebGL.
+  // Current Chrome on macOS uses ANGLE Metal. Keep the GPU family consistent with the selected
+  // CPU architecture; Intel Macs may also use their AMD discrete GPU.
   macos_intel: [
-    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 640, OpenGL 4.1)', gpu: { vendor: 'intel', architecture: 'gen9' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 655, Unspecified Version)', gpu: { vendor: 'intel', architecture: 'gen-9' } },
+    { vendor: 'Google Inc. (Intel)', renderer: 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 640, Unspecified Version)', gpu: { vendor: 'intel', architecture: 'gen-9' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5500M, Unspecified Version)', gpu: { vendor: 'amd', architecture: 'rdna-1' } },
+    { vendor: 'Google Inc. (AMD)', renderer: 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro Vega 56, Unspecified Version)', gpu: { vendor: 'amd', architecture: 'vega' } },
   ],
   macos_apple: [
-    { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M1, OpenGL 4.1)', gpu: { vendor: 'apple', architecture: 'common-3' } },
-    { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, Apple M2, OpenGL 4.1)', gpu: { vendor: 'apple', architecture: 'common-3' } },
+    { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
+    { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
     { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
+    { vendor: 'Google Inc. (Apple)', renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3 Pro, Unspecified Version)', gpu: { vendor: 'apple', architecture: 'common-3' } },
   ],
   // Legacy merged view for consumers that do not select an architecture explicitly.
   get macos() { return [...this.macos_intel, ...this.macos_apple]; },
@@ -1839,7 +1845,11 @@ function buildInjectionScript(fp) {
   if (CFG.clientRects && CFG.clientRects.mode === 'noise') {
     try {
       const mark = Number(CFG.clientRects.mark) || 1;
-      const noisePx = ((mark % 7) - 3) * 0.0001;
+      // More buckets reduce collisions between distinct profiles while keeping the perturbation
+      // far below one CSS pixel. Apply a separate tiny size delta as well as position noise.
+      const absMark = Math.abs(Math.trunc(mark)) || 1;
+      const noisePx = ((absMark % 97) - 48) * 0.00001;
+      const noiseSize = ((absMark % 89) - 44) * 0.00001;
       const patch = (proto, method) => {
         if (!proto || !proto[method]) return;
         replaceMethod(proto, method, (original) => function() {
@@ -1847,7 +1857,9 @@ function buildInjectionScript(fp) {
           if (!rect) return rect;
           try {
             const x = rect.x + noisePx, y = rect.y + noisePx;
-            return DOMRect.fromRect ? DOMRect.fromRect({ x, y, width: rect.width, height: rect.height }) : rect;
+            const width = rect.width === 0 ? 0 : Math.max(0, rect.width + noiseSize);
+            const height = rect.height === 0 ? 0 : Math.max(0, rect.height + noiseSize);
+            return DOMRect.fromRect ? DOMRect.fromRect({ x, y, width, height }) : rect;
           } catch (_) { return rect; }
         });
       };
@@ -1856,9 +1868,17 @@ function buildInjectionScript(fp) {
         replaceMethod(proto, method, (original) => function() {
           const list = original.apply(this, arguments);
           try {
-            const rects = Array.from(list, (rect) => DOMRect.fromRect
-              ? DOMRect.fromRect({ x: rect.x + noisePx, y: rect.y + noisePx, width: rect.width, height: rect.height })
-              : rect);
+            const rects = Array.from(list, (rect) => {
+              if (!DOMRect.fromRect) return rect;
+              const width = rect.width === 0 ? 0 : Math.max(0, rect.width + noiseSize);
+              const height = rect.height === 0 ? 0 : Math.max(0, rect.height + noiseSize);
+              return DOMRect.fromRect({
+                x: rect.x + noisePx,
+                y: rect.y + noisePx,
+                width,
+                height,
+              });
+            });
             rects.item = (index) => rects[index] || null;
             return rects;
           } catch (_) { return list; }
