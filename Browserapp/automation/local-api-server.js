@@ -427,6 +427,8 @@ class LocalApiServer {
     this.proxyStore = options.proxyStore;
     this.getVersion = options.getVersion || (() => '1.0.0');
     this.server = null;
+    this.connections = new Set();
+    this.stopping = false;
     this.startedAt = null;
   }
 
@@ -476,11 +478,19 @@ class LocalApiServer {
 
   async start() {
     if (this.server) return this.info();
-    this.server = http.createServer((req, res) => this.handle(req, res));
+    this.stopping = false;
+    const server = http.createServer((req, res) => this.handle(req, res));
+    const connections = new Set();
+    this.server = server;
+    this.connections = connections;
+    server.on('connection', (socket) => {
+      connections.add(socket);
+      socket.once('close', () => connections.delete(socket));
+    });
     await new Promise((resolve, reject) => {
-      this.server.once('error', reject);
-      this.server.listen(this.requestedPort, this.host, () => {
-        const address = this.server.address();
+      server.once('error', reject);
+      server.listen(this.requestedPort, this.host, () => {
+        const address = server.address();
         if (address && typeof address === 'object' && Number.isFinite(address.port)) this.port = address.port;
         this.startedAt = Date.now();
         resolve();
@@ -491,9 +501,42 @@ class LocalApiServer {
 
   async stop() {
     if (!this.server) return;
+    this.stopping = true;
     const server = this.server;
+    const connections = this.connections;
     this.server = null;
-    await new Promise((resolve) => server.close(() => resolve()));
+    this.connections = new Set();
+    await new Promise((resolve) => {
+      let settled = false;
+      let timer = null;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        resolve();
+      };
+      const forceClose = () => {
+        for (const socket of connections) {
+          try { socket.destroy(); } catch (_) {}
+        }
+        try { server.closeAllConnections?.(); } catch (_) {}
+      };
+
+      timer = setTimeout(() => {
+        console.warn('OpenBrowser local API shutdown timed out; closing remaining connections.');
+        forceClose();
+        finish();
+      }, 1500);
+
+      try {
+        server.close(finish);
+        server.closeIdleConnections?.();
+      } catch (error) {
+        console.warn('OpenBrowser local API shutdown failed:', error?.message || error);
+        forceClose();
+        finish();
+      }
+    });
   }
 
   info() {
@@ -507,6 +550,7 @@ class LocalApiServer {
   }
 
   async handle(req, res) {
+    if (this.stopping) return sendJson(res, 503, fail('server is shutting down', 503));
     let origin = '';
     try {
       origin = this.allowedOrigin(req);

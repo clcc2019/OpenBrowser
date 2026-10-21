@@ -74,16 +74,88 @@ function resolveHostBinary() {
   throw new Error('缺少当前平台的应用运行环境。请在 Browserapp 目录执行 npm install --force --include=dev。');
 }
 
+function findExecutable(name) {
+  for (const directory of (process.env.PATH || '').split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, name);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch (_) { /* keep looking */ }
+  }
+  return null;
+}
+
 const hostBin = resolveHostBinary();
+let launchBin = hostBin;
+let launchArgs = [appRoot];
+
+if (process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+  const xvfbRun = findExecutable('xvfb-run');
+  const xvfb = findExecutable('Xvfb');
+  if (!xvfbRun || !xvfb) {
+    console.error([
+      '[run] no graphical session found (DISPLAY and WAYLAND_DISPLAY are unset),',
+      '      and Xvfb is unavailable.',
+      '      Start from an X11/Wayland desktop session, or install xvfb and xauth.',
+    ].join('\n'));
+    process.exit(1);
+  }
+  launchBin = xvfbRun;
+  launchArgs = ['-a', hostBin, appRoot];
+  console.log('[run] no graphical session found; using a virtual X display');
+}
+
 console.log('[run] starting', hostBin);
 
-const child = spawn(hostBin, [appRoot], {
+const child = spawn(launchBin, launchArgs, {
   stdio: 'inherit',
   env: process.env,
   cwd: appRoot,
 });
 
-child.on('exit', (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  process.exit(code == null ? 1 : code);
+let childClosed = false;
+let childSpawnFailed = false;
+let receivedSignal = null;
+let forwardedSignal = null;
+
+function forwardSignal(signal) {
+  if (childClosed) return;
+  if (!receivedSignal) receivedSignal = signal;
+  if (!child.pid || forwardedSignal) return;
+  forwardedSignal = signal;
+  try {
+    child.kill(signal);
+  } catch (error) {
+    if (error?.code !== 'ESRCH') {
+      try { child.kill(signal); } catch (_) {}
+    }
+  }
+}
+
+const forwardedSignals = process.platform === 'win32'
+  ? ['SIGINT', 'SIGTERM']
+  : ['SIGINT', 'SIGTERM', 'SIGHUP'];
+for (const signal of forwardedSignals) process.on(signal, () => forwardSignal(signal));
+
+child.once('spawn', () => {
+  if (receivedSignal) forwardSignal(receivedSignal);
+});
+
+child.on('error', (error) => {
+  childSpawnFailed = true;
+  console.error('[run] failed to start application:', error.message);
+});
+
+child.on('close', (code, signal) => {
+  childClosed = true;
+  if (receivedSignal) {
+    const signalNumber = os.constants.signals?.[receivedSignal];
+    process.exitCode = signalNumber ? 128 + signalNumber : 1;
+  } else if (signal) {
+    const signalNumber = os.constants.signals?.[signal];
+    process.exitCode = signalNumber ? 128 + signalNumber : 1;
+  } else {
+    process.exitCode = childSpawnFailed ? 1 : (code == null ? 1 : code);
+  }
 });

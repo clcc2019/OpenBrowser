@@ -44,9 +44,14 @@ app.setPath('userData', userDataRoot);
 // environments are kernel processes spawned per profile and are not affected.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
-  app.quit();
+  console.log('[OpenBrowser] another instance is already running; forwarding this launch to it.');
+  // This process has not started any application services. Exit before the
+  // ready handler can start an API server or browser engine of its own.
+  app.exit(0);
 } else {
-  app.on('second-instance', () => showMainWindow());
+  app.on('second-instance', () => {
+    if (!quitting) showMainWindow();
+  });
 }
 
 const defaultProfileDataRoot = path.join(app.getPath('userData'), 'browser-profiles-v2');
@@ -810,10 +815,23 @@ let liveSync;
 let automation = null;
 let quitting = false;
 let quitCleanupPromise = null;
+let startupPromise = null;
+let startupStarted = false;
 let syncSelection = [];
 let syncState = { active: false, master: null, selected: [] };
 const windows = new Set();
 let mainWindow = null;
+
+if (gotSingleInstanceLock) {
+  const signals = process.platform === 'win32' ? ['SIGINT', 'SIGTERM'] : ['SIGINT', 'SIGTERM', 'SIGHUP'];
+  for (const signal of signals) {
+    process.on(signal, () => {
+      if (quitting) return;
+      console.log(`[OpenBrowser] received ${signal}; starting graceful shutdown.`);
+      app.quit();
+    });
+  }
+}
 
 function trustedAppIndexUrl() {
   // Canonical UI document: only this exact file:// path may call registerTrustedIpc.
@@ -1206,9 +1224,28 @@ function startShortcutBridge() {
 function stopShortcutBridge() {
   const child = shortcutBridge;
   shortcutBridge = null;
-  if (child && !child.killed) { try { child.kill(); } catch (_) {} }
   globalShortcut.unregisterAll();
   shortcutFallbackRegistered = false;
+  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    child.once('close', finish);
+    child.once('error', finish);
+    try { child.kill(); } catch (_) { finish(); }
+    timer = setTimeout(() => {
+      if (child.exitCode == null && child.signalCode == null) {
+        try { child.kill('SIGKILL'); } catch (_) {}
+      }
+      finish();
+    }, 1000);
+  });
 }
 async function fetchStorePackage(url, proxyValue = null) {
   const initial = new URL(url);
@@ -1569,7 +1606,9 @@ async function createWindow() {
   win.focus();
 }
 
-app.whenReady().then(async () => {
+startupPromise = app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock || quitting) return;
+  startupStarted = true;
   try { app.setName('OpenBrowser'); } catch (_) { /* ignore */ }
   try { process.title = 'OpenBrowser'; } catch (_) { /* ignore */ }
   if (process.platform === 'darwin' && app.dock) {
@@ -1603,14 +1642,17 @@ app.whenReady().then(async () => {
     callback({ cancel: !allowed });
   });
   const localSettings = await loadLocalSettings();
+  if (quitting) return;
   const initialRootCheck = await ensureDataRootIsolationSecure(localSettings.profileDataRoot);
   if (!initialRootCheck.ok) throw new Error(initialRootCheck.message);
+  if (quitting) return;
   engine = new BrowserEngine(app, {
     profileDataRoot: localSettings.profileDataRoot,
     getWorkArea: pickWorkArea,
   });
   liveSync = new LiveSyncController(engine, handleLiveSyncEvent);
   await engine.init(path.join(__dirname, 'bundled-extension'));
+  if (quitting) return;
   try {
     const startPage = await engine.ensureStartPage();
     startPage.setEngine?.(engine);
@@ -1618,6 +1660,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.error('OpenBrowser start page server failed:', error.message);
   }
+  if (quitting) return;
   engine.on((value) => {
     if (value?.type === 'profiles' && value.action === 'delete' && Array.isArray(value.ids)) {
       const deletedIds = new Set(value.ids.map(String));
@@ -1654,7 +1697,7 @@ app.whenReady().then(async () => {
   registerTextShortcuts();
 
   try {
-    automation = await startAutomation({
+    const startedAutomation = await startAutomation({
       app,
       engine,
       liveSync,
@@ -1672,10 +1715,16 @@ app.whenReady().then(async () => {
       port: Number(process.env.OPENBROWSER_API_PORT || 50325),
       apiKey: process.env.OPENBROWSER_API_KEY || undefined,
     });
+    if (quitting) {
+      await withShutdownTimeout(() => startedAutomation?.stop?.(), 8000, 'late automation startup cleanup');
+      return;
+    }
+    automation = startedAutomation;
   } catch (error) {
     emit({ type: 'local-api-error', message: error.message });
     console.error('Local API failed to start:', error.message);
   }
+  if (quitting) return;
 
   registerTrustedIpc('system:info', () => ({
     appVersion: app.getVersion(),
@@ -2233,51 +2282,125 @@ app.whenReady().then(async () => {
   }));
 
   await createWindow();
+  if (quitting) return;
   startAppUpdateWatcher();
+}).catch((error) => {
+  console.error('OpenBrowser startup failed:', error?.stack || error?.message || error);
+  if (!quitting) app.quit();
 });
 
-async function stopAllForQuit() {
-  if (!engine) return { stopped: true, remaining: [], errors: [] };
-  const lifecycleIds = () => [...new Set([
+const QUIT_TIMEOUT_MS = Object.freeze({
+  startup: 30000,
+  automationIngress: 3000,
+  browserDrain: 55000,
+  stopAll: 30000,
+  stopRetry: 5000,
+  stopRetryDrain: 5000,
+  persistence: 5000,
+  sync: 2000,
+  automation: 8000,
+  cloudBackup: 30000,
+  cloudStatus: 2000,
+  shortcutBridge: 2000,
+});
+
+function withShutdownTimeout(task, timeoutMs, label) {
+  let timer = null;
+  const work = Promise.resolve().then(() => (typeof task === 'function' ? task() : task));
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`Shutdown step "${label}" timed out after ${timeoutMs} ms`);
+      error.code = 'SHUTDOWN_TIMEOUT';
+      reject(error);
+    }, timeoutMs);
+  });
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+async function runShutdownStep(label, task, timeoutMs) {
+  const startedAt = Date.now();
+  console.log(`[OpenBrowser] shutdown: ${label} started`);
+  try {
+    const value = await withShutdownTimeout(task, timeoutMs, label);
+    console.log(`[OpenBrowser] shutdown: ${label} completed in ${Date.now() - startedAt} ms`);
+    return { ok: true, value };
+  } catch (error) {
+    console.warn(`[OpenBrowser] shutdown: ${label} failed after ${Date.now() - startedAt} ms:`, error?.message || error);
+    return { ok: false, error };
+  }
+}
+
+function lifecycleIdsForQuit() {
+  if (!engine) return [];
+  return [...new Set([
     ...(engine.running?.keys?.() || []),
     ...(engine.starting?.keys?.() || []),
     ...(engine.stopping?.keys?.() || []),
   ])];
+}
+
+async function stopAllForQuit() {
+  if (!engine) return { stopped: true, remaining: [], errors: [] };
   let result = null;
   const errors = [];
-  try { result = await engine.stopAll(); } catch (error) {
-    errors.push(String(error?.message || error));
-  }
-  let remaining = Array.isArray(result?.remaining) ? result.remaining : [];
-  if (!result) remaining = lifecycleIds();
+  const initial = await runShutdownStep('browser environment drain', () => engine.stopAll(), QUIT_TIMEOUT_MS.stopAll);
+  if (initial.ok) result = initial.value;
+  else errors.push(String(initial.error?.message || initial.error));
+
+  let remaining = Array.isArray(result?.remaining) ? result.remaining : lifecycleIdsForQuit();
   if (Array.isArray(result?.errors)) errors.push(...result.errors);
   for (let attempt = 0; attempt < 2 && remaining.length; attempt += 1) {
-    await Promise.allSettled(remaining.map((id) => engine.stop(id)));
-    await sleep(150 * (attempt + 1));
-    try { result = await engine.stopAll(); } catch (error) {
-      errors.push(String(error?.message || error));
-      result = null;
+    const retries = await Promise.allSettled(remaining.map((id) => withShutdownTimeout(
+      () => engine.stop(id),
+      QUIT_TIMEOUT_MS.stopRetry,
+      `stop browser environment ${id}`,
+    )));
+    for (let index = 0; index < retries.length; index += 1) {
+      if (retries[index].status === 'rejected') {
+        errors.push(`${remaining[index]}: ${String(retries[index].reason?.message || retries[index].reason)}`);
+      }
     }
-    remaining = Array.isArray(result?.remaining) ? result.remaining : lifecycleIds();
+    await sleep(150 * (attempt + 1));
+    const retryDrain = await runShutdownStep(`browser environment drain retry ${attempt + 1}`, () => engine.stopAll(), QUIT_TIMEOUT_MS.stopRetryDrain);
+    result = retryDrain.ok ? retryDrain.value : null;
+    if (!retryDrain.ok) errors.push(String(retryDrain.error?.message || retryDrain.error));
+    remaining = Array.isArray(result?.remaining) ? result.remaining : lifecycleIdsForQuit();
     if (Array.isArray(result?.errors)) errors.push(...result.errors);
   }
   if (remaining.length) {
     console.warn('OpenBrowser quit left browser environments running, force-terminating:', remaining.join(', '));
-    for (const id of remaining) {
+    await Promise.allSettled(remaining.map(async (id) => {
       const item = engine.running?.get(id) || engine.starting?.get(id) || engine.stopping?.get(id);
       if (item?.pid) {
-        try {
-          if (process.platform === 'win32') {
-            require('child_process').execFileSync('taskkill.exe', ['/PID', String(item.pid), '/T', '/F'], { windowsHide: true, timeout: 3000 });
-          } else {
+        if (process.platform === 'win32') {
+          const rootStop = await runShutdownStep(`browser process tree ${id}`, () => new Promise((resolve) => {
+            execFile('taskkill.exe', ['/PID', String(item.pid), '/T', '/F'], { windowsHide: true, timeout: 3000 }, (error) => {
+              if (error) errors.push(`${id}: browser process tree termination failed: ${error.message}`);
+              resolve();
+            });
+          }), 3500);
+          if (!rootStop.ok) errors.push(`${id}: ${String(rootStop.error?.message || rootStop.error)}`);
+        } else {
+          try {
             process.kill(item.pid, 'SIGKILL');
-          }
-        } catch (_) {}
+          } catch (_) {}
+        }
       }
       if (item?.root) {
-        isolation.terminateProcessesUsingProfile?.(item.root, { force: true }).catch(() => {});
+        const helperDrain = await runShutdownStep(
+          `browser helper cleanup ${id}`,
+          () => isolation.drainProcessesUsingProfile?.(item.root, { attempts: 2, delayMs: 100, timeoutMs: 5000 }),
+          6500,
+        );
+        if (!helperDrain.ok) {
+          errors.push(`${id}: helper cleanup failed: ${String(helperDrain.error?.message || helperDrain.error)}`);
+        } else if (helperDrain.value?.pids?.length) {
+          errors.push(`${id}: browser helper processes remain: ${helperDrain.value.pids.join(', ')}`);
+        }
       }
-    }
+    }));
   }
   return { ...(result || {}), stopped: remaining.length === 0, remaining, errors: [...new Set(errors)] };
 }
@@ -2289,35 +2412,42 @@ function beginQuitCleanup() {
   const cloud = localSettingsCache?.cloud || {};
   let stopResult = { stopped: true, remaining: [], errors: [] };
   quitCleanupPromise = Promise.resolve()
-    .then(async () => { stopResult = await stopAllForQuit(); })
-    .then(() => engine?.flushPersistence?.())
-    .then(() => {
-      try { liveSync?.stop?.(); } catch (error) {
-        console.warn('OpenBrowser quit live-sync cleanup failed:', error?.message || error);
-      }
-    })
     .then(async () => {
-      try { await automation?.stop?.(); } catch (error) {
-        console.warn('OpenBrowser quit automation cleanup failed:', error?.message || error);
-      }
+      if (!startupStarted || !startupPromise) return;
+      const startup = await runShutdownStep('application startup', () => startupPromise, QUIT_TIMEOUT_MS.startup);
+      if (!startup.ok) console.warn('[OpenBrowser] continuing shutdown while startup is still pending.');
     })
+    .then(() => runShutdownStep('automation ingress shutdown', async () => {
+      const results = await Promise.allSettled([
+        automation?.localApi?.stop?.(),
+        automation?.rpaEngine?.stop?.(),
+      ]);
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    }, QUIT_TIMEOUT_MS.automationIngress))
+    .then(async () => {
+      const outcome = await runShutdownStep('browser environments', () => stopAllForQuit(), QUIT_TIMEOUT_MS.browserDrain);
+      if (outcome.ok) stopResult = outcome.value;
+      else stopResult = { stopped: false, remaining: lifecycleIdsForQuit(), errors: [String(outcome.error?.message || outcome.error)] };
+    })
+    .then(() => runShutdownStep('profile state flush', () => engine?.flushPersistence?.(), QUIT_TIMEOUT_MS.persistence))
+    .then(() => runShutdownStep('window sync shutdown', () => liveSync?.stop?.(), QUIT_TIMEOUT_MS.sync))
+    .then(() => runShutdownStep('native shortcut bridge shutdown', () => stopShortcutBridge(), QUIT_TIMEOUT_MS.shortcutBridge))
+    .then(() => runShutdownStep('automation services shutdown', () => automation?.stop?.(), QUIT_TIMEOUT_MS.automation))
     .then(async () => {
       // Stop browsers and flush close-time state before packaging browser data.
       // Otherwise the backup can capture stale cookies or locked SQLite/LevelDB files.
       if (stopResult.remaining.length) return;
       if (!cloud.enabled || !cloud.autoSyncOnQuit) return;
-      try {
-        await runCloudBackup({
-          profiles: [...(engine?.profiles?.values?.() || [])],
-          groups: localSettingsCache.uiGroups || [],
-          cloud,
-        });
-      } catch (error) {
-        console.warn('OpenBrowser quit auto-backup failed:', error.message);
-        try {
-          localSettingsCache.cloud = { ...cloud, lastError: error.message };
-          await saveLocalSettings(localSettingsCache);
-        } catch (_) {}
+      const backup = await runShutdownStep('quit cloud backup', () => runCloudBackup({
+        profiles: [...(engine?.profiles?.values?.() || [])],
+        groups: localSettingsCache.uiGroups || [],
+        cloud,
+      }), QUIT_TIMEOUT_MS.cloudBackup);
+      if (!backup.ok) {
+        const message = String(backup.error?.message || backup.error);
+        localSettingsCache.cloud = { ...cloud, lastError: message };
+        await runShutdownStep('cloud backup status save', () => saveLocalSettings(localSettingsCache), QUIT_TIMEOUT_MS.cloudStatus);
       }
     })
     .finally(() => app.quit());
