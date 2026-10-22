@@ -1076,3 +1076,1102 @@ html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini {
     min-height: 44px !important;
   }
 }
+
+/* Workspace polish: soften the canvas and give the profile table a stable rhythm. */
+html[data-ui-theme="merge-gateway"] {
+  --workspace-canvas: #f7f7f5;
+  --workspace-surface: #fff;
+  --workspace-soft: #f1f1ee;
+  --workspace-line: #e7e7e3;
+  --workspace-text: #202124;
+  --workspace-muted: #686c72;
+  --xai-page-gutter: clamp(20px, 2.2vw, 32px);
+}
+
+html[data-ui-theme="merge-gateway"] .content {
+  background: var(--workspace-canvas);
+}
+
+html[data-ui-theme="merge-gateway"] .content > header {
+  border-bottom: 1px solid var(--workspace-line);
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] main {
+  padding-top: 26px;
+  padding-bottom: 48px;
+  background: var(--workspace-canvas);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip-row {
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 0 0 2px;
+  border: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip {
+  min-height: 32px;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--workspace-muted);
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip:hover {
+  background: #eeeee9;
+  color: var(--workspace-text);
+  transform: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip.active {
+  background: var(--workspace-soft);
+  color: var(--workspace-text);
+  font-weight: 600;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar {
+  gap: 12px;
+  padding: 8px 0 16px;
+  margin-bottom: 16px;
+  border: 0;
+  border-bottom: 1px solid var(--workspace-line);
+  border-radius: 0;
+  background: transparent;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar .toolbar-left {
+  gap: 8px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar .outline {
+  border-color: transparent !important;
+  background: #fff !important;
+  box-shadow: 0 1px 2px rgb(12 12 12 / 5%);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar .outline:hover {
+  border-color: transparent !important;
+  background: #f1f1ee !important;
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .search {
+  background: #fff;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card {
+  overflow: auto;
+  border: 1px solid var(--workspace-line) !important;
+  border-radius: 16px !important;
+  background: var(--workspace-surface);
+  box-shadow: none !important;
+}
+
+@media (min-width: 961px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact {
+    width: 100% !important;
+    min-width: 1320px !important;
+    table-layout: fixed !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card th,
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card td {
+    padding-inline: 10px !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-check { width: 3% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-num { width: 4% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-profile-id { width: 8% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 18% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group { width: 9% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 11% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-network { width: 7% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 11% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-ext { width: 4% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-status { width: 7% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-actions {
+    width: 18% !important;
+    min-width: 258px !important;
+  }
+}
+
+@media (min-width: 961px) and (max-width: 1199px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact {
+    min-width: 1120px !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-profile-id,
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group,
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-ext {
+    display: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-check { width: 4% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-num { width: 5% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 22% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 13% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-network { width: 9% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 13% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-status { width: 9% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-actions { width: 25% !important; }
+}
+
+@media (min-width: 1200px) and (max-width: 1615px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact {
+    min-width: 1120px !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-profile-id,
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-ext {
+    display: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-check { width: 4% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-num { width: 5% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 18% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group { width: 10% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 12% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-network { width: 8% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 12% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-status { width: 8% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-actions { width: 23% !important; }
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card thead th {
+  height: 46px !important;
+  background: #f1f1ee !important;
+  color: #686c72;
+  font-size: 11px !important;
+  font-weight: 600;
+  letter-spacing: .025em;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .status-compact {
+  min-width: 0;
+  padding-inline: 4px !important;
+  font-size: 11px !important;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card :is(
+  .group-badge-compact,
+  .status-compact,
+  .network-mode,
+  .net-badge,
+  .exit-compact,
+  .network-pending
+) {
+  border-color: transparent !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .group-badge-compact {
+  background: color-mix(in srgb, var(--chip-color, #245cff) 11%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-selection-bar {
+  border-color: transparent !important;
+  border-radius: 14px;
+  background: var(--xai-orange-soft) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr {
+  transition: background-color 120ms ease;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr:hover td {
+  background: #fafaf8 !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr.selected-row td {
+  background: color-mix(in srgb, var(--xai-orange) 5%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card td.col-actions {
+  border-left: 1px solid var(--workspace-line);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card :is(th, td).col-actions {
+  position: static !important;
+  inset-inline-end: auto !important;
+  right: auto !important;
+  z-index: auto !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr:hover td.col-actions,
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr.selected-row td.col-actions {
+  background: inherit !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions {
+  display: grid !important;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: center;
+  gap: 6px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini {
+  min-width: 0 !important;
+  min-height: 36px !important;
+  height: 36px !important;
+  padding-inline: 4px !important;
+  border-radius: 9px;
+  font-size: 12px !important;
+  font-weight: 500;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini[data-action="start"] {
+  border-color: var(--workspace-text) !important;
+  background: var(--workspace-text) !important;
+  color: #fff !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini[data-action="start"]:hover:not(:disabled) {
+  border-color: #383a3d !important;
+  background: #383a3d !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini[data-action="delete"] {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--xai-danger) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini[data-action="delete"]:hover:not(:disabled) {
+  background: var(--xai-danger-soft) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-pagination {
+  gap: 12px;
+  padding-top: 12px;
+  border-top-color: var(--workspace-line);
+  color: var(--workspace-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-ui-theme="merge-gateway"] .profile-empty-state {
+  min-height: 288px;
+  background: var(--workspace-surface);
+  color: var(--workspace-muted);
+}
+
+html[data-ui-theme="merge-gateway"] .profile-empty-state > :is(i, svg) {
+  width: 52px;
+  height: 52px;
+  padding: 13px;
+  border-radius: 16px;
+  background: var(--xai-orange-soft);
+  color: var(--xai-orange);
+}
+
+html[data-ui-theme="merge-gateway"] .profile-empty-state strong {
+  color: var(--workspace-text);
+  font-size: 18px;
+}
+
+html[data-ui-theme="merge-gateway"] .profile-empty-state p {
+  max-width: 420px;
+  color: var(--workspace-muted);
+  font-size: 13px;
+}
+
+@media (max-width: 960px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card {
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent;
+    box-shadow: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact tbody tr {
+    border-color: var(--workspace-line) !important;
+    border-radius: 16px !important;
+    box-shadow: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact tbody tr:hover {
+    box-shadow: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody td.col-browser .env-browser-label strong {
+    display: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  html[data-ui-theme="merge-gateway"] .sidebar > #quick-create {
+    display: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar {
+    gap: 12px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav {
+    padding-bottom: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .group-chip,
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr {
+    transition: none;
+  }
+}
+
+/* Environment editor finishing: give summary actions and keyboard focus room. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-title {
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-title strong {
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-summary-badge {
+  flex: 0 0 auto;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head button {
+  justify-self: start;
+  min-width: 0;
+  min-height: 36px;
+  padding-inline: 10px;
+  color: var(--workspace-muted);
+  background: var(--workspace-canvas);
+  border-color: transparent;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head button:hover {
+  color: var(--workspace-text);
+  background: var(--workspace-soft);
+  border-color: transparent;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-groups {
+  display: grid;
+  gap: 8px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-group {
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: hidden;
+  background: var(--workspace-canvas);
+  border: 0;
+  border-radius: 12px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  color: var(--workspace-text);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 650;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor details.summary-group > summary {
+  cursor: pointer;
+  list-style: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor details.summary-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor details.summary-group > summary::after {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  content: "";
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 140ms ease;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor details.summary-group[open] > summary::after {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-group dl {
+  display: grid;
+  margin: 6px 0 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-group dl > div {
+  display: grid;
+  grid-template-columns: minmax(76px, .78fr) minmax(0, 1.22fr);
+  align-items: baseline;
+  gap: 8px;
+  min-height: 30px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--workspace-line);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-group dl > div:last-child {
+  border-bottom: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-group dt {
+  color: var(--workspace-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-group dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--workspace-text);
+  font-size: 12px;
+  line-height: 17px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-form :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  textarea,
+  .themed-select-button
+):focus-visible {
+  border-color: var(--xai-border-hover) !important;
+  box-shadow: 0 0 0 3px rgb(32 33 36 / 12%) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor :is(
+  .editor-back,
+  .editor-tabs button,
+  details.summary-group > summary,
+  .summary-head button,
+  .editor-action-buttons button
+):focus-visible {
+  outline: 2px solid rgb(32 33 36 / 48%);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head {
+    gap: 10px;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head button {
+    width: 100%;
+    justify-self: stretch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head button {
+    transition: none;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor details.summary-group > summary::after {
+    transition: none;
+  }
+}
+
+/* Borderless editor surfaces: use spacing and a quiet surface ladder for grouping. */
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+  border-bottom: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
+  border-bottom: 0 !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button:hover,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button.active {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button:hover {
+  background: var(--workspace-soft) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button.active {
+  color: var(--workspace-text) !important;
+  background: #e9e9e5 !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel.active {
+  padding: 0;
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-heading {
+  margin-bottom: 28px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-section-heading {
+  margin-top: 28px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-heading + .editor-section-heading {
+  margin-top: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-section-heading span::before {
+  display: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-summary {
+  background: var(--workspace-surface);
+  border: 0;
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .summary-head {
+  margin-bottom: 12px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .advanced-card,
+html[data-ui-theme="merge-gateway"] #view-profile-editor .privacy-grid {
+  background: var(--workspace-soft) !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .advanced-card {
+  padding: 18px;
+  border-radius: 14px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .privacy-grid {
+  padding: 16px;
+  border-radius: 14px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .settings-row {
+  background: var(--workspace-soft);
+  border: 0;
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .proxy-test-result {
+  background: var(--workspace-soft);
+  border: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .proxy-test-result.success {
+  background: var(--xai-success-soft);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .proxy-test-result.error {
+  background: var(--xai-danger-soft);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-index {
+  display: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor :is(
+  .editor-tool-actions button,
+  .ua-tools button,
+  .storage-actions button,
+  .proxy-raw-row .mini-btn
+) {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor :is(
+  .editor-tool-actions button,
+  .ua-tools button,
+  .storage-actions button,
+  .proxy-raw-row .mini-btn
+):hover:not(:disabled) {
+  background: var(--workspace-soft);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-actions {
+  border-top: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-summary-badge {
+  border-color: transparent;
+}
+
+@media (max-width: 640px) {
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-panel-heading {
+    margin-bottom: 24px;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-section-heading {
+    margin-top: 24px;
+  }
+}
+
+/* Final interaction pass: readable secondary copy, quieter focus cues, and a
+   consistent empty-state rhythm across the operational workspaces. */
+html[data-ui-theme="merge-gateway"] {
+  --workspace-muted: #62666d;
+  --workspace-success-ink: #146c36;
+  --workspace-warning-ink: #815300;
+  --workspace-danger-ink: #a9231a;
+  --xai-secondary: var(--workspace-muted);
+}
+
+html[data-ui-theme="merge-gateway"] .content > header p,
+html[data-ui-theme="merge-gateway"] :is(
+  .profile-total,
+  .extension-counts,
+  .rpa-toolbar-right,
+  .rpa-muted,
+  .help-box p,
+  #selected-count,
+  .sync-selected
+) {
+  color: var(--workspace-muted);
+}
+
+html[data-ui-theme="merge-gateway"] .table-card thead th {
+  color: var(--workspace-muted) !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+}
+
+html[data-ui-theme="merge-gateway"] .net-badge-direct {
+  color: var(--workspace-success-ink) !important;
+  background: color-mix(in srgb, var(--workspace-success-ink) 9%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] .net-badge-proxy {
+  color: #1d45b8 !important;
+  background: color-mix(in srgb, #1d45b8 9%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] :is(#view-groups, #view-proxies, #view-extensions) > .toolbar {
+  min-height: 60px;
+  gap: 12px 18px;
+  flex-wrap: wrap;
+}
+
+html[data-ui-theme="merge-gateway"] .toolbar-left {
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+html[data-ui-theme="merge-gateway"] .toolbar > .search,
+html[data-ui-theme="merge-gateway"] .profile-primary-toolbar > .search {
+  flex: 1 1 280px;
+  width: auto;
+  max-width: 360px;
+}
+
+html[data-ui-theme="merge-gateway"] :is(#group-empty, #proxy-empty, #extension-empty) {
+  display: grid;
+  min-height: 220px;
+  place-content: center;
+  gap: 8px;
+  padding: 32px 24px;
+  color: var(--workspace-muted);
+  background: var(--workspace-surface);
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  text-wrap: balance;
+}
+
+html[data-ui-theme="merge-gateway"] :is(#group-empty, #proxy-empty) {
+  border-top: 1px solid var(--workspace-line);
+  border-radius: 0 0 15px 15px;
+}
+
+html[data-ui-theme="merge-gateway"] #extension-empty {
+  border: 1px solid var(--workspace-line);
+  border-radius: 14px;
+  background: var(--workspace-canvas);
+}
+
+html[data-ui-theme="merge-gateway"] #view-sync .sync-empty {
+  min-height: 280px;
+  color: var(--workspace-muted);
+  background: linear-gradient(180deg, #fff, var(--workspace-canvas));
+  border-top: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #view-sync .sync-empty strong {
+  color: var(--workspace-text);
+  font-weight: 600;
+}
+
+html[data-ui-theme="merge-gateway"] #view-sync .sync-empty span {
+  color: var(--workspace-muted);
+}
+
+html[data-ui-theme="merge-gateway"] .profile-summary {
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+html[data-ui-theme="merge-gateway"] .search:focus-within,
+html[data-ui-theme="merge-gateway"] :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  textarea,
+  .themed-select-button
+):focus-visible {
+  border-color: var(--xai-border-hover) !important;
+  box-shadow: 0 0 0 3px rgb(32 33 36 / 9%) !important;
+}
+
+@media (max-width: 768px) {
+  html[data-ui-theme="merge-gateway"] .sidebar {
+    background: var(--workspace-surface);
+    border-bottom: 1px solid var(--workspace-line);
+    box-shadow: 0 5px 18px -16px rgb(18 18 18 / 45%);
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav {
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor {
+    min-height: 0;
+    margin: 0 !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .profile-editor-head {
+    min-height: 64px;
+    padding: 12px 16px;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs {
+    scroll-snap-type: x proximity;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .editor-tabs button {
+    scroll-snap-align: start;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profile-editor .environment-editor {
+    gap: 18px;
+    padding: 20px 16px 28px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .profile-primary-toolbar,
+  html[data-ui-theme="merge-gateway"] :is(#view-groups, #view-proxies, #view-extensions) > .toolbar {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  html[data-ui-theme="merge-gateway"] .profile-primary-toolbar > .toolbar-left,
+  html[data-ui-theme="merge-gateway"] :is(#view-groups, #view-proxies, #view-extensions) .toolbar-left,
+  html[data-ui-theme="merge-gateway"] .toolbar > .search,
+  html[data-ui-theme="merge-gateway"] .profile-primary-toolbar > .search {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="merge-gateway"] :is(.extension-card, .nav, .tabs button, .editor-tabs button, .search, input, select, textarea) {
+    transition: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] .extension-card:hover {
+    transform: none;
+  }
+}
+
+/* Profile list v2: one clear row action, a compact utility rail, and less
+   repeated metadata so larger lists remain quick to scan. */
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody td {
+  height: 60px !important;
+  background: var(--workspace-surface);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr:hover td {
+  background: #fafaf8 !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr.selected-row td {
+  background: color-mix(in srgb, var(--xai-orange) 5%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .env-identity {
+  gap: 10px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .env-identity-text strong {
+  color: var(--workspace-text);
+  font-size: 13px;
+  line-height: 18px;
+  font-weight: 650;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .env-identity-text small {
+  margin-top: 2px;
+  color: var(--workspace-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .kernel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 0 9px 0 7px;
+  overflow: hidden;
+  color: var(--workspace-text);
+  background: var(--workspace-soft);
+  border: 0;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .kernel-chip-icon {
+  width: 13px !important;
+  height: 13px !important;
+  flex: 0 0 13px;
+  color: var(--workspace-muted);
+  stroke-width: 1.75;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .kernel-chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .extension-count-badge {
+  display: inline-grid;
+  min-width: 28px;
+  height: 24px;
+  place-items: center;
+  padding-inline: 7px;
+  color: var(--workspace-muted);
+  background: var(--workspace-soft);
+  border: 0;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .extension-count-badge.has-extensions {
+  color: var(--workspace-text);
+  background: #ecece8;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .status-compact {
+  min-height: 24px !important;
+  padding: 0 9px !important;
+  background: var(--workspace-soft) !important;
+  color: var(--workspace-muted) !important;
+  font-size: 11px !important;
+  line-height: 16px !important;
+  font-weight: 600;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .status-compact.running {
+  color: var(--workspace-success-ink) !important;
+  background: color-mix(in srgb, var(--workspace-success-ink) 9%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card :is(th, td).col-actions {
+  width: 240px !important;
+  min-width: 240px !important;
+  padding-inline: 10px !important;
+  border-left: 1px solid var(--workspace-line) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px !important;
+  width: 100%;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .row-utility-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini {
+  display: inline-flex;
+  width: auto !important;
+  min-width: 0 !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  align-items: center;
+  justify-content: center;
+  padding: 0 !important;
+  border-radius: 9px !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .action-primary {
+  min-width: 76px !important;
+  padding-inline: 11px !important;
+  gap: 6px;
+  border-color: var(--workspace-text) !important;
+  color: #fff !important;
+  background: var(--workspace-text) !important;
+  font-size: 12px !important;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .action-primary:hover:not(:disabled) {
+  border-color: #383a3d !important;
+  background: #383a3d !important;
+  transform: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .action-primary:disabled {
+  color: var(--workspace-muted) !important;
+  background: var(--workspace-soft) !important;
+  border-color: transparent !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini-icon {
+  width: 32px !important;
+  min-width: 32px !important;
+  color: var(--workspace-muted) !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini-icon:hover:not(:disabled) {
+  color: var(--workspace-text) !important;
+  background: var(--workspace-soft) !important;
+  transform: none;
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini-icon[data-action="select-sync"]:not(:disabled) {
+  color: #1d45b8 !important;
+  background: color-mix(in srgb, #1d45b8 8%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini-icon[data-action="delete"] {
+  color: var(--workspace-danger-ink) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini-icon[data-action="delete"]:hover:not(:disabled) {
+  color: var(--workspace-danger-ink) !important;
+  background: color-mix(in srgb, var(--workspace-danger-ink) 9%, #fff) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini:disabled {
+  opacity: .42;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .row-action-icon {
+  width: 16px !important;
+  height: 16px !important;
+  flex: 0 0 16px;
+  stroke-width: 1.8;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .mini-icon .row-action-icon {
+  width: 17px !important;
+  height: 17px !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .row-action-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card .mini.is-starting .row-action-icon {
+  animation: list-action-spin 900ms linear infinite;
+}
+
+@keyframes list-action-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 960px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card :is(th, td).col-actions {
+    width: auto !important;
+    min-width: 0 !important;
+    padding-inline: 0 !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions {
+    justify-content: stretch;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .action-primary {
+    flex: 1 1 auto;
+    min-width: 0 !important;
+    height: 40px !important;
+    min-height: 40px !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .row-utility-actions {
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions .mini-icon {
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .actions {
+    gap: 6px !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .row-utility-actions {
+    gap: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .mini.is-starting .row-action-icon {
+    animation: none;
+  }
+}

@@ -81,7 +81,7 @@
     'theme.native.name': '系统原生',
 
     'view.profiles': '环境管理',
-    'view.profiles.sub': '',
+    'view.profiles.sub': '管理独立浏览器环境、网络出口与启动状态',
     'view.profile-editor': '编辑浏览器环境',
     'view.profile-editor.sub': '独立 Chrome 环境的网络、隐私和启动设置',
     'view.groups': '分组管理',
@@ -392,7 +392,7 @@
     'theme.retro.name': 'Retro Desktop',
     'theme.native.name': 'System Native',
     'view.profiles': 'Profiles',
-    'view.profiles.sub': '',
+    'view.profiles.sub': 'Manage isolated browser environments, network exits and launch state',
     'view.profile-editor': 'Edit profile',
     'view.profile-editor.sub': 'Network, privacy and launch settings for an isolated Chrome profile',
     'view.groups': 'Groups',

@@ -694,6 +694,18 @@ function envBadgeColors(profileOrNumber) {
 /** Shared square mark size — matches 环境管理 env-badge (CSS --ui-mark-size). */
 const UI_MARK_SIZE = 34;
 
+function createLucideSvg(name, className = '') {
+  const iconNode = window.lucide?.icons?.[name];
+  if (!iconNode || typeof window.lucide?.createElement !== 'function') return null;
+  const svg = window.lucide.createElement(iconNode);
+  const kebabName = String(name).replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase();
+  svg.classList.add('lucide', `lucide-${kebabName}`);
+  if (className) svg.classList.add(className);
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  return svg;
+}
+
 function hashHue(text) {
   const s = String(text || '');
   let h = 0;
@@ -772,24 +784,32 @@ function buildEnvIdentity(profile) {
 }
 
 function buildEnvBrowserCell(profile) {
-  // App-icon style: env number square mark (never Chrome brand icon/text)
-  const wrap = document.createElement('div');
-  wrap.className = 'env-browser-cell env-browser-cell-app';
-  const n = displayProfileNumber(profile);
-  wrap.append(buildEnvBadge(profile, UI_MARK_SIZE));
-  const label = document.createElement('div');
-  label.className = 'env-browser-label';
-  label.append(element('strong', '', t('profiles.envName', { n })));
+  const wrap = element('div', 'kernel-chip');
   const kernel = String(profile.browser || '').replace(/^Google\s+/i, '').trim();
-  // Neutral kernel label — avoid "Chrome" product branding in list
   let kernelLabel = t('profiles.kernel.independent');
   if (/edge/i.test(kernel)) kernelLabel = t('profiles.kernel.edge');
   else if (/chromium|wayfern|donut|testing/i.test(kernel)) kernelLabel = t('profiles.kernel.independent');
   else if (kernel && !/chrome/i.test(kernel)) kernelLabel = kernel.slice(0, 12);
-  label.append(element('small', '', kernelLabel));
-  wrap.append(label);
-  wrap.title = t('profiles.envName', { n }) + ' · ' + kernelLabel;
+  const icon = createLucideSvg('Cpu', 'kernel-chip-icon');
+  if (icon) wrap.append(icon);
+  wrap.append(element('span', 'kernel-chip-label', kernelLabel));
+  wrap.title = kernelLabel;
   return wrap;
+}
+
+function buildProfileActionButton({ action, id, label, iconName, className = '', showLabel = false }) {
+  const button = element('button', `mini ${className}`.trim());
+  button.type = 'button';
+  button.dataset.action = action;
+  button.dataset.id = id;
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  const icon = createLucideSvg(iconName, 'row-action-icon');
+  if (icon) button.append(icon);
+  if (showLabel) button.append(element('span', 'row-action-label', label));
+  else button.classList.add('mini-icon');
+  if (!icon && !showLabel) button.append(element('span', 'row-action-fallback', label.slice(0, 1)));
+  return button;
 }
 
 function nextProfileNumber() {
@@ -972,6 +992,7 @@ function closeSelectMenu({ restoreFocus = false } = {}) {
   menu.remove();
   button.classList.remove('open');
   button.setAttribute('aria-expanded', 'false');
+  button.removeAttribute('aria-controls');
   openSelectMenu = null;
   if (restoreFocus) button.focus();
 }
@@ -1051,7 +1072,7 @@ function openThemedSelect(select, button, focusIndex = null) {
   closeSelectMenu();
   if (select.disabled) return;
   const menu = element('div', 'themed-select-menu');
-  menu.id = button.getAttribute('aria-controls');
+  menu.id = button.dataset.menuId || `${button.id || `themed-select-${themedSelectId}`}-menu`;
   menu.setAttribute('role', 'listbox');
   menu.setAttribute('aria-label', select.getAttribute('aria-label') || tx('选择选项'));
   menu.tabIndex = -1;
@@ -1092,6 +1113,7 @@ function openThemedSelect(select, button, focusIndex = null) {
   // so dialog-owned menus must join that same top-layer subtree.
   const owner = select.closest('dialog[open]') || document.body;
   owner.append(menu);
+  button.setAttribute('aria-controls', menu.id);
   button.classList.add('open');
   button.setAttribute('aria-expanded', 'true');
   openSelectMenu = { select, button, menu, settling: true };
@@ -1121,9 +1143,9 @@ function enhanceSelect(select) {
   const button = element('button', 'themed-select-button');
   button.type = 'button';
   button.id = `${controlId}-button`;
+  button.dataset.menuId = `${controlId}-menu`;
   button.setAttribute('aria-haspopup', 'listbox');
   button.setAttribute('aria-expanded', 'false');
-  button.setAttribute('aria-controls', `${controlId}-menu`);
   button.append(element('span', 'themed-select-value'), element('span', 'themed-select-arrow', '▾'));
   select.before(wrap);
   wrap.append(select, button);
@@ -1783,7 +1805,9 @@ function updateEditorVisibility() {
 
 function renderEditorSummary() {
   if (!editingProfileId) return;
-  const draft = editorDraft(false); const privacy = draft.privacy; const summary = $('#editor-summary'); summary.replaceChildren();
+  const draft = editorDraft(false); const privacy = draft.privacy; const summary = $('#editor-summary');
+  const expandedGroups = new Set(Array.from(summary.querySelectorAll('details[open][data-summary-group]'), (item) => item.dataset.summaryGroup));
+  summary.replaceChildren();
   const labels = {
     webrtc: { proxy: tx('仅代理连接'), disabled: tx('禁用非代理 UDP'), real: tx('真实网络') }, timezoneMode: { ip: '基于出口 IP', real: '系统真实', custom: privacy.timezone || '自定义' },
     geoMode: { ip: '基于出口 IP', disabled: '禁止访问', custom: '自定义坐标' }, canvas: { real: '真实', blocked: '禁止读取' }, webgl: { real: '真实', blocked: '禁用' },
@@ -1820,7 +1844,29 @@ function renderEditorSummary() {
     ['Do Not Track', privacy.dnt ? '启用' : '默认'],
     [tx('每次打开刷新指纹'), privacy.refreshFingerprintOnStart ? '开启' : '关闭']
   ];
-  for (const [name, value] of values) { const row = document.createElement('div'); row.append(element('dt', '', name), element('dd', '', value || '默认')); summary.append(row); }
+  const groups = [
+    { id: 'environment', title: tx('运行环境'), values: values.slice(0, 5) },
+    { id: 'region', title: tx('区域与显示'), values: values.slice(5, 12), collapsible: true },
+    { id: 'fingerprint', title: tx('浏览器指纹'), values: values.slice(12), collapsible: true },
+  ];
+  for (const group of groups) {
+    const section = document.createElement(group.collapsible ? 'details' : 'section');
+    section.className = 'summary-group';
+    if (group.collapsible) {
+      section.dataset.summaryGroup = group.id;
+      section.open = expandedGroups.has(group.id);
+    }
+    const heading = element(group.collapsible ? 'summary' : 'h3', 'summary-group-title', group.title);
+    section.append(heading);
+    const list = document.createElement('dl');
+    for (const [name, value] of group.values) {
+      const row = document.createElement('div');
+      row.append(element('dt', '', name), element('dd', '', value || '默认'));
+      list.append(row);
+    }
+    section.append(list);
+    summary.append(section);
+  }
   const auditTarget = $('#editor-audit');
   if (auditTarget && window.EnvironmentAudit) {
     const report = window.EnvironmentAudit.build(draft, { systemTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone });
@@ -2777,11 +2823,13 @@ function renderProfiles() {
   for (const profile of visible) {
     const info = profileEngine(profile.id); const row = document.createElement('tr');
     row.dataset.profileId = profile.id;
-    const selectCell = document.createElement('td'); const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) })); selectCell.append(checkbox);
+    row.dataset.profileState = startingProfiles.has(profile.id) && !info.running ? 'starting' : info.running ? 'running' : 'stopped';
+    const selectCell = document.createElement('td'); selectCell.className = 'col-check';
+    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) })); selectCell.append(checkbox);
     const idCell = element('td', 'col-num', displayProfileNumber(profile));
     const profileIdCell = element('td', 'col-profile-id', profile.id);
     profileIdCell.title = profile.id;
-    const nameCell = document.createElement('td');
+    const nameCell = element('td', 'col-name');
     nameCell.append(buildEnvIdentity(profile));
     const groupCell = document.createElement('td');
     groupCell.className = 'col-group';
@@ -2814,7 +2862,11 @@ function renderProfiles() {
       networkInfo.append(inspect);
     }
     networkCell.append(networkInfo);
-    const extensionCell = element('td', 'col-ext', String(info.assignedExtensions?.length || 0));
+    const extensionCount = info.assignedExtensions?.length || 0;
+    const extensionCell = element('td', 'col-ext');
+    const extensionBadge = element('span', `extension-count-badge${extensionCount ? ' has-extensions' : ''}`, String(extensionCount));
+    extensionBadge.title = `${t('profiles.col.ext')} · ${extensionCount}`;
+    extensionCell.append(extensionBadge);
     const statusCell = document.createElement('td');
     statusCell.className = 'col-status';
     const starting = !info.running && startingProfiles.has(profile.id);
@@ -2829,19 +2881,29 @@ function renderProfiles() {
     const actionCell = document.createElement('td');
     actionCell.className = 'col-actions';
     const actions = element('div', 'actions');
-    const toggle = element('button', 'mini', info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start')));
-    toggle.dataset.action = info.running ? 'stop' : 'start';
-    toggle.dataset.id = profile.id;
+    const toggleLabel = info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start'));
+    const toggle = buildProfileActionButton({
+      action: info.running ? 'stop' : 'start',
+      id: profile.id,
+      label: toggleLabel,
+      iconName: info.running ? 'Square' : (starting ? 'LoaderCircle' : 'Play'),
+      className: 'action-primary',
+      showLabel: true,
+    });
     if (starting) {
       toggle.disabled = true;
       toggle.classList.add('is-starting');
       toggle.title = startProgressLabel(startingProfiles.get(profile.id));
+      toggle.setAttribute('aria-label', toggle.title);
     }
-    const sync = element('button', 'mini blue', t('action.sync')); sync.dataset.action = 'select-sync'; sync.dataset.id = profile.id; sync.disabled = !info.running || starting; sync.title = t('profiles.syncSelect');
-    const copy = element('button', 'mini', t('action.copy')); copy.dataset.action = 'copy'; copy.dataset.id = profile.id;
-    const edit = element('button', 'mini edit', t('action.edit')); edit.dataset.action = 'edit'; edit.dataset.id = profile.id;
-    const remove = element('button', 'mini danger', t('action.delete') || '删除'); remove.dataset.action = 'delete'; remove.dataset.id = profile.id;
-    actions.append(toggle, sync, copy, edit, remove); actionCell.append(actions);
+    const sync = buildProfileActionButton({ action: 'select-sync', id: profile.id, label: t('profiles.syncSelect'), iconName: 'PanelsTopLeft', className: 'blue' });
+    sync.disabled = !info.running || starting;
+    const copy = buildProfileActionButton({ action: 'copy', id: profile.id, label: t('action.copy'), iconName: 'Copy' });
+    const edit = buildProfileActionButton({ action: 'edit', id: profile.id, label: t('action.edit'), iconName: 'SquarePen', className: 'edit' });
+    const remove = buildProfileActionButton({ action: 'delete', id: profile.id, label: t('action.delete') || '删除', iconName: 'Trash2', className: 'danger' });
+    const utilityActions = element('div', 'row-utility-actions');
+    utilityActions.append(sync, copy, edit, remove);
+    actions.append(toggle, utilityActions); actionCell.append(actions);
     row.append(selectCell, idCell, profileIdCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell);
     profileRows.append(row);
   }
@@ -3239,6 +3301,13 @@ function populateSyncGroups() {
 function renderSessions() {
   populateSyncGroups(); const group = $('#sync-group').value || 'all'; const visible = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || t('groups.ungrouped')) === group);
   const table = $('#session-table'); table.replaceChildren();
+  const sessionTable = table.closest('table');
+  const groupSelect = $('#sync-group');
+  const allBox = $('#select-all-sessions');
+  const allHeader = allBox?.closest('th');
+  if (groupSelect && !groupSelect.hasAttribute('aria-label')) groupSelect.setAttribute('aria-label', tx('同步环境范围'));
+  if (allBox && !allBox.hasAttribute('aria-label')) allBox.setAttribute('aria-label', tx('选择当前页全部会话'));
+  if (allHeader && !allHeader.hasAttribute('aria-label')) allHeader.setAttribute('aria-label', tx('选择当前页全部会话'));
   const sessionRows = new DocumentFragment();
   for (const value of visible) {
     const selected = selectedSessions.has(value.id);
@@ -3263,10 +3332,11 @@ function renderSessions() {
     sessionRows.append(row);
   }
   table.append(sessionRows);
-  $('#session-empty').style.display = visible.length ? 'none' : 'block';
+  if (sessionTable) sessionTable.hidden = visible.length === 0;
+  $('#session-empty').hidden = visible.length !== 0;
   $('#selected-count').textContent = t('profiles.selected', { n: selectedSessions.size });
   $('#sync-selected').textContent = t('profiles.selected', { n: selectedSessions.size });
-  const allBox = $('#select-all-sessions'); allBox.checked = visible.length > 0 && visible.every((item) => selectedSessions.has(item.id)); allBox.indeterminate = visible.some((item) => selectedSessions.has(item.id)) && !allBox.checked;
+  if (allBox) { allBox.checked = visible.length > 0 && visible.every((item) => selectedSessions.has(item.id)); allBox.indeterminate = visible.some((item) => selectedSessions.has(item.id)) && !allBox.checked; }
   renderSyncState(); renderTabInventory();
   afterUiRender(document.getElementById('view-sync') || document);
 }
