@@ -42,6 +42,8 @@
   const zhCN = {
     'app.brand.sub': 'LOCAL WORKSPACE',
     'nav.newBrowser': '新建浏览器',
+    'nav.menu': '菜单',
+    'nav.primary': '主导航',
     'nav.profiles': '环境管理',
     'nav.groups': '分组管理',
     'nav.proxies': '代理管理',
@@ -354,6 +356,8 @@
   const en = {
     'app.brand.sub': 'LOCAL WORKSPACE',
     'nav.newBrowser': 'New browser',
+    'nav.menu': 'Menu',
+    'nav.primary': 'Main navigation',
     'nav.profiles': 'Profiles',
     'nav.groups': 'Groups',
     'nav.proxies': 'Proxies',
@@ -643,6 +647,8 @@
   const ja = {
     ...en,
     'nav.newBrowser': '新規ブラウザ',
+    'nav.menu': 'メニュー',
+    'nav.primary': 'メインナビゲーション',
     'nav.profiles': '環境管理',
     'nav.groups': 'グループ',
     'nav.proxies': 'プロキシ',
@@ -736,6 +742,8 @@
   const vi = {
     ...en,
     'nav.newBrowser': 'Trình duyệt mới',
+    'nav.menu': 'Menu',
+    'nav.primary': 'Điều hướng chính',
     'nav.profiles': 'Quản lý môi trường',
     'nav.groups': 'Nhóm',
     'nav.proxies': 'Proxy',
@@ -783,6 +791,8 @@
   const fr = {
     ...en,
     'nav.newBrowser': 'Nouveau navigateur',
+    'nav.menu': 'Menu',
+    'nav.primary': 'Navigation principale',
     'nav.profiles': 'Profils',
     'nav.groups': 'Groupes',
     'nav.proxies': 'Proxys',
@@ -830,6 +840,8 @@
   const de = {
     ...en,
     'nav.newBrowser': 'Neuer Browser',
+    'nav.menu': 'Menü',
+    'nav.primary': 'Hauptnavigation',
     'nav.profiles': 'Profile',
     'nav.groups': 'Gruppen',
     'nav.proxies': 'Proxys',
@@ -877,6 +889,8 @@
   const th = {
     ...en,
     'nav.newBrowser': 'เบราว์เซอร์ใหม่',
+    'nav.menu': 'เมนู',
+    'nav.primary': 'การนำทางหลัก',
     'nav.profiles': 'จัดการโปรไฟล์',
     'nav.groups': 'กลุ่ม',
     'nav.proxies': 'พร็อกซี',
@@ -924,6 +938,8 @@
   const id = {
     ...en,
     'nav.newBrowser': 'Browser baru',
+    'nav.menu': 'Menu',
+    'nav.primary': 'Navigasi utama',
     'nav.profiles': 'Kelola profil',
     'nav.groups': 'Grup',
     'nav.proxies': 'Proksi',

@@ -8,12 +8,14 @@ const { randomUUID } = require('crypto');
 const cdp = require('./cdp');
 const { BrowserEngine } = require('./engine');
 const { LiveSyncController } = require('./live-sync-v5');
+const { disableVulkanOnWayland } = require('./automation/linux-rendering');
 
 // Host process performance (Win / macOS / Linux): cut background timers and idle GPU work.
 try {
   app.commandLine.appendSwitch('disable-renderer-backgrounding');
   app.commandLine.appendSwitch('disable-background-timer-throttling');
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+  if (disableVulkanOnWayland()) app.commandLine.appendSwitch('disable-vulkan');
   if (process.env.OPENBROWSER_LOW_POWER === '1') {
     app.commandLine.appendSwitch('disable-gpu');
     app.commandLine.appendSwitch('disable-software-rasterizer');

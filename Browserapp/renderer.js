@@ -870,6 +870,8 @@ const PROFILE_PAGE_SIZES = [10, 20, 50, 100];
 const PROFILE_PAGE_SIZE_KEY = 'openbrowser-profile-page-size-v1';
 let profilePage = 1;
 let profilePageSize = 10;
+let profileGroupChipSignature = '';
+let profileRowCache = new Map();
 try {
   const savedProfilePageSize = Number(localStorage.getItem(PROFILE_PAGE_SIZE_KEY));
   if (PROFILE_PAGE_SIZES.includes(savedProfilePageSize)) profilePageSize = savedProfilePageSize;
@@ -1375,6 +1377,7 @@ function applyColorMode(pref, persist = true) {
 
 function applyUiTheme(value, persist = true) {
   closeSelectMenu();
+  setMobileNavOpen(false);
   // Merge Gateway is the default; saved selections for the other skins remain supported.
   if (value === 'anime-dream') value = 'element-admin';
   const theme = Object.hasOwn(UI_THEMES, value) ? value : 'merge-gateway';
@@ -2355,6 +2358,19 @@ function viewMetaFor(view) {
   return [t(keys[0]), t(keys[1])];
 }
 
+function setMobileNavOpen(open, { returnFocus = false } = {}) {
+  const sidebar = document.querySelector('.sidebar');
+  const toggle = document.getElementById('mobile-nav-toggle');
+  if (!sidebar || !toggle) return;
+  const canOpen = window.matchMedia?.('(max-width: 768px)').matches ?? window.innerWidth <= 768;
+  const next = Boolean(open && canOpen);
+  sidebar.classList.toggle('nav-open', next);
+  document.body.classList.toggle('mobile-nav-open', next);
+  toggle.setAttribute('aria-expanded', String(next));
+  toggle.setAttribute('aria-label', t('nav.menu'));
+  if (!next && returnFocus) toggle.focus({ preventScroll: true });
+}
+
 let proxyLibrary = [];
 const selectedProxies = new Set();
 const loadedViews = new Set(['profiles']);
@@ -2367,15 +2383,23 @@ function switchView(view) {
   $$('.nav').forEach((button) => {
     if (button.id === 'rpa-menu-toggle') {
       // parent group: active while any RPA sub-page is open
-      button.classList.toggle('active', view === 'rpa');
+      const active = view === 'rpa';
+      button.classList.toggle('active', active);
+      button.removeAttribute('aria-current');
       return;
     }
     if (button.classList.contains('nav-child') && button.dataset.view === 'rpa') {
       // child active state is refined in showRpaPanel
-      button.classList.toggle('active', view === 'rpa' && button.dataset.rpaTab === (currentRpaTab || 'flows'));
+      const active = view === 'rpa' && button.dataset.rpaTab === (currentRpaTab || 'flows');
+      button.classList.toggle('active', active);
+      if (active) button.setAttribute('aria-current', 'page');
+      else button.removeAttribute('aria-current');
       return;
     }
-    button.classList.toggle('active', button.dataset.view === view);
+    const active = button.dataset.view === view;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
   $$('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
   const meta = viewMetaFor(view);
@@ -2690,14 +2714,36 @@ function readProxyForm() {
 function renderGroupFilterChips() {
   const host = $('#profile-group-chips');
   if (!host) return;
+  const groups = listGroups();
+  const counts = new Map();
+  for (const profile of ui.profiles || []) {
+    const key = profile.groupId || 'ungrouped';
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const entries = [
+    { id: 'all', label: t('groups.all'), count: ui.profiles.length, color: '' },
+    { id: 'ungrouped', label: t('groups.ungrouped'), count: counts.get('ungrouped') || 0, color: '' },
+    ...groups.map((group) => ({
+      id: group.id,
+      label: localizeSystemLabel(group.name),
+      count: counts.get(group.id) || 0,
+      color: group.color,
+    })),
+  ];
+  const signature = JSON.stringify({
+    locale: window.OpenBrowserI18n?.getLocale?.() || document.documentElement.lang || '',
+    active: activeGroupFilter,
+    entries,
+  });
+  if (signature === profileGroupChipSignature) return;
+  profileGroupChipSignature = signature;
   host.replaceChildren();
-  const mk = (id, label, count) => {
+  const mk = ({ id, label, count, color }) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'group-chip' + (activeGroupFilter === id ? ' active' : '');
     btn.dataset.groupFilter = id;
-    const g = findGroup(id);
-    if (g?.color) btn.style.setProperty('--chip-color', g.color);
+    if (color) btn.style.setProperty('--chip-color', color);
     const dot = document.createElement('span');
     dot.className = 'dot';
     const text = document.createElement('span');
@@ -2707,11 +2753,9 @@ function renderGroupFilterChips() {
     btn.append(dot, text, badge);
     return btn;
   };
-  host.append(mk('all', t('groups.all'), ui.profiles.length));
-  host.append(mk('ungrouped', t('groups.ungrouped'), countProfilesInGroup('ungrouped')));
-  for (const g of listGroups()) {
-    host.append(mk(g.id, localizeSystemLabel(g.name), countProfilesInGroup(g.id)));
-  }
+  const fragment = document.createDocumentFragment();
+  for (const entry of entries) fragment.append(mk(entry));
+  host.append(fragment);
 }
 
 function updateProfileSelectionUi() {
@@ -2729,7 +2773,12 @@ function updateProfileSelectionUi() {
     row.classList.toggle('selected-row', selectedProfiles.has(row.dataset.profileId));
   });
   const visibleCheckboxes = $$('#profile-table [data-profile-select]');
-  const selectedOnPage = visibleCheckboxes.filter((input) => selectedProfiles.has(input.dataset.profileSelect)).length;
+  let selectedOnPage = 0;
+  for (const input of visibleCheckboxes) {
+    const selected = selectedProfiles.has(input.dataset.profileSelect);
+    input.checked = selected;
+    if (selected) selectedOnPage += 1;
+  }
   const selectAll = $('#select-all-profiles');
   if (selectAll) {
     selectAll.setAttribute('aria-label', t('profiles.selectPage'));
@@ -2808,7 +2857,121 @@ function filteredProfilesForView() {
       profile.tag,
       groupNameOf(profile),
     ].join(' ').toLowerCase().includes(filter);
+  }).sort((left, right) => positiveProfileNumber(right.number) - positiveProfileNumber(left.number));
+}
+
+function profileRowSignature(profile, info, { groupName, groupColor, network, starting, progress }) {
+  return [
+    window.OpenBrowserI18n?.getLocale?.() || document.documentElement.lang || '',
+    profile.id,
+    displayProfileNumber(profile),
+    profile.name || '',
+    profile.title || '',
+    profile.browser || '',
+    profile.networkMode || '',
+    profile.proxy || '',
+    profile.tag || '',
+    profile.groupId || '',
+    profile.platform?.startUrl || '',
+    profile.platform?.type || '',
+    groupName,
+    groupColor,
+    network?.ip || '',
+    network?.countryCode || '',
+    info.running ? '1' : '0',
+    info.port || '',
+    info.assignedExtensions?.length || 0,
+    starting ? '1' : '0',
+    progress?.phase || '',
+    progress?.percent ?? '',
+    progress?.message || '',
+  ].join('\u001f');
+}
+
+function buildProfileRow(profile, info, { groupName, groupColor, network, starting, progress }) {
+  const row = document.createElement('tr');
+  row.dataset.profileId = profile.id;
+  row.dataset.profileState = starting ? 'starting' : info.running ? 'running' : 'stopped';
+  const selectCell = document.createElement('td'); selectCell.className = 'col-check';
+  const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) })); selectCell.append(checkbox);
+  const idCell = element('td', 'col-num', displayProfileNumber(profile));
+  const profileIdCell = element('td', 'col-profile-id', profile.id);
+  profileIdCell.title = profile.id;
+  const nameCell = element('td', 'col-name');
+  nameCell.append(buildEnvIdentity(profile));
+  const groupCell = document.createElement('td');
+  groupCell.className = 'col-group';
+  const badge = element('span', 'group-badge group-badge-compact', groupName);
+  badge.style.setProperty('--chip-color', groupColor);
+  badge.title = groupName;
+  groupCell.append(badge);
+  const browserCell = document.createElement('td');
+  browserCell.className = 'col-browser';
+  browserCell.append(buildEnvBrowserCell(profile));
+  const proxyCell = document.createElement('td');
+  proxyCell.className = 'col-network';
+  proxyCell.append(networkModeBadge(profile.proxy));
+  const networkCell = document.createElement('td');
+  networkCell.className = 'col-exit';
+  const networkInfo = element('div', 'network-info network-info-compact');
+  if (network?.ip) {
+    const code = String(network.countryCode || '').toUpperCase();
+    const line = element('span', 'exit-compact', (code ? countryFlag(code) + ' ' + code : '🌐') + (network.ip ? ' · ' + String(network.ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.*.*') : ''));
+    line.title = (network.ip || '') + (code ? ' · ' + countryName(code) : '');
+    networkInfo.append(line);
+  } else {
+    networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? t('net.localHost') : t('net.untested')));
+  }
+  if (!isDirectProxy(profile.proxy)) {
+    const inspect = element('button', 'network-check', t('action.check'));
+    inspect.title = network?.ip ? t('action.recheck') : t('action.checkExit');
+    inspect.dataset.proxyCheck = profile.id;
+    networkInfo.append(inspect);
+  }
+  networkCell.append(networkInfo);
+  const extensionCount = info.assignedExtensions?.length || 0;
+  const extensionCell = element('td', 'col-ext');
+  const extensionBadge = element('span', `extension-count-badge${extensionCount ? ' has-extensions' : ''}`, String(extensionCount));
+  extensionBadge.title = `${t('profiles.col.ext')} · ${extensionCount}`;
+  extensionCell.append(extensionBadge);
+  const statusCell = document.createElement('td');
+  statusCell.className = 'col-status';
+  if (starting) {
+    statusCell.append(buildStartProgressCell(profile.id, progress));
+    row.classList.add('is-starting');
+  } else {
+    const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
+    if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
+    statusCell.append(status);
+  }
+  const actionCell = document.createElement('td');
+  actionCell.className = 'col-actions';
+  const actions = element('div', 'actions');
+  const toggleLabel = info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start'));
+  const toggle = buildProfileActionButton({
+    action: info.running ? 'stop' : 'start',
+    id: profile.id,
+    label: toggleLabel,
+    iconName: info.running ? 'Square' : (starting ? 'LoaderCircle' : 'Play'),
+    className: 'action-primary',
+    showLabel: true,
   });
+  if (starting) {
+    toggle.disabled = true;
+    toggle.classList.add('is-starting');
+    toggle.title = startProgressLabel(progress);
+    toggle.setAttribute('aria-label', toggle.title);
+  }
+  const sync = buildProfileActionButton({ action: 'select-sync', id: profile.id, label: t('profiles.syncSelect'), iconName: 'PanelsTopLeft', className: 'blue' });
+  sync.disabled = !info.running || starting;
+  const copy = buildProfileActionButton({ action: 'copy', id: profile.id, label: t('action.copy'), iconName: 'Copy' });
+  const edit = buildProfileActionButton({ action: 'edit', id: profile.id, label: t('action.edit'), iconName: 'SquarePen', className: 'edit' });
+  const remove = buildProfileActionButton({ action: 'delete', id: profile.id, label: t('action.delete') || '删除', iconName: 'Trash2', className: 'danger' });
+  const utilityActions = element('div', 'row-utility-actions');
+  utilityActions.append(sync, copy, edit, remove);
+  actions.append(toggle, utilityActions); actionCell.append(actions);
+  row.append(selectCell, idCell, profileIdCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell);
+  return row;
 }
 
 function renderProfiles() {
@@ -2820,93 +2983,27 @@ function renderProfiles() {
   const pageStart = (profilePage - 1) * profilePageSize;
   const visible = filtered.slice(pageStart, pageStart + profilePageSize);
   const profileRows = new DocumentFragment();
+  const engineById = new Map((engineProfiles || []).map((item) => [item.id, item]));
+  const groupById = new Map(listGroups().map((group) => [group.id, group]));
+  const ungroupedName = t('groups.ungrouped');
+  const emptyEngine = { running: false, assignedExtensions: [] };
+  const nextRowCache = new Map();
   for (const profile of visible) {
-    const info = profileEngine(profile.id); const row = document.createElement('tr');
-    row.dataset.profileId = profile.id;
-    row.dataset.profileState = startingProfiles.has(profile.id) && !info.running ? 'starting' : info.running ? 'running' : 'stopped';
-    const selectCell = document.createElement('td'); selectCell.className = 'col-check';
-    const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) })); selectCell.append(checkbox);
-    const idCell = element('td', 'col-num', displayProfileNumber(profile));
-    const profileIdCell = element('td', 'col-profile-id', profile.id);
-    profileIdCell.title = profile.id;
-    const nameCell = element('td', 'col-name');
-    nameCell.append(buildEnvIdentity(profile));
-    const groupCell = document.createElement('td');
-    groupCell.className = 'col-group';
-    const badge = element('span', 'group-badge group-badge-compact', groupNameOf(profile));
-    badge.style.setProperty('--chip-color', groupColorOf(profile));
-    badge.title = groupNameOf(profile);
-    groupCell.append(badge);
-    const browserCell = document.createElement('td');
-    browserCell.className = 'col-browser';
-    browserCell.append(buildEnvBrowserCell(profile));
-    const proxyCell = document.createElement('td');
-    proxyCell.className = 'col-network';
-    proxyCell.append(networkModeBadge(profile.proxy));
-    const networkCell = document.createElement('td');
-    networkCell.className = 'col-exit';
+    const info = engineById.get(profile.id) || emptyEngine;
+    const group = groupById.get(profile.groupId);
+    const groupName = group ? localizeSystemLabel(group.name) : ungroupedName;
+    const groupColor = group?.color || '#6b7280';
     const network = info.network || (profile.exitIp ? { ip: profile.exitIp, countryCode: profile.exitCountryCode, checkedAt: profile.exitCheckedAt } : null);
-    const networkInfo = element('div', 'network-info network-info-compact');
-    if (network?.ip) {
-      const code = String(network.countryCode || '').toUpperCase();
-      const line = element('span', 'exit-compact', (code ? countryFlag(code) + ' ' + code : '🌐') + (network.ip ? ' · ' + String(network.ip).replace(/^(\d+\.\d+)\.\d+\.\d+$/, '$1.*.*') : ''));
-      line.title = (network.ip || '') + (code ? ' · ' + countryName(code) : '');
-      networkInfo.append(line);
-    } else {
-      networkInfo.append(element('span', 'network-pending', isDirectProxy(profile.proxy) ? t('net.localHost') : t('net.untested')));
-    }
-    if (!isDirectProxy(profile.proxy)) {
-      const inspect = element('button', 'network-check', t('action.check'));
-      inspect.title = network?.ip ? t('action.recheck') : t('action.checkExit');
-      inspect.dataset.proxyCheck = profile.id;
-      networkInfo.append(inspect);
-    }
-    networkCell.append(networkInfo);
-    const extensionCount = info.assignedExtensions?.length || 0;
-    const extensionCell = element('td', 'col-ext');
-    const extensionBadge = element('span', `extension-count-badge${extensionCount ? ' has-extensions' : ''}`, String(extensionCount));
-    extensionBadge.title = `${t('profiles.col.ext')} · ${extensionCount}`;
-    extensionCell.append(extensionBadge);
-    const statusCell = document.createElement('td');
-    statusCell.className = 'col-status';
+    const progress = startingProfiles.get(profile.id);
     const starting = !info.running && startingProfiles.has(profile.id);
-    if (starting) {
-      statusCell.append(buildStartProgressCell(profile.id, startingProfiles.get(profile.id)));
-      row.classList.add('is-starting');
-    } else {
-      const status = element('span', `status status-compact ${info.running ? 'running' : ''}`, info.running ? t('status.run') : t('status.stop'));
-      if (info.running && info.port) status.title = t('status.runningCdp', { port: info.port });
-      statusCell.append(status);
-    }
-    const actionCell = document.createElement('td');
-    actionCell.className = 'col-actions';
-    const actions = element('div', 'actions');
-    const toggleLabel = info.running ? t('action.stop') : (starting ? t('status.starting') : t('action.start'));
-    const toggle = buildProfileActionButton({
-      action: info.running ? 'stop' : 'start',
-      id: profile.id,
-      label: toggleLabel,
-      iconName: info.running ? 'Square' : (starting ? 'LoaderCircle' : 'Play'),
-      className: 'action-primary',
-      showLabel: true,
-    });
-    if (starting) {
-      toggle.disabled = true;
-      toggle.classList.add('is-starting');
-      toggle.title = startProgressLabel(startingProfiles.get(profile.id));
-      toggle.setAttribute('aria-label', toggle.title);
-    }
-    const sync = buildProfileActionButton({ action: 'select-sync', id: profile.id, label: t('profiles.syncSelect'), iconName: 'PanelsTopLeft', className: 'blue' });
-    sync.disabled = !info.running || starting;
-    const copy = buildProfileActionButton({ action: 'copy', id: profile.id, label: t('action.copy'), iconName: 'Copy' });
-    const edit = buildProfileActionButton({ action: 'edit', id: profile.id, label: t('action.edit'), iconName: 'SquarePen', className: 'edit' });
-    const remove = buildProfileActionButton({ action: 'delete', id: profile.id, label: t('action.delete') || '删除', iconName: 'Trash2', className: 'danger' });
-    const utilityActions = element('div', 'row-utility-actions');
-    utilityActions.append(sync, copy, edit, remove);
-    actions.append(toggle, utilityActions); actionCell.append(actions);
-    row.append(selectCell, idCell, profileIdCell, nameCell, groupCell, browserCell, proxyCell, networkCell, extensionCell, statusCell, actionCell);
+    const details = { groupName, groupColor, network, starting, progress };
+    const signature = profileRowSignature(profile, info, details);
+    const cached = profileRowCache.get(profile.id);
+    const row = cached?.signature === signature ? cached.row : buildProfileRow(profile, info, details);
+    nextRowCache.set(profile.id, { signature, row });
     profileRows.append(row);
   }
+  profileRowCache = nextRowCache;
   table.append(profileRows);
   const empty = $('#profile-empty');
   const hasProfiles = ui.profiles.length > 0;
@@ -2950,8 +3047,6 @@ function renderProfiles() {
   selectAll.checked = pageIds.length > 0 && selectedOnPage === pageIds.length;
   selectAll.indeterminate = selectedOnPage > 0 && selectedOnPage < pageIds.length;
   updateProfileSelectionUi();
-  // Translate any remaining Chinese chrome text that was just injected
-  afterUiRender(document.getElementById('view-profiles') || document);
 }
 
 function visibleProfilePageIds() {
@@ -2977,6 +3072,19 @@ let __rafPending = 0;
 function scheduleRenderProfiles() {
   if (__rafPending) return;
   __rafPending = requestAnimationFrame(() => { __rafPending = 0; renderProfiles(); });
+}
+let __profileSearchTimer = 0;
+function scheduleProfileSearchRender() {
+  clearTimeout(__profileSearchTimer);
+  __profileSearchTimer = setTimeout(() => {
+    __profileSearchTimer = 0;
+    scheduleRenderProfiles();
+  }, 80);
+}
+function flushProfileSearchRender() {
+  clearTimeout(__profileSearchTimer);
+  __profileSearchTimer = 0;
+  scheduleRenderProfiles();
 }
 // Leading-guard throttle: fetch at most once per window during a burst (keeps progress
 // visible) instead of once per event; the trailing fetch captures the settled state.
@@ -3722,7 +3830,24 @@ try {
   window.visualViewport?.addEventListener('scroll', positionThemePopoverOnFrame);
 } catch (_) {}
 
+document.getElementById('mobile-nav-toggle')?.addEventListener('click', (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  setMobileNavOpen(!document.querySelector('.sidebar')?.classList.contains('nav-open'));
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || !document.querySelector('.sidebar')?.classList.contains('nav-open')) return;
+  event.preventDefault();
+  setMobileNavOpen(false, { returnFocus: true });
+});
+
+window.addEventListener('resize', () => {
+  if (!window.matchMedia?.('(max-width: 768px)').matches) setMobileNavOpen(false);
+});
+
 document.addEventListener('click', async (event) => {
+  if (document.body.classList.contains('mobile-nav-open') && !event.target.closest('.sidebar')) setMobileNavOpen(false);
   const cancelButton = event.target.closest('dialog button[value="cancel"]');
   if (cancelButton) {
     const dialog = cancelButton.closest('dialog');
@@ -3756,7 +3881,7 @@ document.addEventListener('click', async (event) => {
   } else if (!event.target.closest('#theme-picker') && !event.target.closest('#theme-popover')) {
     setThemePopoverOpen(false);
   }
-  const nav = event.target.closest('[data-view]'); if (nav) switchView(nav.dataset.view);
+  const nav = event.target.closest('[data-view]'); if (nav) { setMobileNavOpen(false); switchView(nav.dataset.view); }
   const action = event.target.closest('[data-action]');
   if (action?.dataset.action === 'start') startProfile(action.dataset.id);
   if (action?.dataset.action === 'stop') stopProfile(action.dataset.id);
@@ -3851,13 +3976,13 @@ document.addEventListener('change', async (event) => {
 $('#select-all-profiles').addEventListener('change', (event) => { for (const id of visibleProfilePageIds()) selectedProfiles[event.target.checked ? 'add' : 'delete'](id); scheduleRenderProfiles(); });
 $('#select-all-sessions').addEventListener('change', (event) => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const visible = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); for (const item of visible) event.target.checked ? selectedSessions.add(item.id) : selectedSessions.delete(item.id); if (!selectedSessions.has(preferredMasterId)) preferredMasterId = [...selectedSessions][0] || null; pushSyncSelection(); renderSessions(); });
 $('#sync-group').addEventListener('change', () => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const values = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); selectedSessions = new Set(values.map((item) => item.id)); preferredMasterId = values[0]?.id || null; pushSyncSelection(); renderSessions(); });
-$('#profile-search').addEventListener('input', () => { profilePage = 1; scheduleRenderProfiles(); });
+$('#profile-search').addEventListener('input', () => { profilePage = 1; scheduleProfileSearchRender(); });
 $('#profile-search').addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || !event.target.value) return;
   event.preventDefault();
   event.target.value = '';
   profilePage = 1;
-  scheduleRenderProfiles();
+  flushProfileSearchRender();
 });
 $('#profile-clear-filters').addEventListener('click', () => {
   $('#profile-search').value = '';

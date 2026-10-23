@@ -2,6 +2,7 @@
 
 const assert = require('assert');
 const { platformPreflight, WINDOWS_MAX_PATH } = require('./platform-preflight');
+const { disableVulkanOnWayland } = require('./linux-rendering');
 
 let passed = 0;
 function ok(name, cond) {
@@ -67,6 +68,10 @@ function codes(result) { return result.warnings.map((w) => w.code); }
   ok('linux x11 has no wayland note', !codes(x11).includes('linux-wayland'));
   const way = platformPreflight({ platform: 'linux', arch: 'x64', env: { HOME: '/home/a', WAYLAND_DISPLAY: 'wayland-0' } });
   ok('linux wayland session flagged', codes(way).includes('linux-wayland'));
+  ok('linux wayland disables Vulkan', disableVulkanOnWayland({ platform: 'linux', env: { XDG_SESSION_TYPE: 'wayland' } }));
+  ok('linux WAYLAND_DISPLAY disables Vulkan', disableVulkanOnWayland({ platform: 'linux', env: { WAYLAND_DISPLAY: 'wayland-0' } }));
+  ok('linux x11 keeps Vulkan available', !disableVulkanOnWayland({ platform: 'linux', env: { XDG_SESSION_TYPE: 'x11' } }));
+  ok('non-linux keeps Vulkan available', !disableVulkanOnWayland({ platform: 'darwin', env: { WAYLAND_DISPLAY: 'wayland-0' } }));
 }
 
 // --- Unknown platform ---

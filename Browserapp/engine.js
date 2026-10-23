@@ -13,6 +13,7 @@ const { mergeLoadExtensionArgs } = require('./automation/protocol/app-center-pro
 const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = require('./automation/env-icon');
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { platformPreflight } = require('./automation/platform-preflight');
+const { disableVulkanOnWayland } = require('./automation/linux-rendering');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
 const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
@@ -2848,6 +2849,7 @@ class BrowserEngine {
       '--remote-debugging-port=0',
       '--remote-allow-origins=http://127.0.0.1,http://localhost',
     ];
+    if (disableVulkanOnWayland()) args.push('--disable-vulkan');
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
     for (const flag of chromeArgsForFingerprint(fingerprint, profile)) {
       if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);

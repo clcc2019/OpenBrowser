@@ -2175,3 +2175,586 @@ html[data-ui-theme="merge-gateway"] #view-profiles .table-card .mini.is-starting
     animation: none;
   }
 }
+
+/* Workspace refresh: one calm surface ladder, a readable page header, and a
+   compact mobile navigation that does not turn into a horizontal rail. */
+html[data-ui-theme="merge-gateway"] {
+  --workspace-canvas: #f6f6f3;
+  --workspace-surface: #fff;
+  --workspace-soft: #f0f0ec;
+  --workspace-raised: #e8e8e2;
+  --workspace-line: #e3e3dd;
+  --workspace-text: #20211f;
+  --workspace-muted: #62655f;
+  --xai-secondary: var(--workspace-muted);
+  --ui-header-height: 82px;
+  --ui-sidebar: #f8f8f5;
+  --xai-page-gutter: clamp(20px, 2.3vw, 34px);
+}
+
+html[data-ui-theme="merge-gateway"] .sidebar {
+  padding: 20px 14px;
+  overflow-x: hidden;
+  background: #f8f8f5;
+  border-right: 1px solid var(--workspace-line);
+}
+
+html[data-ui-theme="merge-gateway"] .brand {
+  min-height: 40px;
+  padding-inline: 6px;
+}
+
+html[data-ui-theme="merge-gateway"] .brand .logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--workspace-surface);
+}
+
+html[data-ui-theme="merge-gateway"] .brand strong {
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+html[data-ui-theme="merge-gateway"] .brand small {
+  display: block;
+  margin-top: 1px;
+  color: #858880;
+  font-size: 9px;
+  line-height: 12px;
+  letter-spacing: .08em;
+}
+
+html[data-ui-theme="merge-gateway"] .new-browser {
+  margin: 17px 2px 3px;
+}
+
+html[data-ui-theme="merge-gateway"] .sidebar nav {
+  gap: 3px;
+  margin-top: 16px;
+}
+
+html[data-ui-theme="merge-gateway"] .nav {
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font-weight: 500;
+}
+
+html[data-ui-theme="merge-gateway"] .nav:hover {
+  color: var(--workspace-text);
+  background: var(--workspace-raised);
+}
+
+html[data-ui-theme="merge-gateway"] .nav.active {
+  color: var(--workspace-text);
+  background: var(--workspace-raised);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+html[data-ui-theme="merge-gateway"] .nav.active::before {
+  left: 1px;
+  width: 2px;
+  height: 18px;
+  background: var(--workspace-text);
+}
+
+html[data-ui-theme="merge-gateway"] .nav-label {
+  color: #858880;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+html[data-ui-theme="merge-gateway"] .sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid var(--workspace-line);
+}
+
+html[data-ui-theme="merge-gateway"] .sidebar-footer a {
+  min-height: 32px;
+  padding: 5px 8px;
+  margin-left: -2px;
+}
+
+html[data-ui-theme="merge-gateway"] .sidebar-footer a:hover {
+  background: var(--workspace-raised);
+}
+
+html[data-ui-theme="merge-gateway"] .app-version-wrap {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  margin-left: auto;
+  color: #777a73;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-ui-theme="merge-gateway"] .mobile-nav-toggle {
+  display: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] .content > header {
+  height: var(--ui-header-height);
+  min-height: var(--ui-header-height);
+  padding-inline: var(--xai-page-gutter);
+  background: rgb(255 255 255 / 96%);
+  border-bottom: 1px solid var(--workspace-line);
+  box-shadow: none;
+  backdrop-filter: blur(14px);
+}
+
+html[data-ui-theme="merge-gateway"] .content > header > div:first-child {
+  min-width: 0;
+}
+
+html[data-ui-theme="merge-gateway"] .content > header h1 {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+html[data-ui-theme="merge-gateway"] #page-subtitle {
+  display: block;
+  max-width: min(66vw, 680px);
+  margin: 1px 0 0;
+  overflow: hidden;
+  color: var(--workspace-muted);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html[data-ui-theme="merge-gateway"] .engine-badge {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 0;
+  background: var(--workspace-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+html[data-ui-theme="merge-gateway"] .theme-trigger {
+  min-height: 34px !important;
+  padding-inline: 11px;
+  border-color: var(--workspace-line) !important;
+  background: var(--workspace-surface);
+}
+
+html[data-ui-theme="merge-gateway"] main {
+  padding-top: 24px;
+  padding-bottom: 48px;
+  background: var(--workspace-canvas);
+}
+
+html:not([data-ui-theme="merge-gateway"]) .mobile-nav-toggle {
+  display: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip-row {
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip {
+  min-height: 30px;
+  padding: 4px 11px;
+  color: var(--workspace-muted);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip:hover {
+  background: var(--workspace-raised);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .group-chip.active {
+  color: var(--workspace-text);
+  background: var(--workspace-raised);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar {
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 14px;
+  background: var(--workspace-surface);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar .toolbar-left {
+  gap: 7px;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar .outline {
+  border-color: transparent !important;
+  background: var(--workspace-soft) !important;
+  box-shadow: none;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar .outline:hover {
+  background: var(--workspace-raised) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .search {
+  flex: 0 1 320px;
+  width: 100% !important;
+  max-width: 320px;
+  height: 38px !important;
+  min-height: 38px;
+  gap: 8px !important;
+  padding: 0 13px !important;
+  border: 1px solid var(--workspace-line) !important;
+  border-radius: 12px !important;
+  background: var(--workspace-surface) !important;
+  box-shadow: 0 1px 2px rgb(12 12 12 / 4%);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .search > svg,
+html[data-ui-theme="merge-gateway"] #view-profiles .search > i[data-lucide] {
+  color: var(--workspace-muted);
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .search input::placeholder {
+  color: #858880;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card {
+  border: 1px solid var(--workspace-line) !important;
+  border-radius: 14px !important;
+  background: var(--workspace-surface);
+  box-shadow: none !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card thead th {
+  height: 40px !important;
+  background: #fafaf7 !important;
+  color: var(--workspace-muted) !important;
+  border-bottom: 1px solid var(--workspace-line) !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0 !important;
+}
+
+@media (min-width: 961px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card {
+    max-height: max(280px, calc(100dvh - 282px));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    box-shadow: 0 1px 0 var(--workspace-line);
+  }
+}
+
+@media (min-width: 961px) and (max-width: 1199px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card {
+    max-height: max(280px, calc(100dvh - 327px));
+  }
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card th.col-num[aria-sort="descending"]::after {
+  content: "\2193";
+  display: inline-block;
+  margin-left: 4px;
+  color: #858880;
+  font-size: 11px;
+  line-height: 1;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody td {
+  height: 62px !important;
+  border-bottom-color: #edede8 !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr:hover td {
+  background: #fafaf7 !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr:hover,
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr.selected-row {
+  box-shadow: inset 2px 0 var(--workspace-text) !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody tr.selected-row td {
+  background: #f5f3ed !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .profile-pagination {
+  margin-top: 14px;
+  color: var(--workspace-muted);
+}
+
+html[data-ui-theme="merge-gateway"] :is(.search:focus-within, .search:has(input:focus-visible)) {
+  border-color: var(--workspace-line) !important;
+  box-shadow: 0 0 0 3px rgb(32 33 36 / 8%) !important;
+  outline: 0 !important;
+}
+
+html[data-ui-theme="merge-gateway"] #view-profiles .search:focus-within {
+  border-color: #bfc0b9 !important;
+}
+
+html[data-ui-theme="merge-gateway"] .search input:focus-visible,
+html[data-ui-theme="merge-gateway"] :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  select,
+  textarea,
+  .themed-select-button
+):focus-visible {
+  border-color: var(--xai-border) !important;
+  outline: 0 !important;
+  box-shadow: 0 0 0 3px rgb(32 33 36 / 8%) !important;
+}
+
+@media (min-width: 1200px) and (max-width: 1639px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card {
+    overflow-x: hidden;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card table.profile-table-compact {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card :is(.col-profile-id, .col-ext) {
+    display: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-check { width: 4% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-num { width: 5% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 21% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group { width: 10% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 12% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-network { width: 8% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 12% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-status { width: 8% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-actions { width: 20% !important; }
+}
+
+@media (min-width: 1200px) and (max-width: 1399px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-group {
+    display: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-name { width: 25% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-browser { width: 14% !important; }
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card .col-exit { width: 14% !important; }
+}
+
+@media (max-width: 960px) {
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card {
+    overflow: visible;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent;
+  }
+}
+
+@media (max-width: 768px) {
+  html[data-ui-theme="merge-gateway"] {
+    --ui-sidebar: var(--workspace-surface);
+  }
+
+  html[data-ui-theme="merge-gateway"] body.mobile-nav-open {
+    overflow: hidden;
+  }
+
+  html[data-ui-theme="merge-gateway"]:has(body.mobile-nav-open) {
+    overflow: hidden;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar {
+    height: 64px;
+    min-height: 64px;
+    padding: 8px 14px;
+    gap: 8px;
+    overflow: visible;
+    background: var(--workspace-surface);
+    border-bottom: 1px solid var(--workspace-line);
+    box-shadow: 0 12px 28px -24px rgb(20 21 19 / 48%);
+  }
+
+  html[data-ui-theme="merge-gateway"] .brand {
+    width: auto;
+    min-width: 0;
+    height: 46px;
+    padding: 0;
+    flex: 0 1 auto;
+  }
+
+  html[data-ui-theme="merge-gateway"] .brand > div:last-child {
+    display: block;
+  }
+
+  html[data-ui-theme="merge-gateway"] .brand small,
+  html[data-ui-theme="merge-gateway"] .new-browser,
+  html[data-ui-theme="merge-gateway"] .sidebar-footer {
+    display: none !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] .brand strong {
+    font-size: 15px;
+    line-height: 20px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .mobile-nav-toggle {
+    min-width: 84px;
+    min-height: 42px;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    margin-left: auto;
+    padding: 0 13px;
+    color: var(--workspace-text);
+    background: var(--workspace-soft);
+    border: 0;
+    border-radius: 999px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  html[data-ui-theme="merge-gateway"] .mobile-nav-toggle:hover {
+    background: var(--workspace-raised);
+  }
+
+  html[data-ui-theme="merge-gateway"] .mobile-nav-toggle svg,
+  html[data-ui-theme="merge-gateway"] .mobile-nav-toggle i[data-lucide] {
+    width: 18px;
+    height: 18px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav {
+    position: absolute;
+    top: calc(100% + 1px);
+    left: 0;
+    right: 0;
+    width: 100% !important;
+    max-height: calc(100dvh - 76px);
+    display: none !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    margin: 0;
+    padding: 10px 14px 16px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--workspace-surface);
+    border-bottom: 1px solid var(--workspace-line);
+    box-shadow: 0 24px 40px -30px rgb(20 21 19 / 52%);
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar.nav-open nav {
+    display: grid !important;
+    animation: mobile-nav-enter 140ms var(--xai-ease-out);
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav .nav {
+    width: 100% !important;
+    min-height: 44px;
+    justify-content: flex-start;
+    padding: 9px 11px;
+    white-space: nowrap;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav .nav-label {
+    display: block;
+    grid-column: 1 / -1;
+    margin: 10px 8px 2px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav .nav-sub {
+    grid-column: 1 / -1;
+    margin: 0 !important;
+    padding: 2px 0 2px 12px !important;
+    border-left: 1px solid var(--workspace-line) !important;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav .nav-sub .nav {
+    padding-left: 18px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .sidebar nav .nav-chevron {
+    margin-left: auto;
+  }
+
+  html[data-ui-theme="merge-gateway"] .content > header {
+    min-height: 72px;
+    height: auto;
+    padding: 11px 14px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .content > header h1 {
+    font-size: 21px;
+    line-height: 28px;
+  }
+
+  html[data-ui-theme="merge-gateway"] #page-subtitle {
+    display: none;
+  }
+
+  html[data-ui-theme="merge-gateway"] main {
+    padding: 18px 12px 36px;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar {
+    padding: 10px;
+    border-radius: 12px;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .profile-primary-toolbar .search {
+    flex: 1 0 100%;
+    max-width: none;
+  }
+
+  html[data-ui-theme="merge-gateway"] #view-profiles .table-card tbody td {
+    height: auto !important;
+  }
+}
+
+@media (max-width: 480px) {
+  html[data-ui-theme="merge-gateway"] .brand .logo {
+    width: 34px;
+    height: 34px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .mobile-nav-toggle {
+    min-width: 76px;
+    min-height: 40px;
+    padding-inline: 11px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .content > header {
+    gap: 8px;
+  }
+
+  html[data-ui-theme="merge-gateway"] .header-right {
+    gap: 6px !important;
+  }
+}
+
+@keyframes mobile-nav-enter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="merge-gateway"] .sidebar.nav-open nav {
+    animation: none;
+  }
+}
