@@ -2758,3 +2758,34 @@ html[data-ui-theme="merge-gateway"] :is(
     animation: none;
   }
 }
+/* Keep environment IDs compact while exposing a keyboard-accessible copy action. */
+#profile-table .profile-id-copy {
+  appearance: none;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+#profile-table .profile-id-copy:hover,
+#profile-table .profile-id-copy:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+#profile-table .profile-id-copy:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}

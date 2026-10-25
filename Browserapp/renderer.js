@@ -2895,8 +2895,13 @@ function buildProfileRow(profile, info, { groupName, groupColor, network, starti
   const selectCell = document.createElement('td'); selectCell.className = 'col-check';
   const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = selectedProfiles.has(profile.id); checkbox.dataset.profileSelect = profile.id; checkbox.setAttribute('aria-label', t('profiles.selectOne', { n: displayProfileNumber(profile) })); selectCell.append(checkbox);
   const idCell = element('td', 'col-num', displayProfileNumber(profile));
-  const profileIdCell = element('td', 'col-profile-id', profile.id);
-  profileIdCell.title = profile.id;
+  const profileIdCell = element('td', 'col-profile-id');
+  const copyId = element('button', 'profile-id-copy', profile.id);
+  copyId.type = 'button';
+  copyId.dataset.copyProfileId = profile.id;
+  copyId.title = `${t('profiles.copyId')} · ${profile.id}`;
+  copyId.setAttribute('aria-label', `${t('profiles.copyId')} ${profile.id}`);
+  profileIdCell.append(copyId);
   const nameCell = element('td', 'col-name');
   nameCell.append(buildEnvIdentity(profile));
   const groupCell = document.createElement('td');
@@ -3847,6 +3852,18 @@ window.addEventListener('resize', () => {
 });
 
 document.addEventListener('click', async (event) => {
+  const copyId = event.target.closest('[data-copy-profile-id]');
+  if (copyId) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(copyId.dataset.copyProfileId);
+      toast(t('profiles.copyIdSuccess'));
+    } catch (_) {
+      toast(t('profiles.copyIdFailed'));
+    }
+    return;
+  }
   if (document.body.classList.contains('mobile-nav-open') && !event.target.closest('.sidebar')) setMobileNavOpen(false);
   const cancelButton = event.target.closest('dialog button[value="cancel"]');
   if (cancelButton) {
