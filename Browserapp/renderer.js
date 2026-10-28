@@ -763,6 +763,141 @@ function buildEnvBadge(profile, size = UI_MARK_SIZE) {
   return badge;
 }
 
+function profileDisplayName(profile) {
+  const number = displayProfileNumber(profile);
+  const raw = String(profile?.title || '').trim();
+  return raw && raw !== String(number) ? raw : t('profiles.envName', { n: number });
+}
+
+function focusInlineProfileNameInput() {
+  const input = inlineProfileNameEdit?.input;
+  if (!input || input.disabled) return;
+  input.focus();
+  input.select();
+}
+
+function cancelInlineProfileNameEdit() {
+  if (!inlineProfileNameEdit || inlineProfileNameEdit.saving) return;
+  inlineProfileNameEdit = null;
+  renderProfiles();
+}
+
+function commitInlineProfileNameEdit() {
+  const edit = inlineProfileNameEdit;
+  if (!edit) return Promise.resolve(true);
+  if (edit.promise) return edit.promise;
+  const index = ui.profiles.findIndex((item) => item.id === edit.id);
+  if (index < 0) {
+    inlineProfileNameEdit = null;
+    renderProfiles();
+    toast(tx('环境不存在'));
+    return Promise.resolve(false);
+  }
+
+  const previous = ui.profiles[index];
+  const number = displayProfileNumber(previous);
+  const defaultName = t('profiles.envName', { n: number });
+  const value = String(edit.input?.value ?? edit.value ?? '').trim().slice(0, 120);
+  const title = value === defaultName || value === String(number) ? '' : value;
+  edit.value = value;
+  edit.saving = true;
+  if (edit.input) edit.input.disabled = true;
+
+  const next = normalizeProfileSettings({
+    ...previous,
+    title,
+    updatedAt: new Date().toISOString(),
+  });
+  ui.profiles[index] = next;
+  save();
+  edit.promise = (async () => {
+    try {
+      engineProfiles = await window.ops.syncProfiles(ui.profiles);
+      const running = profileEngine(next.id).running;
+      inlineProfileNameEdit = null;
+      renderProfiles();
+      log('Profile', '已更新环境名称 ' + displayProfileNumber(next) + ' · ' + (title || defaultName));
+      toast(running ? tx('设置已保存，请重启该环境后生效') : t('toast.saved'));
+      return true;
+    } catch (error) {
+      ui.profiles[index] = previous;
+      save();
+      edit.saving = false;
+      edit.promise = null;
+      edit.value = profileDisplayName(previous);
+      if (inlineProfileNameEdit === edit) {
+        profileRowCache = new Map();
+        renderProfiles();
+        requestAnimationFrame(focusInlineProfileNameInput);
+      }
+      toast(tx('保存失败：') + error.message);
+      return false;
+    }
+  })();
+  return edit.promise;
+}
+
+async function beginInlineProfileNameEdit(id) {
+  if (inlineProfileNameEdit?.id === id) {
+    focusInlineProfileNameInput();
+    return;
+  }
+  if (inlineProfileNameEdit) {
+    const saved = await commitInlineProfileNameEdit();
+    if (!saved) return;
+  }
+  const profile = ui.profiles.find((item) => item.id === id);
+  if (!profile) return;
+  inlineProfileNameEdit = {
+    id,
+    value: profileDisplayName(profile),
+    saving: false,
+    input: null,
+    promise: null,
+  };
+  renderProfiles();
+  requestAnimationFrame(focusInlineProfileNameInput);
+}
+
+function buildInlineProfileNameEditor(profile) {
+  const edit = inlineProfileNameEdit;
+  const box = element('div', 'profile-name env-identity inline-profile-name-editor');
+  box.dataset.profileNameEditor = profile.id;
+  box.append(buildEnvBadge(profile, UI_MARK_SIZE));
+  const input = document.createElement('input');
+  input.className = 'inline-profile-name-input';
+  input.type = 'text';
+  input.maxLength = 120;
+  input.value = edit?.value ?? profileDisplayName(profile);
+  input.placeholder = t('profiles.envName', { n: displayProfileNumber(profile) });
+  input.setAttribute('aria-label', `${t('common.edit')} ${t('profiles.col.name')}`);
+  input.title = `${t('common.edit')} ${t('profiles.col.name')}`;
+  input.disabled = Boolean(edit?.saving);
+  if (edit) edit.input = input;
+  input.addEventListener('input', () => {
+    if (inlineProfileNameEdit?.id === profile.id) inlineProfileNameEdit.value = input.value;
+  });
+  input.addEventListener('keydown', (event) => {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cancelInlineProfileNameEdit();
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      void commitInlineProfileNameEdit();
+    }
+  });
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (inlineProfileNameEdit?.id !== profile.id || inlineProfileNameEdit.saving) return;
+      if (document.activeElement === input || box.contains(document.activeElement)) return;
+      void commitInlineProfileNameEdit();
+    }, 0);
+  });
+  box.append(input);
+  return box;
+}
+
 function buildEnvIdentity(profile) {
   const n = displayProfileNumber(profile);
   const box = document.createElement('div');
@@ -770,9 +905,7 @@ function buildEnvIdentity(profile) {
   box.append(buildEnvBadge(profile, UI_MARK_SIZE));
   const text = document.createElement('div');
   text.className = 'env-identity-text';
-  const titleText = (profile.title && String(profile.title).trim() && String(profile.title) !== String(n))
-    ? String(profile.title).trim()
-    : t('profiles.envName', { n });
+  const titleText = profileDisplayName(profile);
   text.append(element('strong', '', titleText));
   const sub = (profile.tag ? localizeSystemLabel(profile.tag) : '')
     || (profile.platform?.startUrl ? String(profile.platform.startUrl).slice(0, 42) : '')
@@ -872,6 +1005,7 @@ let profilePage = 1;
 let profilePageSize = 10;
 let profileGroupChipSignature = '';
 let profileRowCache = new Map();
+let inlineProfileNameEdit = null;
 try {
   const savedProfilePageSize = Number(localStorage.getItem(PROFILE_PAGE_SIZE_KEY));
   if (PROFILE_PAGE_SIZES.includes(savedProfilePageSize)) profilePageSize = savedProfilePageSize;
@@ -2885,6 +3019,7 @@ function profileRowSignature(profile, info, { groupName, groupColor, network, st
     progress?.phase || '',
     progress?.percent ?? '',
     progress?.message || '',
+    inlineProfileNameEdit?.id === profile.id ? 'inline-name-editing' : '',
   ].join('\u001f');
 }
 
@@ -2903,7 +3038,23 @@ function buildProfileRow(profile, info, { groupName, groupColor, network, starti
   copyId.setAttribute('aria-label', `${t('profiles.copyId')} ${profile.id}`);
   profileIdCell.append(copyId);
   const nameCell = element('td', 'col-name');
-  nameCell.append(buildEnvIdentity(profile));
+  if (inlineProfileNameEdit?.id === profile.id) {
+    nameCell.append(buildInlineProfileNameEditor(profile));
+  } else {
+    const identity = buildEnvIdentity(profile);
+    const editLabel = `${t('common.edit')} ${t('profiles.col.name')}`;
+    identity.dataset.profileName = profile.id;
+    identity.setAttribute('role', 'button');
+    identity.tabIndex = 0;
+    identity.title = editLabel;
+    identity.setAttribute('aria-label', `${editLabel}: ${profileDisplayName(profile)}`);
+    identity.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      void beginInlineProfileNameEdit(profile.id);
+    });
+    nameCell.append(identity);
+  }
   const groupCell = document.createElement('td');
   groupCell.className = 'col-group';
   const badge = element('span', 'group-badge group-badge-compact', groupName);
@@ -3862,6 +4013,12 @@ document.addEventListener('click', async (event) => {
     } catch (_) {
       toast(t('profiles.copyIdFailed'));
     }
+    return;
+  }
+  const profileName = event.target.closest('[data-profile-name]');
+  if (profileName) {
+    event.preventDefault();
+    await beginInlineProfileNameEdit(profileName.dataset.profileName);
     return;
   }
   if (document.body.classList.contains('mobile-nav-open') && !event.target.closest('.sidebar')) setMobileNavOpen(false);

@@ -2789,3 +2789,47 @@ html[data-ui-theme="merge-gateway"] :is(
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
+
+/* Environment names can be edited in place from the profile list. */
+#view-profiles .env-identity[data-profile-name] {
+  cursor: text;
+  border-radius: var(--ui-radius-sm, 6px);
+  outline: 0;
+}
+
+#view-profiles .env-identity[data-profile-name]:hover {
+  background: color-mix(in srgb, var(--ui-accent, #1677ff) 6%, transparent);
+}
+
+#view-profiles .env-identity[data-profile-name]:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ui-accent, #1677ff) 45%, transparent);
+  outline-offset: 2px;
+}
+
+#view-profiles .inline-profile-name-editor {
+  min-width: 0;
+}
+
+#view-profiles .inline-profile-name-input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--ui-accent, #1677ff) !important;
+  border-radius: var(--ui-radius-sm, 6px);
+  background: var(--ui-surface, #fff) !important;
+  color: var(--ui-text, inherit) !important;
+  font: inherit;
+  line-height: 1.35;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent, #1677ff) 14%, transparent);
+}
+
+#view-profiles .inline-profile-name-input:focus {
+  outline: 0;
+}
+
+#view-profiles .inline-profile-name-input:disabled {
+  opacity: .65;
+  cursor: wait;
+}
