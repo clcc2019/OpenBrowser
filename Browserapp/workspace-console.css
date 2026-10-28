@@ -227,156 +227,23 @@ html[data-ui-theme="merge-gateway"] .view.active {
 }
 
 /* Workspace summary */
-html[data-ui-theme="merge-gateway"] .profile-overview {
-  display: grid;
-  grid-template-columns: minmax(230px, 0.82fr) minmax(0, 1.75fr);
-  gap: 8px;
-  min-height: 112px;
-  margin-bottom: 12px;
-  padding: 8px;
-  background: var(--wc-soft);
-  border: 0;
-  border-radius: 16px;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 72%);
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-main {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 13px;
-  padding: 13px 16px;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-icon {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  place-items: center;
-  color: var(--wc-ink);
-  background: var(--wc-surface);
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgb(24 29 36 / 6%);
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-icon svg {
-  width: 19px;
-  height: 19px;
-  stroke-width: 1.8;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-copy {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-kicker {
-  overflow: hidden;
-  color: var(--wc-muted);
-  font-size: 11px;
-  line-height: 16px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-total {
-  display: flex;
-  min-width: 0;
-  align-items: baseline;
-  gap: 7px;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-total strong {
-  color: var(--wc-ink);
-  font-size: 34px;
-  line-height: 39px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-total span {
-  overflow: hidden;
-  color: var(--wc-muted);
-  font-size: 12px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-metrics {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  align-items: stretch;
-  overflow: hidden;
-  background: rgb(255 255 255 / 58%);
-  border-radius: 12px;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-metric {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 16px 18px;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-metric + .profile-overview-metric::before {
-  position: absolute;
-  top: 22px;
-  bottom: 22px;
-  left: 0;
-  width: 1px;
-  content: "";
-  background: var(--wc-line);
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-metric-label {
-  display: inline-flex;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  overflow: hidden;
-  color: var(--wc-muted);
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-metric-label svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 15px;
-  stroke-width: 1.8;
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  border-radius: 999px;
-  background: var(--wc-faint);
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-metric[data-tone="success"][data-active="true"] .profile-overview-dot {
-  background: var(--wc-success);
-  box-shadow: 0 0 0 4px rgb(23 107 69 / 9%);
-}
 
-html[data-ui-theme="merge-gateway"] .profile-overview-metric strong {
-  color: var(--wc-ink);
-  font-size: 22px;
-  line-height: 28px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
+
 
 /* Filters and primary actions */
 html[data-ui-theme="merge-gateway"] .profile-controls {
@@ -1829,13 +1696,8 @@ html[data-ui-theme="merge-gateway"] :is(input:not([type="checkbox"]):not([type="
 }
 
 @media (max-width: 1180px) {
-  html[data-ui-theme="merge-gateway"] .profile-overview {
-    grid-template-columns: minmax(205px, 0.72fr) minmax(0, 1.65fr);
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metric {
-    padding-inline: 14px;
-  }
+
 
   html[data-ui-theme="merge-gateway"] #view-profiles .profile-controls .profile-primary-toolbar {
     align-items: stretch;
@@ -1849,17 +1711,9 @@ html[data-ui-theme="merge-gateway"] :is(input:not([type="checkbox"]):not([type="
 }
 
 @media (max-width: 1024px) {
-  html[data-ui-theme="merge-gateway"] .profile-overview {
-    grid-template-columns: minmax(0, 1fr);
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-main {
-    padding: 10px 13px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metrics {
-    background: rgb(255 255 255 / 68%);
-  }
+
 }
 
 @media (max-width: 768px) {
@@ -2025,44 +1879,12 @@ html[data-ui-theme="merge-gateway"] :is(input:not([type="checkbox"]):not([type="
     gap: 7px;
   }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview {
-    gap: 6px;
-    min-height: 0;
-    padding: 6px;
-    border-radius: 14px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-main {
-    gap: 10px;
-    padding: 9px 10px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-icon {
-    width: 38px;
-    height: 38px;
-    flex-basis: 38px;
-    border-radius: 10px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-total strong {
-    font-size: 30px;
-    line-height: 35px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metric {
-    gap: 6px;
-    padding: 11px 10px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metric + .profile-overview-metric::before {
-    top: 13px;
-    bottom: 13px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metric strong {
-    font-size: 19px;
-    line-height: 25px;
-  }
 
   html[data-ui-theme="merge-gateway"] .profile-controls {
     padding: 8px;
@@ -2134,26 +1956,9 @@ html[data-ui-theme="merge-gateway"] :is(input:not([type="checkbox"]):not([type="
     width: 100%;
   }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-total span {
-    font-size: 11px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metric {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 3px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metric-label {
-    gap: 5px;
-    font-size: 10.5px;
-  }
 
-  html[data-ui-theme="merge-gateway"] .profile-overview-metric-label svg {
-    width: 13px;
-    height: 13px;
-    flex-basis: 13px;
-  }
 
   html[data-ui-theme="merge-gateway"] #view-profiles .profile-controls .toolbar-left {
     display: grid;

@@ -91,29 +91,6 @@
 
       <main>
         <section class="view active" id="view-profiles">
-          <div class="profile-overview" aria-labelledby="profile-overview-title">
-            <div class="profile-overview-main">
-              <span class="profile-overview-icon" aria-hidden="true"><i data-lucide="layout-dashboard"></i></span>
-              <div class="profile-overview-copy">
-                <span class="profile-overview-kicker" id="profile-overview-title" data-i18n="profiles.overview.title">工作区概览</span>
-                <div class="profile-overview-total"><strong id="profile-overview-total">0</strong><span data-i18n="profiles.overview.total">个环境</span></div>
-              </div>
-            </div>
-            <div class="profile-overview-metrics">
-              <div class="profile-overview-metric" data-tone="success">
-                <span class="profile-overview-metric-label"><i class="profile-overview-dot" aria-hidden="true"></i><span data-i18n="status.running">运行中</span></span>
-                <strong id="profile-overview-running">0</strong>
-              </div>
-              <div class="profile-overview-metric" data-tone="network">
-                <span class="profile-overview-metric-label"><i data-lucide="network" aria-hidden="true"></i><span data-i18n="net.proxy">代理</span></span>
-                <strong id="profile-overview-proxy">0</strong>
-              </div>
-              <div class="profile-overview-metric" data-tone="groups">
-                <span class="profile-overview-metric-label"><i data-lucide="folder-kanban" aria-hidden="true"></i><span data-i18n="profiles.overview.groups">分组</span></span>
-                <strong id="profile-overview-groups">0</strong>
-              </div>
-            </div>
-          </div>
           <div class="profile-controls">
             <div class="group-chip-row" id="profile-group-chips"></div>
             <div class="toolbar profile-primary-toolbar">
@@ -1143,6 +1120,7 @@
     <button class="outline" type="button" id="cloud-push-selected">推送已开启云备份的环境</button>
     <button class="outline" type="button" id="cloud-pull-selected">拉取合并（按当前恢复策略）</button>
   </div>
+  <p id="cloud-action-feedback" class="cloud-action-feedback" role="status" aria-live="polite" hidden></p>
   <p class="storage-warning" id="cloud-sync-status">尚未同步。单环境是否同步请在「编辑环境 → 偏好设置 → 云备份」中开关，主列表不放同步开关。</p>
 </article>
 <div class="settings-section-heading" id="settings-runtime" data-settings-section>

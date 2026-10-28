@@ -3186,25 +3186,7 @@ function buildProfileRow(profile, info, { groupName, groupColor, network, starti
   return row;
 }
 
-function updateProfileOverview() {
-  const profiles = Array.isArray(ui.profiles) ? ui.profiles : [];
-  const profileIds = new Set(profiles.map((profile) => profile.id));
-  const running = (engineProfiles || []).filter((item) => item.running && profileIds.has(item.id)).length;
-  const proxyProfiles = profiles.filter((profile) => !isDirectProxy(profile.proxy)).length;
-  const runningMetric = document.querySelector('.profile-overview-metric[data-tone="success"]');
-  const total = document.querySelector('#profile-overview-total');
-  const runningTotal = document.querySelector('#profile-overview-running');
-  const proxyTotal = document.querySelector('#profile-overview-proxy');
-  const groupTotal = document.querySelector('#profile-overview-groups');
-  if (total) total.textContent = String(profiles.length);
-  if (runningTotal) runningTotal.textContent = String(running);
-  if (proxyTotal) proxyTotal.textContent = String(proxyProfiles);
-  if (groupTotal) groupTotal.textContent = String(listGroups().length);
-  if (runningMetric) runningMetric.dataset.active = running > 0 ? 'true' : 'false';
-}
-
 function renderProfiles() {
-  updateProfileOverview();
   renderGroupFilterChips();
   const table = $('#profile-table'); table.replaceChildren();
   const filtered = filteredProfilesForView();
@@ -6389,6 +6371,11 @@ function applyCloudForm(cloud) {
   writeBridgeFields('onedrive', c.onedrive || {});
   writeBridgeFields('quark', c.quark || {});
   writeBridgeFields('baidu', c.baidu || {});
+  updateCloudStatus(c);
+  cloudProviderFieldsVisibility();
+}
+
+function updateCloudStatus(c) {
   const badge = $('#cloud-sync-badge');
   if (badge) badge.textContent = c.enabled ? (c.lastSyncAt ? tx('已同步') : tx('已启用')) : tx('未配置');
   const status = $('#cloud-sync-status');
@@ -6404,7 +6391,33 @@ function applyCloudForm(cloud) {
         ? (`上次同步：${c.lastSyncAt} · ${providerLabel} · 恢复策略：${modeLabel}`)
         : `尚未同步。当前：${providerLabel} · 恢复策略：${modeLabel}（默认不会删除本地独有环境）。`);
   }
-  cloudProviderFieldsVisibility();
+}
+
+function setCloudActionFeedback(message, state) {
+  const feedback = $('#cloud-action-feedback');
+  if (!feedback) return;
+  feedback.hidden = false;
+  feedback.dataset.state = state;
+  feedback.textContent = message;
+}
+
+let cloudActionBusy = false;
+async function runCloudSettingsAction(button, pending, action) {
+  if (cloudActionBusy) return;
+  cloudActionBusy = true;
+  const buttons = [...document.querySelectorAll('#cloud-backup-card .storage-actions button')];
+  const disabled = buttons.map((item) => item.disabled);
+  const label = button.textContent;
+  buttons.forEach((item) => { item.disabled = true; });
+  button.textContent = pending;
+  setCloudActionFeedback(pending, 'pending');
+  try {
+    await action();
+  } finally {
+    buttons.forEach((item, index) => { item.disabled = disabled[index]; });
+    button.textContent = label;
+    cloudActionBusy = false;
+  }
 }
 
 async function refreshCloudPanel() {
@@ -6501,14 +6514,19 @@ $('#cloud-choose-dir')?.addEventListener('click', async () => {
     if ($('#cloud-local-dir')) $('#cloud-local-dir').textContent = result.dir;
   } catch (error) { toast(error.message); }
 });
-$('#cloud-save-cfg')?.addEventListener('click', async () => {
+$('#cloud-save-cfg')?.addEventListener('click', async (event) => runCloudSettingsAction(event.currentTarget, tx('正在保存配置…'), async () => {
   try {
     const cloud = await window.ops.cloudSetConfig(readCloudForm());
-    applyCloudForm(cloud);
+    updateCloudStatus(cloud);
+    setCloudActionFeedback(tx('云备份配置已保存'), 'success');
     toast(tx('云备份配置已保存'));
-  } catch (error) { toast(error.message); }
-});
-$('#cloud-backup-now')?.addEventListener('click', async () => {
+  } catch (error) {
+    const message = tx('保存失败：') + error.message;
+    setCloudActionFeedback(message, 'error');
+    toast(message);
+  }
+}));
+$('#cloud-backup-now')?.addEventListener('click', async (event) => runCloudSettingsAction(event.currentTarget, tx('正在全量备份…'), async () => {
   try {
     const cloud = readCloudForm();
     await window.ops.cloudSetConfig(cloud);
@@ -6518,11 +6536,17 @@ $('#cloud-backup-now')?.addEventListener('click', async () => {
       groups: ui.groups || [],
       cloud,
     });
-    applyCloudForm(result.cloud || cloud);
-    toast('备份完成 · ' + (result.meta?.profileCount || 0) + ' 个环境 · ' + Math.round((result.meta?.bytes || 0) / 1024) + ' KB');
+    updateCloudStatus(result.cloud || cloud);
+    const message = tx('备份完成') + ' · ' + (result.meta?.profileCount || 0) + ' ' + tx('个环境') + ' · ' + Math.round((result.meta?.bytes || 0) / 1024) + ' KB';
+    setCloudActionFeedback(message, 'success');
+    toast(message);
     log('Cloud', '全量备份 · ' + (result.meta?.profileCount || 0) + ' 环境');
-  } catch (error) { toast('备份失败：' + error.message); }
-});
+  } catch (error) {
+    const message = tx('备份失败：') + error.message;
+    setCloudActionFeedback(message, 'error');
+    toast(message);
+  }
+}));
 $('#cloud-restore-now')?.addEventListener('click', async () => {
   const cloud = readCloudForm();
   const mode = cloud.restoreMode || 'merge';

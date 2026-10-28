@@ -15,6 +15,9 @@ const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
 const zlib = require('zlib');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
+const readline = require('readline');
 const { assertProfileId, assertSafeProfileChild } = require('./isolation');
 
 const BACKUP_VERSION = 1;
@@ -109,10 +112,14 @@ async function collectProfileDataFiles(profileRoot, profile, limits = {}) {
     try { st = await fsp.lstat(abs); } catch (_) { return; }
     if (st.isSymbolicLink()) return;
     if (st.isFile()) {
-      if (st.size > maxFile || total + st.size > maxTotal) return;
+      if (st.size > maxFile) throw new Error(`浏览器数据文件超过备份单文件大小限制：${rel}`);
+      if (total + st.size > maxTotal) throw new Error(`浏览器数据总大小超过备份限制，无法完整备份：${rel}`);
       const buf = await fsp.readFile(abs);
+      if (buf.length > maxFile || total + buf.length > maxTotal) {
+        throw new Error(`浏览器数据在备份期间增长并超过大小限制：${rel}`);
+      }
       files[rel.replace(/\\/g, '/')] = buf.toString('base64');
-      total += st.size;
+      total += buf.length;
       return;
     }
     if (!st.isDirectory()) return;
@@ -137,7 +144,8 @@ async function restoreProfileDataFiles(profileRoot, files, { unlimitedSize = fal
   let count = 0;
   let totalBytes = 0;
   for (const [rel, b64] of entries) {
-    if (!rel || typeof b64 !== 'string') continue;
+    if (!rel || (typeof b64 !== 'string' && !Array.isArray(b64))) continue;
+    if (Array.isArray(b64) && (!unlimitedSize || b64.some((chunk) => typeof chunk !== 'string'))) throw new Error('备份文件格式无效');
     // Reject absolute / drive-relative paths before any normalization that strips leading slashes
     const raw = String(rel).replace(/\0/g, '');
     if (path.isAbsolute(raw) || path.win32.isAbsolute(raw) || path.posix.isAbsolute(raw)) continue;
@@ -151,14 +159,18 @@ async function restoreProfileDataFiles(profileRoot, files, { unlimitedSize = fal
     const absKey = process.platform === 'win32' ? abs.toLowerCase() : abs;
     const baseKey = process.platform === 'win32' ? base.toLowerCase() : base;
     if (absKey !== baseKey && !absKey.startsWith(baseKey + path.sep)) continue;
-    const decoded = Buffer.from(b64, 'base64');
-    if (!unlimitedSize && decoded.length > 25 * 1024 * 1024) throw new Error('备份单文件超过安全限制');
-    totalBytes += decoded.length;
+    const chunks = Array.isArray(b64) ? b64 : [b64];
+    const size = chunks.reduce((sum, chunk) => sum + Buffer.byteLength(chunk, 'base64'), 0);
+    if (!unlimitedSize && size > 25 * 1024 * 1024) throw new Error('备份单文件超过安全限制');
+    totalBytes += size;
     if (!unlimitedSize && totalBytes > 80 * 1024 * 1024) throw new Error('备份文件总大小超过安全限制');
     await assertSafeProfileChild(profileRoot, abs);
     await fsp.mkdir(path.dirname(abs), { recursive: true });
     await assertSafeProfileChild(profileRoot, abs);
-    await fsp.writeFile(abs, decoded, { flag: 'w', mode: 0o600 });
+    const handle = await fsp.open(abs, 'w', 0o600);
+    try {
+      for (const chunk of chunks) await handle.writeFile(Buffer.from(chunk, 'base64'));
+    } finally { await handle.close(); }
     count += 1;
   }
   return count;
@@ -450,6 +462,13 @@ async function buildBackupPackage({
 
 async function parseBackupPackage(buffer, passphrase = '', { unlimitedSize = false } = {}) {
   const raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+  const magic = raw.subarray(0, 4).toString();
+  if (magic === 'OBP2' || magic === 'OBE2') {
+    if (!unlimitedSize) throw new Error('该本地备份格式仅支持从本地恢复');
+    const encrypted = magic === 'OBE2';
+    if (raw.length < (encrypted ? 48 : 4)) throw new Error('备份格式无效');
+    return parseLocalV2(Readable.from([raw.subarray(encrypted ? 32 : 4, encrypted ? -16 : undefined)]), raw.subarray(0, encrypted ? 32 : 4), encrypted ? raw.subarray(-16) : null, passphrase);
+  }
   if (!unlimitedSize && raw.length > MAX_BACKUP_PACKAGE_BYTES) {
     throw new Error('备份包超过 256 MB 安全限制');
   }
@@ -701,6 +720,143 @@ async function downloadLocal(config, remoteName = REMOTE_NAME) {
   return fsp.readFile(file);
 }
 
+// Local v2 packs are newline-delimited records compressed as a stream. File
+// chunks are independent Base64 strings, so neither a file nor the whole pack
+// needs to become one V8 string during backup.
+async function localBackup(config, options, remoteName = REMOTE_NAME) {
+  const dir = String(config.dir || '').trim();
+  if (!dir) throw new Error('请选择本地备份目录');
+  const { base, rel, target } = safeLocalTarget(dir, remoteName);
+  await assertSafeLocalTarget(base, target);
+  await fsp.mkdir(path.dirname(target), { recursive: true });
+  await assertSafeLocalTarget(base, target);
+  let profiles = Array.isArray(options.profiles) ? options.profiles : [];
+  if (Array.isArray(options.profileIds) && options.profileIds.length) {
+    const ids = new Set(options.profileIds.map(String));
+    profiles = profiles.filter((p) => ids.has(String(p.id)));
+  } else if (!Array.isArray(options.profileIds)) profiles = profiles.filter((p) => p?.advanced?.cloudBackup);
+  profiles = profiles.map((p) => { assertProfileId(p?.id); return { ...stripDataFiles(p), updatedAt: p.updatedAt || nowIso() }; });
+  const createdAt = nowIso();
+  const tmp = path.join(path.dirname(target), `.openbrowser-${crypto.randomBytes(16).toString('hex')}.tmp`);
+  const passphrase = options.passphrase || '';
+  const salt = passphrase ? crypto.randomBytes(16) : null;
+  const iv = passphrase ? crypto.randomBytes(12) : null;
+  const cipher = passphrase ? crypto.createCipheriv('aes-256-gcm', crypto.scryptSync(String(passphrase), salt, 32), iv) : null;
+  const header = cipher ? Buffer.concat([Buffer.from('OBE2'), salt, iv]) : Buffer.from('OBP2');
+  async function* records() {
+    yield JSON.stringify({ type: 'header', body: { version: 2, soft: 'OpenBrowser', createdAt, profiles, groups: options.groups || [], proxies: options.proxies || [], settings: options.settings || {} } }) + '\n';
+    if (!options.includeBrowserData || !options.profileDataRoot) {
+      yield JSON.stringify({ type: 'end' }) + '\n';
+      return;
+    }
+    for (const profile of profiles) {
+      const advanced = profile.advanced || {};
+      if (!advanced.cloudBackup) continue;
+      const root = path.join(options.profileDataRoot, profile.id, 'Default');
+      const candidates = [];
+      if (advanced.syncCookiesOnClose !== false || advanced.saveCookies !== false) candidates.push('Network/Cookies', 'Network/Cookies-journal');
+      if (advanced.syncLocalStorage) candidates.push('Local Storage');
+      if (advanced.syncIndexedDB) candidates.push('IndexedDB');
+      if (advanced.syncPasswords) candidates.push('Login Data', 'Login Data-journal');
+      if (advanced.syncExtensionData) candidates.push('Local Extension Settings', 'Extension State');
+      async function* walk(relPath) {
+        const abs = path.join(root, relPath);
+        let stat;
+        try { stat = await fsp.lstat(abs); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+        if (stat.isSymbolicLink()) return;
+        if (stat.isDirectory()) {
+          for (const name of await fsp.readdir(abs)) yield* walk(path.join(relPath, name));
+        } else if (stat.isFile()) {
+          const name = relPath.replace(/\\/g, '/');
+          yield JSON.stringify({ type: 'file', id: profile.id, name }) + '\n';
+          for await (const chunk of fs.createReadStream(abs, { highWaterMark: 256 * 1024 })) {
+            yield JSON.stringify({ type: 'chunk', data: chunk.toString('base64') }) + '\n';
+          }
+        }
+      }
+      for (const candidate of candidates) yield* walk(candidate);
+    }
+    yield JSON.stringify({ type: 'end' }) + '\n';
+  }
+  try {
+    await fsp.writeFile(tmp, header, { flag: 'wx', mode: 0o600 });
+    const stages = [Readable.from(records()), zlib.createGzip({ level: 9 })];
+    if (cipher) stages.push(cipher);
+    stages.push(fs.createWriteStream(tmp, { flags: 'a' }));
+    await pipeline(...stages);
+    if (cipher) await fsp.appendFile(tmp, cipher.getAuthTag());
+    const hash = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(tmp)) hash.update(chunk);
+    const bytes = (await fsp.stat(tmp)).size;
+    await assertSafeLocalTarget(base, target);
+    await fsp.rename(tmp, target);
+    if (rel === REMOTE_NAME || !rel.includes('/')) {
+      const stamp = nowIso().replace(/[:.]/g, '-');
+      await fsp.copyFile(target, path.join(base, `openbrowser-backup-${stamp}.obpack`), fs.constants.COPYFILE_EXCL).catch(() => {});
+    }
+    return { meta: { version: 2, encrypted: Boolean(cipher), createdAt, profileCount: profiles.length, profileIds: profiles.map((p) => p.id), bytes, sha256: hash.digest('hex') }, result: { provider: 'local', path: target, bytes, remoteName: rel } };
+  } finally { await fsp.rm(tmp, { force: true }); }
+}
+
+async function parseLocalV2(stream, header, tag, passphrase) {
+  const encrypted = header.subarray(0, 4).toString() === 'OBE2';
+  const stages = [stream];
+  if (encrypted) {
+    if (!passphrase) throw new Error('备份已加密，请填写恢复密码');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', crypto.scryptSync(String(passphrase), header.subarray(4, 20), 32), header.subarray(20, 32));
+    decipher.setAuthTag(tag);
+    stages.push(decipher);
+  }
+  const gunzip = zlib.createGunzip();
+  stages.push(gunzip);
+  const done = pipeline(...stages);
+  // Observe errors immediately even while readline is consuming the stream.
+  done.catch(() => {});
+  let body, current, ended = false;
+  try {
+    for await (const line of readline.createInterface({ input: gunzip, crlfDelay: Infinity })) {
+      const record = JSON.parse(line);
+      if (ended) throw new Error('备份格式无效');
+      if (record.type === 'header' && !body && Array.isArray(record.body?.profiles)) {
+        body = record.body;
+        for (const profile of body.profiles) { assertProfileId(profile?.id); delete profile._dataFiles; }
+      } else if (record.type === 'file' && body) {
+        const profile = body.profiles.find((p) => p.id === record.id);
+        if (!profile || typeof record.name !== 'string') throw new Error('备份文件格式无效');
+        profile._dataFiles ||= Object.create(null);
+        if (Object.hasOwn(profile._dataFiles, record.name)) throw new Error('备份文件重复');
+        current = profile._dataFiles[record.name] = [];
+      } else if (record.type === 'chunk' && current && typeof record.data === 'string' && record.data.length <= 350000) current.push(record.data);
+      else if (record.type === 'end' && body) ended = true;
+      else throw new Error('备份格式无效');
+    }
+    await done;
+  } catch (error) { stream.destroy(); gunzip.destroy(); await done.catch(() => {}); throw error; }
+  if (!body || !ended) throw new Error('备份格式无效');
+  return body;
+}
+
+async function downloadLocalBackup(config, remoteName, passphrase) {
+  const dir = String(config.dir || '').trim();
+  if (!dir) throw new Error('请选择本地备份目录');
+  const { base, target } = safeLocalTarget(dir, remoteName);
+  await assertSafeLocalTarget(base, target);
+  const handle = await fsp.open(target, 'r');
+  try {
+    const size = (await handle.stat()).size;
+    const prefix = Buffer.alloc(Math.min(size, 32));
+    await handle.read(prefix, 0, prefix.length, 0);
+    const magic = prefix.subarray(0, 4).toString();
+    if (magic !== 'OBP2' && magic !== 'OBE2') return parseBackupPackage(await handle.readFile(), passphrase, { unlimitedSize: true });
+    const encrypted = magic === 'OBE2';
+    if (size < (encrypted ? 48 : 4)) throw new Error('备份格式无效');
+    const tag = encrypted ? Buffer.alloc(16) : null;
+    if (tag) await handle.read(tag, 0, 16, size - 16);
+    const stream = handle.createReadStream({ start: encrypted ? 32 : 4, end: size - (encrypted ? 17 : 1), autoClose: false });
+    return await parseLocalV2(stream, prefix, tag, passphrase);
+  } finally { await handle.close(); }
+}
+
 /** WebDAV-bridge providers: Alist / OpenList / rclone serve for consumer clouds */
 const WEBDAV_BRIDGE_PROVIDERS = new Set([
   'gdrive', 'google', 'gcs',
@@ -812,6 +968,8 @@ module.exports = {
   withRemoteName,
   upload,
   download,
+  localBackup,
+  downloadLocalBackup,
   encryptPayload,
   decryptPayload,
   safeRemotePath,

@@ -637,7 +637,7 @@ async function runCloudBackup(payload = {}) {
   const groups = Array.isArray(payload.groups) ? payload.groups : (localSettingsCache.uiGroups || []);
   let proxies = [];
   try { proxies = automation?.proxyStore?.list?.({}) || []; } catch (_) {}
-  const { buffer, meta } = await cloudSync.buildBackupPackage({
+  const backupOptions = {
     profiles: allProfiles,
     groups,
     proxies,
@@ -646,10 +646,17 @@ async function runCloudBackup(payload = {}) {
     includeBrowserData: cloud.includeBrowserData !== false,
     passphrase: cloud.passphrase || '',
     profileIds,
-    unlimitedSize: cloudSync.isLocalProvider(cloud.provider),
-  });
+    unlimitedSize: false,
+  };
   const remoteName = payload.remoteName || cloudSync.REMOTE_NAME;
-  const result = await cloudSync.upload(cloud.provider, providerConfigFromCloud(cloud), buffer, remoteName);
+  let meta, result;
+  if (cloudSync.isLocalProvider(cloud.provider)) {
+    ({ meta, result } = await cloudSync.localBackup(providerConfigFromCloud(cloud), backupOptions, remoteName));
+  } else {
+    const backup = await cloudSync.buildBackupPackage(backupOptions);
+    meta = backup.meta;
+    result = await cloudSync.upload(cloud.provider, providerConfigFromCloud(cloud), backup.buffer, remoteName);
+  }
   cloud.lastSyncAt = new Date().toISOString();
   cloud.lastError = '';
   await saveLocalSettings({ ...localSettingsCache, cloud });
@@ -730,12 +737,10 @@ async function runCloudRestore(payload = {}) {
   const mode = String(payload.mode || cloud.restoreMode || 'merge');
   const remoteName = payload.remoteName || cloudSync.REMOTE_NAME;
   const unlimitedSize = cloudSync.isLocalProvider(cloud.provider);
-  const buffer = await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName);
-  const body = await cloudSync.parseBackupPackage(
-    buffer,
-    cloud.passphrase || payload.passphrase || '',
-    { unlimitedSize },
-  );
+  const passphrase = cloud.passphrase || payload.passphrase || '';
+  const body = unlimitedSize
+    ? await cloudSync.downloadLocalBackup(providerConfigFromCloud(cloud), remoteName, passphrase)
+    : await cloudSync.parseBackupPackage(await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName), passphrase, { unlimitedSize });
 
   // optional: only restore subset of profile ids from the pack
   if (Array.isArray(payload.profileIds) && payload.profileIds.length) {
@@ -1868,9 +1873,9 @@ startupPromise = app.whenReady().then(async () => {
       includeBrowserData: cloud.includeBrowserData !== false,
       passphrase: cloud.passphrase || '',
       profileIds: payload?.profileIds || null,
-      // A manually exported file is written to local storage, so it follows
-      // the same unlimited-size policy as the local-directory provider.
-      unlimitedSize: true,
+      // Manual exports share the package limits to avoid unbounded JSON
+      // serialization in the Electron main process.
+      unlimitedSize: false,
     });
     const result = await dialog.showSaveDialog({
       title: '导出 OpenBrowser 备份',
