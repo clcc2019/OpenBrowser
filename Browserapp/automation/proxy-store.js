@@ -206,9 +206,10 @@ function proxyStoreCorruption(message, cause = null) {
 }
 
 function decodeStoredData(raw) {
+  const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw);
   let parsed;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(text);
   } catch (error) {
     throw proxyStoreCorruption(`代理库 JSON 无效: ${error.message}`, error);
   }
@@ -236,6 +237,7 @@ class ProxyStore {
     this.filePath = filePath;
     this.data = { version: 2, items: [] };
     this._mutationQueue = Promise.resolve();
+    this.lastLoadRecovery = null;
   }
 
   _enqueueMutation(operation) {
@@ -255,7 +257,8 @@ class ProxyStore {
     let handle = null;
     try {
       handle = await fsp.open(temporary, 'wx', 0o600);
-      await handle.writeFile(payload, 'utf8');
+      if (Buffer.isBuffer(payload)) await handle.writeFile(payload);
+      else await handle.writeFile(payload, 'utf8');
       await handle.sync();
       await handle.close();
       handle = null;
@@ -274,8 +277,9 @@ class ProxyStore {
   async _persistData(nextData, { allowCorruptReplace = false } = {}) {
     const payload = JSON.stringify(nextData, null, 2);
     let current = { kind: 'missing', raw: null };
+    let raw = null;
     try {
-      const raw = await fsp.readFile(this.filePath, 'utf8');
+      raw = await fsp.readFile(this.filePath);
       decodeStoredData(raw);
       current = { kind: 'valid', raw };
     } catch (error) {
@@ -285,7 +289,6 @@ class ProxyStore {
         // Keep the exact bytes available before replacing a corrupt main file.
         // If this snapshot cannot be written, the original file is left in
         // place and the new state is not written over it.
-        const raw = await fsp.readFile(this.filePath, 'utf8');
         const corruptPath = `${this.filePath}.corrupt-${Date.now()}-${uid()}`;
         try {
           await this._writeAtomic(corruptPath, raw);
@@ -315,6 +318,7 @@ class ProxyStore {
         await this._writeAtomic(this.filePath + '.bak', payload).catch(() => {});
       }
     }
+    return current;
   }
 
   async _readCandidate(candidatePath) {
@@ -363,8 +367,9 @@ class ProxyStore {
     await Promise.all(stale);
   }
 
-  async load() {
+  async load({ recoverCorrupt = false } = {}) {
     return this._enqueueMutation(async () => {
+      this.lastLoadRecovery = null;
       let main = null;
       let mainFailure = null;
       try {
@@ -395,10 +400,22 @@ class ProxyStore {
       }
 
       if (mainFailure?.kind === 'corrupt') {
-        const failure = new Error(`代理库损坏且没有可用备份: ${mainFailure.error.message}`);
-        failure.code = PROXY_STORE_CORRUPTION_CODE;
-        failure.cause = mainFailure.error;
-        throw failure;
+        if (!recoverCorrupt) {
+          const failure = new Error(`代理库损坏且没有可用备份: ${mainFailure.error.message}`);
+          failure.code = PROXY_STORE_CORRUPTION_CODE;
+          failure.cause = mainFailure.error;
+          throw failure;
+        }
+
+        const empty = { version: 2, items: [] };
+        const persisted = await this._persistData(empty, { allowCorruptReplace: true });
+        this.data = empty;
+        this.lastLoadRecovery = {
+          kind: 'corrupt',
+          corruptPath: persisted?.corruptPath || '',
+          message: mainFailure.error.message,
+        };
+        return cloneData(this.data);
       }
 
       const empty = { version: 2, items: [] };

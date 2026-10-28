@@ -42,7 +42,13 @@ async function startAutomation(context = {}) {
   await rpaStore.load();
 
   const proxyStore = new ProxyStore(path.join(userDataPath, 'proxy-library.json'));
-  await proxyStore.load();
+  await proxyStore.load({ recoverCorrupt: true });
+  if (proxyStore.lastLoadRecovery) {
+    const recovery = proxyStore.lastLoadRecovery;
+    console.warn(`[OpenBrowser] proxy library was corrupt and has been reset: ${recovery.message}`);
+    if (recovery.corruptPath) console.warn(`[OpenBrowser] corrupt proxy library preserved at: ${recovery.corruptPath}`);
+    emit({ type: 'proxy-store-recovery', ...recovery });
+  }
   await engine?.setProxyStore?.(proxyStore);
 
   const rpaEngine = new RpaEngine({

@@ -2475,7 +2475,7 @@ document.getElementById('editor-os')?.addEventListener('change', () => {
 
 function profileEngine(id) { return engineProfiles.find((item) => item.id === id) || { running: false, assignedExtensions: [] }; }
 
-function viewMetaFor(view) {
+function viewMetaKeysFor(view) {
   const map = {
     profiles: ['view.profiles', 'view.profiles.sub'],
     'profile-editor': ['view.profile-editor', 'view.profile-editor.sub'],
@@ -2488,7 +2488,11 @@ function viewMetaFor(view) {
     logs: ['view.logs', 'view.logs.sub'],
     system: ['view.system', 'view.system.sub'],
   };
-  const keys = map[view] || map.profiles;
+  return map[view] || map.profiles;
+}
+
+function viewMetaFor(view) {
+  const keys = viewMetaKeysFor(view);
   return [t(keys[0]), t(keys[1])];
 }
 
@@ -2536,8 +2540,14 @@ function switchView(view) {
     else button.removeAttribute('aria-current');
   });
   $$('.view').forEach((section) => section.classList.toggle('active', section.id === `view-${view}`));
+  const metaKeys = viewMetaKeysFor(view);
   const meta = viewMetaFor(view);
-  $('#page-title').textContent = meta[0]; $('#page-subtitle').textContent = meta[1];
+  const pageTitle = $('#page-title');
+  const pageSubtitle = $('#page-subtitle');
+  pageTitle.dataset.i18n = metaKeys[0];
+  pageSubtitle.dataset.i18n = metaKeys[1];
+  pageTitle.textContent = meta[0];
+  pageSubtitle.textContent = meta[1];
   if (view === 'sync') {
     if (loadedViews.has(view) && sessions.length) renderSessions();
     else {
@@ -2570,8 +2580,54 @@ function switchView(view) {
     document.getElementById('rpa-menu-toggle')?.classList.remove('open');
   }
   if (view === 'api-mcp') refreshApiMcpPage();
+  if (view === 'system') requestAnimationFrame(syncSettingsNavigation);
   return true;
 }
+
+let settingsNavigationFrame = 0;
+
+function setSettingsNavigationActive(sectionId) {
+  document.querySelectorAll('.settings-section-link').forEach((link) => {
+    const active = link.dataset.settingsTarget === sectionId;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'location');
+    else link.removeAttribute('aria-current');
+  });
+}
+
+function syncSettingsNavigation() {
+  const view = document.getElementById('view-system');
+  if (!view?.classList.contains('active')) return;
+  const scroller = document.querySelector('.content > main');
+  const sections = [...view.querySelectorAll('[data-settings-section]')];
+  if (!scroller || !sections.length) return;
+  const marker = scroller.getBoundingClientRect().top + 56;
+  let activeSection = sections[0];
+  const atBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4;
+  if (atBottom) {
+    setSettingsNavigationActive(sections.at(-1).id);
+    return;
+  }
+  for (const section of sections) {
+    if (section.getBoundingClientRect().top <= marker) activeSection = section;
+  }
+  setSettingsNavigationActive(activeSection.id);
+}
+
+function scheduleSettingsNavigationSync() {
+  if (settingsNavigationFrame) return;
+  settingsNavigationFrame = requestAnimationFrame(() => {
+    settingsNavigationFrame = 0;
+    syncSettingsNavigation();
+  });
+}
+
+const settingsScroller = document.querySelector('.content > main');
+settingsScroller?.addEventListener('scroll', scheduleSettingsNavigationSync, { passive: true });
+window.addEventListener('resize', scheduleSettingsNavigationSync, { passive: true });
+document.querySelectorAll('.settings-section-link').forEach((link) => {
+  link.addEventListener('click', () => setSettingsNavigationActive(link.dataset.settingsTarget));
+});
 
 // ========== 分组管理 ==========
 function renderGroupsPage() {
@@ -3130,7 +3186,25 @@ function buildProfileRow(profile, info, { groupName, groupColor, network, starti
   return row;
 }
 
+function updateProfileOverview() {
+  const profiles = Array.isArray(ui.profiles) ? ui.profiles : [];
+  const profileIds = new Set(profiles.map((profile) => profile.id));
+  const running = (engineProfiles || []).filter((item) => item.running && profileIds.has(item.id)).length;
+  const proxyProfiles = profiles.filter((profile) => !isDirectProxy(profile.proxy)).length;
+  const runningMetric = document.querySelector('.profile-overview-metric[data-tone="success"]');
+  const total = document.querySelector('#profile-overview-total');
+  const runningTotal = document.querySelector('#profile-overview-running');
+  const proxyTotal = document.querySelector('#profile-overview-proxy');
+  const groupTotal = document.querySelector('#profile-overview-groups');
+  if (total) total.textContent = String(profiles.length);
+  if (runningTotal) runningTotal.textContent = String(running);
+  if (proxyTotal) proxyTotal.textContent = String(proxyProfiles);
+  if (groupTotal) groupTotal.textContent = String(listGroups().length);
+  if (runningMetric) runningMetric.dataset.active = running > 0 ? 'true' : 'false';
+}
+
 function renderProfiles() {
+  updateProfileOverview();
   renderGroupFilterChips();
   const table = $('#profile-table'); table.replaceChildren();
   const filtered = filteredProfilesForView();

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>OpenBrowser</title>
-  <script src="i18n.js?v=20261023-workspace-refresh"></script>
+  <script src="i18n.js?v=20261028-settings-layout"></script>
   <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
   <link rel="stylesheet" href="assets/fonts/pixelify-sans.css?v=20260720-ark">
   <link rel="stylesheet" href="styles.css?v=20260915-editor-workbench">
@@ -18,6 +18,7 @@
   <link rel="stylesheet" href="element-admin.css?v=20260720-start-progress">
   <link rel="stylesheet" href="xai-console.css?v=20260824-interaction-perf">
   <link rel="stylesheet" href="ui-polish.css?v=20261023-profile-perf">
+  <link rel="stylesheet" href="workspace-console.css?v=20261028-settings-layout">
 </head>
 <body>
   <div class="app-shell">
@@ -90,10 +91,35 @@
 
       <main>
         <section class="view active" id="view-profiles">
-          <div class="group-chip-row" id="profile-group-chips"></div>
-          <div class="toolbar profile-primary-toolbar">
-            <div class="toolbar-left"><button class="primary" id="create-profile"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden><button class="outline" id="renumber-profiles" type="button" title="将所有环境按列表顺序重新编号为 1..N"><i data-lucide="hash"></i><span data-i18n="profiles.renumber">重排编号</span></button></div>
-            <label class="search"><i data-lucide="search"></i><input id="profile-search" placeholder="搜索环境 / 分组 / 标签" data-i18n-placeholder="profiles.search"></label>
+          <div class="profile-overview" aria-labelledby="profile-overview-title">
+            <div class="profile-overview-main">
+              <span class="profile-overview-icon" aria-hidden="true"><i data-lucide="layout-dashboard"></i></span>
+              <div class="profile-overview-copy">
+                <span class="profile-overview-kicker" id="profile-overview-title" data-i18n="profiles.overview.title">工作区概览</span>
+                <div class="profile-overview-total"><strong id="profile-overview-total">0</strong><span data-i18n="profiles.overview.total">个环境</span></div>
+              </div>
+            </div>
+            <div class="profile-overview-metrics">
+              <div class="profile-overview-metric" data-tone="success">
+                <span class="profile-overview-metric-label"><i class="profile-overview-dot" aria-hidden="true"></i><span data-i18n="status.running">运行中</span></span>
+                <strong id="profile-overview-running">0</strong>
+              </div>
+              <div class="profile-overview-metric" data-tone="network">
+                <span class="profile-overview-metric-label"><i data-lucide="network" aria-hidden="true"></i><span data-i18n="net.proxy">代理</span></span>
+                <strong id="profile-overview-proxy">0</strong>
+              </div>
+              <div class="profile-overview-metric" data-tone="groups">
+                <span class="profile-overview-metric-label"><i data-lucide="folder-kanban" aria-hidden="true"></i><span data-i18n="profiles.overview.groups">分组</span></span>
+                <strong id="profile-overview-groups">0</strong>
+              </div>
+            </div>
+          </div>
+          <div class="profile-controls">
+            <div class="group-chip-row" id="profile-group-chips"></div>
+            <div class="toolbar profile-primary-toolbar">
+              <div class="toolbar-left"><button class="primary" id="create-profile"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden><button class="outline" id="renumber-profiles" type="button" title="将所有环境按列表顺序重新编号为 1..N"><i data-lucide="hash"></i><span data-i18n="profiles.renumber">重排编号</span></button></div>
+              <label class="search"><i data-lucide="search"></i><input id="profile-search" placeholder="搜索环境 / 分组 / 标签" data-i18n-placeholder="profiles.search"></label>
+            </div>
           </div>
           <div class="profile-selection-bar" id="profile-selection-bar" hidden>
             <strong id="profile-selection-count">已选择 0 个环境</strong>
@@ -926,7 +952,36 @@
             <div class="log-card" id="log-list"></div>
           </div>
         </section>
-        <section class="view" id="view-system"><div class="settings-grid">
+        <section class="view" id="view-system">
+          <div class="settings-workspace">
+            <aside class="settings-rail">
+              <div class="settings-rail-intro">
+                <span class="settings-rail-kicker" data-i18n="nav.system">本地设置</span>
+                <p data-i18n="system.page.desc">管理界面偏好、云同步、浏览器内核和本地数据。</p>
+              </div>
+              <nav class="settings-section-nav" aria-label="设置分区" data-i18n-aria="system.nav.label">
+                <a class="settings-section-link active" href="#settings-general" data-settings-target="settings-general"><i data-lucide="sliders-horizontal" aria-hidden="true"></i><span data-i18n="system.nav.general">通用</span></a>
+                <a class="settings-section-link" href="#settings-cloud" data-settings-target="settings-cloud"><i data-lucide="cloud" aria-hidden="true"></i><span data-i18n="system.nav.cloud">云同步</span></a>
+                <a class="settings-section-link" href="#settings-runtime" data-settings-target="settings-runtime"><i data-lucide="cpu" aria-hidden="true"></i><span data-i18n="system.nav.runtime">浏览器运行时</span></a>
+                <a class="settings-section-link" href="#settings-storage" data-settings-target="settings-storage"><i data-lucide="hard-drive" aria-hidden="true"></i><span data-i18n="system.nav.storage">数据与存储</span></a>
+              </nav>
+              <article class="local-status-card" id="local-status-card">
+                <div class="local-status-row">
+                  <i class="local-status-dot" aria-hidden="true"></i>
+                  <div>
+                    <strong>OpenBrowser</strong>
+                    <small id="sidebar-api-hint" data-i18n="system.running">本地运行中</small>
+                  </div>
+                </div>
+                <p class="local-status-desc" data-i18n="system.controlDesc">本机控制服务运行状态。</p>
+              </article>
+            </aside>
+            <div class="settings-content">
+              <div class="settings-grid">
+<div class="settings-section-heading" id="settings-general" data-settings-section>
+  <span class="settings-section-number" aria-hidden="true">01</span>
+  <div><h2 data-i18n="system.nav.general">通用</h2><p data-i18n="system.group.general.desc">界面语言、版本更新与窗口行为。</p></div>
+</div>
 <article class="storage-settings-card" id="ui-locale-card">
   <div class="storage-settings-head">
     <div>
@@ -940,16 +995,6 @@
     <select id="ui-locale-select" aria-label="UI language"></select>
   </div>
   <p class="network-mode-hint" id="ui-locale-current" style="margin-top:8px"></p>
-</article>
-<article class="local-status-card" id="local-status-card">
-  <div class="local-status-row">
-    <i class="local-status-dot" aria-hidden="true"></i>
-    <div>
-      <strong>OpenBrowser</strong>
-      <small id="sidebar-api-hint" data-i18n="system.running">本地运行中</small>
-    </div>
-  </div>
-  <p class="local-status-desc" data-i18n="system.controlDesc">本机控制服务运行状态。</p>
 </article>
 <article class="storage-settings-card" id="app-update-card">
   <div class="storage-settings-head">
@@ -965,7 +1010,26 @@
   </div>
   <p class="storage-warning" id="app-update-status" role="status" data-i18n="system.update.idle">尚未检查更新。</p>
 </article>
-<article class="storage-settings-card" id="cloud-backup-card">
+<article class="storage-settings-card settings-span-full" id="close-action-card">
+  <div class="storage-settings-head">
+    <div>
+      <h3 data-i18n="system.close.title">关闭窗口行为</h3>
+      <p data-i18n="system.close.desc">控制点击主窗口右上角关闭按钮时，是将程序最小化到系统托盘继续运行后台代理，还是完全退出程序。</p>
+    </div>
+    <span data-i18n="system.close.label">托盘常驻</span>
+  </div>
+  <div class="settings-radio-group">
+    <label><input type="radio" name="close-action-radio" value="ask"> <span data-i18n="system.close.ask">每次询问</span></label>
+    <label><input type="radio" name="close-action-radio" value="tray" checked> <span data-i18n="system.close.tray">最小化到系统托盘（保持浏览器与代理运行）</span></label>
+    <label><input type="radio" name="close-action-radio" value="exit"> <span data-i18n="system.close.exit">退出程序（停止所有运行中的环境）</span></label>
+  </div>
+  <p class="storage-warning" data-i18n="system.close.hint">保持后台运行可保证各个浏览器环境的代理链路不中断。如需完全退出，可在系统托盘图标右键选择「彻底退出」。</p>
+</article>
+<div class="settings-section-heading" id="settings-cloud" data-settings-section>
+  <span class="settings-section-number" aria-hidden="true">02</span>
+  <div><h2 data-i18n="system.nav.cloud">云同步</h2><p data-i18n="system.group.cloud.desc">配置云端备份位置、加密与恢复策略。</p></div>
+</div>
+<article class="storage-settings-card settings-span-full settings-cloud-card" id="cloud-backup-card">
   <div class="storage-settings-head">
     <div>
       <h3>云同步（设置）</h3>
@@ -1081,13 +1145,19 @@
   </div>
   <p class="storage-warning" id="cloud-sync-status">尚未同步。单环境是否同步请在「编辑环境 → 偏好设置 → 云备份」中开关，主列表不放同步开关。</p>
 </article>
-<article class="storage-settings-card" id="kernel-settings-card">
+<div class="settings-section-heading" id="settings-runtime" data-settings-section>
+  <span class="settings-section-number" aria-hidden="true">03</span>
+  <div><h2 data-i18n="system.nav.runtime">浏览器运行时</h2><p data-i18n="system.group.runtime.desc">管理独立内核、运行参数与能力状态。</p></div>
+</div>
+<article class="storage-settings-card settings-span-full" id="kernel-settings-card">
   <div class="storage-settings-head"><div><h3>独立浏览器内核</h3><p>优先使用安装包内置内核；点击下载时使用 <strong>Google Chrome Stable</strong> 正式包。平台目录：<code>kernels/macos-x64</code> · <code>kernels/windows-x64</code> · <code>kernels/macos-arm64</code> · <code>kernels/chrome-stable</code>。</p></div><span id="kernel-status-badge">检测中</span></div>
-  <div class="storage-path-box"><small>内核路径</small><code id="kernel-path">—</code></div>
-  <div class="storage-path-box" style="margin-top:8px"><small>版本 / 来源</small><code id="kernel-version">—</code></div>
-  <div class="storage-path-box" style="margin-top:8px"><small>下次启动实际使用</small><code id="kernel-active-path">—</code></div>
-  <div class="storage-path-box" style="margin-top:8px"><small>启动策略</small><code id="kernel-launch-mode">—</code></div>
-  <div class="storage-path-box" style="margin-top:8px"><small>内核通道</small><code id="kernel-channel">Google Chrome Stable</code></div>
+  <div class="settings-kernel-paths">
+    <div class="storage-path-box"><small>内核路径</small><code id="kernel-path">—</code></div>
+    <div class="storage-path-box"><small>版本 / 来源</small><code id="kernel-version">—</code></div>
+    <div class="storage-path-box"><small>下次启动实际使用</small><code id="kernel-active-path">—</code></div>
+    <div class="storage-path-box"><small>启动策略</small><code id="kernel-launch-mode">—</code></div>
+    <div class="storage-path-box"><small>内核通道</small><code id="kernel-channel">Google Chrome Stable</code></div>
+  </div>
   <div class="storage-actions" style="margin-top:12px">
     <button class="primary" id="kernel-download" type="button">下载 Chrome Stable</button>
     <button class="outline" id="kernel-check-update" type="button">检查 Stable 版本</button>
@@ -1096,12 +1166,48 @@
   </div>
   <label class="check-row" style="margin-top:12px;display:flex;gap:8px;align-items:center"><input id="kernel-prefer-independent" type="checkbox" checked> 优先使用独立内核（推荐）</label>
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center"><input id="kernel-allow-system" type="checkbox"> 允许手动回退到本机浏览器（默认关闭）</label>
-  <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center">手动选择回退浏览器（Windows 可选 Chrome 或 Edge）<select id="kernel-system-browser"><option value="">未选择</option></select></label>
+  <label class="settings-select-row"><span>手动选择回退浏览器（Windows 可选 Chrome 或 Edge）</span><select id="kernel-system-browser"><option value="">未选择</option></select></label>
   <p class="storage-warning" id="kernel-progress">点击下载会获取 Google Chrome Stable 正式包并校验，不使用 Chrome for Testing 包。默认不会自动回退到本机浏览器。</p>
 </article>
-<article><h3>运行时</h3><dl id="runtime-info"></dl></article><article><h3>能力状态</h3><dl><div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div><div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div><div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div><div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div><div><dt>运行模式</dt><dd class="ok">纯本地</dd></div><div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div></dl></article>
-<article class="storage-settings-card" id="close-action-card"><div class="storage-settings-head"><div><h3 data-i18n="system.close.title">关闭窗口行为</h3><p data-i18n="system.close.desc">控制点击主窗口右上角关闭按钮时，是将程序最小化到系统托盘继续运行后台代理，还是完全退出程序。</p></div><span data-i18n="system.close.label">托盘常驻</span></div><div class="form-row" style="margin-top:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap;"><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="ask"> <span data-i18n="system.close.ask">每次询问</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="tray" checked> <span data-i18n="system.close.tray">最小化到系统托盘（保持浏览器与代理运行）</span></label><label style="display:flex;gap:6px;align-items:center;cursor:pointer;"><input type="radio" name="close-action-radio" value="exit"> <span data-i18n="system.close.exit">退出程序（停止所有运行中的环境）</span></label></div><p class="storage-warning" style="margin-top:10px;" data-i18n="system.close.hint">保持后台运行可保证各个浏览器环境的代理链路不中断。如需完全退出，可在系统托盘图标右键选择「彻底退出」。</p></article>
-<article class="storage-settings-card"><div class="storage-settings-head"><div><h3>环境缓存与数据位置</h3><p>各环境的 Chrome 用户目录、Cookie、缓存、本地存储、IndexedDB 和会话数据都会保存在这里。</p></div><span>本地保存</span></div><div class="storage-path-box"><small>当前目录</small><code id="profile-storage-path">正在读取...</code></div><div class="storage-actions"><button class="primary" id="choose-profile-storage" type="button">选择新目录</button><button class="outline" id="open-profile-storage" type="button">打开目录</button><button class="outline" id="reset-profile-storage" type="button">恢复默认位置</button></div><p class="storage-warning">修改前请先停止所有环境。新位置在环境下次启动时生效；旧目录中的数据不会自动移动或删除。</p></article></div></section>
+<article class="storage-settings-card settings-diagnostic-card" id="runtime-card">
+  <h3 data-i18n="system.runtime">运行时</h3>
+  <dl id="runtime-info"></dl>
+</article>
+<article class="storage-settings-card settings-diagnostic-card" id="capability-card">
+  <h3 data-i18n="system.capabilities">能力状态</h3>
+  <dl>
+    <div><dt>真实浏览器进程</dt><dd class="ok">已启用</dd></div>
+    <div><dt>独立用户目录</dt><dd class="ok">已启用</dd></div>
+    <div><dt>扩展批量加载</dt><dd class="ok">已启用</dd></div>
+    <div><dt>Chrome DevTools Protocol</dt><dd class="ok">已启用</dd></div>
+    <div><dt>运行模式</dt><dd class="ok">纯本地</dd></div>
+    <div><dt>本机接口</dt><dd class="ok">127.0.0.1:50325</dd></div>
+  </dl>
+</article>
+<div class="settings-section-heading" id="settings-storage" data-settings-section>
+  <span class="settings-section-number" aria-hidden="true">04</span>
+  <div><h2 data-i18n="system.nav.storage">数据与存储</h2><p data-i18n="system.group.storage.desc">设置环境数据目录并查看当前路径。</p></div>
+</div>
+<article class="storage-settings-card settings-span-full" id="profile-storage-card">
+  <div class="storage-settings-head">
+    <div>
+      <h3 data-i18n="system.storage">环境缓存与数据位置</h3>
+      <p>各环境的 Chrome 用户目录、Cookie、缓存、本地存储、IndexedDB 和会话数据都会保存在这里。</p>
+    </div>
+    <span>本地保存</span>
+  </div>
+  <div class="storage-path-box"><small data-i18n="system.storage.current">当前目录</small><code id="profile-storage-path">正在读取...</code></div>
+  <div class="storage-actions">
+    <button class="primary" id="choose-profile-storage" type="button" data-i18n="system.storage.choose">选择新目录</button>
+    <button class="outline" id="open-profile-storage" type="button" data-i18n="system.storage.open">打开目录</button>
+    <button class="outline" id="reset-profile-storage" type="button" data-i18n="system.storage.reset">恢复默认位置</button>
+  </div>
+  <p class="storage-warning">修改前请先停止所有环境。新位置在环境下次启动时生效；旧目录中的数据不会自动移动或删除。</p>
+</article>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
     </div>
   </div>
@@ -1435,6 +1541,6 @@
   <script src="environment-audit.js?v=20260719-environment-audit"></script>
   <script src="assets/vendor/lucide.min.js"></script>
   <script src="automation/locale-from-country.js?v=20261016-shared-locale"></script>
-  <script src="renderer.js?v=20261023-profile-perf"></script>
+  <script src="renderer.js?v=20261028-settings-layout"></script>
 </body>
 </html>

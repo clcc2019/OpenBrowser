@@ -230,6 +230,20 @@ async function main() {
     }), (error) => error.code === 'ERR_PROXY_STORE_CORRUPT' && /损坏且没有可用备份/.test(error.message));
     assert.strictEqual(await fs.readFile(unrecoverablePath, 'utf8'), '{still-corrupt');
 
+    const startupRecoveryPath = path.join(directory, 'startup-recovery.json');
+    const corruptBinary = Buffer.from([0x4f, 0x42, 0x53, 0x31, 0x76, 0x31, 0x31, 0xff, 0xfe, 0x80]);
+    await fs.writeFile(startupRecoveryPath, corruptBinary);
+    const startupRecoveryStore = new ProxyStore(startupRecoveryPath);
+    const startupRecovered = await startupRecoveryStore.load({ recoverCorrupt: true });
+    assert.deepStrictEqual(startupRecovered, { version: 2, items: [] });
+    assert.strictEqual(startupRecoveryStore.lastLoadRecovery?.kind, 'corrupt');
+    assert.ok(startupRecoveryStore.lastLoadRecovery?.corruptPath);
+    assert.strictEqual(
+      Buffer.compare(await fs.readFile(startupRecoveryStore.lastLoadRecovery.corruptPath), corruptBinary),
+      0,
+    );
+    assert.deepStrictEqual(JSON.parse(await fs.readFile(startupRecoveryPath, 'utf8')), { version: 2, items: [] });
+
     const invalidShapePath = path.join(directory, 'invalid-shape.json');
     const invalidShapeBytes = '{"version":2,"items":{}}';
     await fs.writeFile(invalidShapePath, invalidShapeBytes);
@@ -297,7 +311,7 @@ async function main() {
     assert.strictEqual(replacedRestart.list().length, 1);
     assert.strictEqual(replacedRestart.get('long-credential').password, longPassword);
 
-    console.log('PROXY_PERSISTENCE_SELFTEST_OK migration=1 restart=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 blank_patch=1 masked_patch=1 explicit_clear=1 clear_restart=1 duplicate_ids=1 mutation_queue=1 flush=1 tmp_scan=1 backup_recovery=1 corrupt_preserved=1 rollback=1 replace_all=1 long_credentials=1');
+    console.log('PROXY_PERSISTENCE_SELFTEST_OK migration=1 restart=1 encoding=1 escaped_separator=1 special_credentials=1 remark=1 blank_patch=1 masked_patch=1 explicit_clear=1 clear_restart=1 duplicate_ids=1 mutation_queue=1 flush=1 tmp_scan=1 backup_recovery=1 corrupt_preserved=1 startup_recovery=1 rollback=1 replace_all=1 long_credentials=1');
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
