@@ -19,10 +19,13 @@ const { assertProfileId, assertSafeProfileChild } = require('./isolation');
 
 const BACKUP_VERSION = 1;
 const REMOTE_NAME = 'openbrowser-backup.obpack';
-const MAX_BACKUP_PACKAGE_BYTES = 100 * 1024 * 1024;
-const MAX_BACKUP_JSON_BYTES = 120 * 1024 * 1024;
+// Keep the serialized and packaged limits aligned. Browser data is embedded as
+// Base64 in the JSON payload, so the serialized backup can be larger than the
+// raw browser-data budget even when the latter is respected.
+const MAX_BACKUP_PACKAGE_BYTES = 256 * 1024 * 1024;
+const MAX_BACKUP_JSON_BYTES = 256 * 1024 * 1024;
 const MAX_BROWSER_DATA_BYTES = 80 * 1024 * 1024;
-const MAX_REMOTE_RESPONSE_BYTES = 120 * 1024 * 1024;
+const MAX_REMOTE_RESPONSE_BYTES = 256 * 1024 * 1024;
 const MAX_REMOTE_ERROR_BYTES = 64 * 1024;
 const SAFE_GITHUB_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
 const SAFE_GITHUB_BRANCH = /^[A-Za-z0-9._\/-]{1,255}$/;
@@ -97,8 +100,8 @@ async function collectProfileDataFiles(profileRoot, profile, limits = {}) {
     candidates.push(['Local Extension Settings', path.join(defaultDir, 'Local Extension Settings')]);
     candidates.push(['Extension State', path.join(defaultDir, 'Extension State')]);
   }
-  const maxFile = limits.maxFileBytes || 25 * 1024 * 1024;
-  const maxTotal = limits.maxTotalBytes || 80 * 1024 * 1024;
+  const maxFile = limits.maxFileBytes ?? 25 * 1024 * 1024;
+  const maxTotal = limits.maxTotalBytes ?? 80 * 1024 * 1024;
   let total = 0;
 
   async function walk(rel, abs) {
@@ -126,11 +129,11 @@ async function collectProfileDataFiles(profileRoot, profile, limits = {}) {
   return files;
 }
 
-async function restoreProfileDataFiles(profileRoot, files) {
+async function restoreProfileDataFiles(profileRoot, files, { unlimitedSize = false } = {}) {
   if (!files || typeof files !== 'object') return 0;
   const base = path.resolve(profileRoot, 'Default');
   const entries = Object.entries(files);
-  if (entries.length > 2000) throw new Error('备份文件数量超过安全限制');
+  if (!unlimitedSize && entries.length > 2000) throw new Error('备份文件数量超过安全限制');
   let count = 0;
   let totalBytes = 0;
   for (const [rel, b64] of entries) {
@@ -149,9 +152,9 @@ async function restoreProfileDataFiles(profileRoot, files) {
     const baseKey = process.platform === 'win32' ? base.toLowerCase() : base;
     if (absKey !== baseKey && !absKey.startsWith(baseKey + path.sep)) continue;
     const decoded = Buffer.from(b64, 'base64');
-    if (decoded.length > 25 * 1024 * 1024) throw new Error('备份单文件超过安全限制');
+    if (!unlimitedSize && decoded.length > 25 * 1024 * 1024) throw new Error('备份单文件超过安全限制');
     totalBytes += decoded.length;
-    if (totalBytes > 80 * 1024 * 1024) throw new Error('备份文件总大小超过安全限制');
+    if (!unlimitedSize && totalBytes > 80 * 1024 * 1024) throw new Error('备份文件总大小超过安全限制');
     await assertSafeProfileChild(profileRoot, abs);
     await fsp.mkdir(path.dirname(abs), { recursive: true });
     await assertSafeProfileChild(profileRoot, abs);
@@ -297,6 +300,10 @@ function profileRemoteName(id) {
   return `profiles/openbrowser-profile-${safe}.obpack`;
 }
 
+function isLocalProvider(provider) {
+  return String(provider || 'local').toLowerCase() === 'local';
+}
+
 function safeRemotePath(value, fallback = '') {
   const raw = String(value || fallback).trim().replace(/\\/g, '/');
   if (!raw || raw.includes('\0') || raw.startsWith('/') || /^[A-Za-z]:\//.test(raw)) throw new Error('远程备份路径无效');
@@ -376,6 +383,7 @@ async function buildBackupPackage({
   includeBrowserData = true,
   passphrase = '',
   profileIds = null,
+  unlimitedSize = false,
 }) {
   let list = Array.isArray(profiles) ? profiles : [];
   if (Array.isArray(profileIds) && profileIds.length) {
@@ -394,15 +402,21 @@ async function buildBackupPackage({
     const item = { ...profile, updatedAt: profile.updatedAt || nowIso() };
     if (includeBrowserData && profileDataRoot && profile?.id) {
       const root = path.join(profileDataRoot, profile.id);
+      const browserDataLimit = unlimitedSize ? Infinity : MAX_BROWSER_DATA_BYTES;
       item._dataFiles = await collectProfileDataFiles(root, profile, {
-        maxTotalBytes: Math.max(0, MAX_BROWSER_DATA_BYTES - browserDataBytes),
+        maxFileBytes: unlimitedSize ? Infinity : undefined,
+        maxTotalBytes: Number.isFinite(browserDataLimit)
+          ? Math.max(0, browserDataLimit - browserDataBytes)
+          : Infinity,
       });
       for (const encoded of Object.values(item._dataFiles)) {
         browserDataBytes += Math.floor(String(encoded).length * 3 / 4);
       }
     }
     estimatedJsonBytes += Buffer.byteLength(JSON.stringify(item));
-    if (estimatedJsonBytes > MAX_BACKUP_JSON_BYTES) throw new Error('备份配置内容超过 120 MB 安全限制');
+    if (!unlimitedSize && estimatedJsonBytes > MAX_BACKUP_JSON_BYTES) {
+      throw new Error('备份配置内容超过 256 MB 安全限制');
+    }
     packedProfiles.push(item);
   }
   const body = {
@@ -415,7 +429,9 @@ async function buildBackupPackage({
     settings,
   };
   const json = Buffer.from(JSON.stringify(body), 'utf8');
-  if (json.length > MAX_BACKUP_JSON_BYTES) throw new Error('备份内容超过 120 MB 安全限制');
+  if (!unlimitedSize && json.length > MAX_BACKUP_JSON_BYTES) {
+    throw new Error('备份内容超过 256 MB 安全限制');
+  }
   const gz = zlib.gzipSync(json, { level: 9 });
   const { encrypted, data } = encryptPayload(gz, passphrase);
   return {
@@ -432,18 +448,26 @@ async function buildBackupPackage({
   };
 }
 
-async function parseBackupPackage(buffer, passphrase = '') {
+async function parseBackupPackage(buffer, passphrase = '', { unlimitedSize = false } = {}) {
   const raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
-  if (raw.length > MAX_BACKUP_PACKAGE_BYTES) throw new Error('备份包超过 100 MB 安全限制');
+  if (!unlimitedSize && raw.length > MAX_BACKUP_PACKAGE_BYTES) {
+    throw new Error('备份包超过 256 MB 安全限制');
+  }
   const decrypted = decryptPayload(raw, passphrase);
-  if (decrypted.length > MAX_BACKUP_PACKAGE_BYTES) throw new Error('备份包解密后超过安全限制');
+  if (!unlimitedSize && decrypted.length > MAX_BACKUP_PACKAGE_BYTES) {
+    throw new Error('备份包解密后超过安全限制');
+  }
   let jsonBuf;
   try {
-    jsonBuf = zlib.gunzipSync(decrypted, { maxOutputLength: MAX_BACKUP_JSON_BYTES });
+    jsonBuf = unlimitedSize
+      ? zlib.gunzipSync(decrypted)
+      : zlib.gunzipSync(decrypted, { maxOutputLength: MAX_BACKUP_JSON_BYTES });
   } catch (_) {
     jsonBuf = decrypted;
   }
-  if (jsonBuf.length > MAX_BACKUP_JSON_BYTES) throw new Error('备份内容超过 120 MB 安全限制');
+  if (!unlimitedSize && jsonBuf.length > MAX_BACKUP_JSON_BYTES) {
+    throw new Error('备份内容超过 256 MB 安全限制');
+  }
   const body = JSON.parse(jsonBuf.toString('utf8'));
   if (!body || !Array.isArray(body.profiles)) throw new Error('备份格式无效');
   return body;
@@ -774,6 +798,7 @@ module.exports = {
   REMOTE_NAME,
   defaultCloudConfig,
   cloudPresets,
+  isLocalProvider,
   isWebDavBridgeProvider,
   WEBDAV_BRIDGE_PROVIDERS,
   buildBackupPackage,

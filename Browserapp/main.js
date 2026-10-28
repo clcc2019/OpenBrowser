@@ -646,6 +646,7 @@ async function runCloudBackup(payload = {}) {
     includeBrowserData: cloud.includeBrowserData !== false,
     passphrase: cloud.passphrase || '',
     profileIds,
+    unlimitedSize: cloudSync.isLocalProvider(cloud.provider),
   });
   const remoteName = payload.remoteName || cloudSync.REMOTE_NAME;
   const result = await cloudSync.upload(cloud.provider, providerConfigFromCloud(cloud), buffer, remoteName);
@@ -656,7 +657,12 @@ async function runCloudBackup(payload = {}) {
   return { success: true, meta, result, cloud };
 }
 
-async function applyBackupBody(body, { mode = 'merge', localProfiles = null, localGroups = null } = {}) {
+async function applyBackupBody(body, {
+  mode = 'merge',
+  localProfiles = null,
+  localGroups = null,
+  unlimitedSize = false,
+} = {}) {
   const profileRoot = engine?.getProfileDataRoot?.() || localSettingsCache.profileDataRoot;
   const remoteProfiles = (body.profiles || []).map((p) => {
     const copy = { ...p };
@@ -684,7 +690,11 @@ async function applyBackupBody(body, { mode = 'merge', localProfiles = null, loc
   for (const profile of merged.profiles) {
     const files = dataById.get(profile.id);
     if (files) {
-      restoredFiles += await cloudSync.restoreProfileDataFiles(path.join(profileRoot, profile.id), files);
+      restoredFiles += await cloudSync.restoreProfileDataFiles(
+        path.join(profileRoot, profile.id),
+        files,
+        { unlimitedSize },
+      );
     }
   }
 
@@ -719,8 +729,13 @@ async function runCloudRestore(payload = {}) {
   const cloud = { ...localSettingsCache.cloud, ...(payload.cloud || {}) };
   const mode = String(payload.mode || cloud.restoreMode || 'merge');
   const remoteName = payload.remoteName || cloudSync.REMOTE_NAME;
+  const unlimitedSize = cloudSync.isLocalProvider(cloud.provider);
   const buffer = await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName);
-  const body = await cloudSync.parseBackupPackage(buffer, cloud.passphrase || payload.passphrase || '');
+  const body = await cloudSync.parseBackupPackage(
+    buffer,
+    cloud.passphrase || payload.passphrase || '',
+    { unlimitedSize },
+  );
 
   // optional: only restore subset of profile ids from the pack
   if (Array.isArray(payload.profileIds) && payload.profileIds.length) {
@@ -732,6 +747,7 @@ async function runCloudRestore(payload = {}) {
     mode,
     localProfiles: payload.localProfiles,
     localGroups: payload.localGroups,
+    unlimitedSize,
   });
 
   cloud.lastSyncAt = new Date().toISOString();
@@ -770,6 +786,7 @@ async function runCloudProfilePush(payload = {}) {
       includeBrowserData: cloud.includeBrowserData !== false,
       passphrase: cloud.passphrase || '',
       profileIds: [id],
+      unlimitedSize: cloudSync.isLocalProvider(cloud.provider),
     });
     const remoteName = cloudSync.profileRemoteName(id);
     const result = await cloudSync.upload(cloud.provider, providerConfigFromCloud(cloud), buffer, remoteName);
@@ -793,16 +810,21 @@ async function runCloudProfilePull(payload = {}) {
   let combinedRemote = [];
   let restoredFiles = 0;
   const per = [];
+  const unlimitedSize = cloudSync.isLocalProvider(cloud.provider);
   for (const id of ids) {
     const remoteName = cloudSync.profileRemoteName(id);
     const buffer = await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName);
-    const body = await cloudSync.parseBackupPackage(buffer, cloud.passphrase || payload.passphrase || '');
+    const body = await cloudSync.parseBackupPackage(
+      buffer,
+      cloud.passphrase || payload.passphrase || '',
+      { unlimitedSize },
+    );
     combinedRemote = combinedRemote.concat(body.profiles || []);
     per.push({ id, remoteName, count: (body.profiles || []).length, createdAt: body.createdAt });
   }
   const applied = await applyBackupBody(
     { profiles: combinedRemote, groups: payload.groups || localSettingsCache.uiGroups || [], proxies: [] },
-    { mode, localProfiles, localGroups: payload.localGroups }
+    { mode, localProfiles, localGroups: payload.localGroups, unlimitedSize }
   );
   restoredFiles = applied.restoredFiles;
   cloud.lastSyncAt = new Date().toISOString();
@@ -1846,6 +1868,9 @@ startupPromise = app.whenReady().then(async () => {
       includeBrowserData: cloud.includeBrowserData !== false,
       passphrase: cloud.passphrase || '',
       profileIds: payload?.profileIds || null,
+      // A manually exported file is written to local storage, so it follows
+      // the same unlimited-size policy as the local-directory provider.
+      unlimitedSize: true,
     });
     const result = await dialog.showSaveDialog({
       title: '导出 OpenBrowser 备份',
@@ -1864,12 +1889,17 @@ startupPromise = app.whenReady().then(async () => {
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
     const buffer = await fsp.readFile(result.filePaths[0]);
-    const body = await cloudSync.parseBackupPackage(buffer, payload?.passphrase || localSettingsCache.cloud?.passphrase || '');
+    const body = await cloudSync.parseBackupPackage(
+      buffer,
+      payload?.passphrase || localSettingsCache.cloud?.passphrase || '',
+      { unlimitedSize: true },
+    );
     const mode = String(payload?.mode || localSettingsCache.cloud?.restoreMode || 'merge');
     const applied = await applyBackupBody(body, {
       mode,
       localProfiles: payload?.localProfiles,
       localGroups: payload?.localGroups,
+      unlimitedSize: true,
     });
     return { success: true, mode, ...applied };
   });
