@@ -4,6 +4,8 @@ const assert = require('assert');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
+const zlib = require('zlib');
 const cloud = require('./cloud-sync');
 
 async function main() {
@@ -83,6 +85,98 @@ async function main() {
     console.log('  PASS  encrypted local backup and restore over 80 MB');
   } finally {
     await fs.rm(localRoot, { recursive: true, force: true });
+  }
+
+  const splitRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-cloud-split-'));
+  try {
+    const config = { dir: splitRoot };
+    const profiles = ['one', 'two'].map((id) => ({ id, advanced: { cloudBackup: true } }));
+    const options = { profiles, groups: [{ id: 'group' }], passphrase: 'secret' };
+    const backup = await cloud.localBackupSet(config, options);
+    assert.strictEqual(backup.result.files.length, 2);
+    for (const [i, name] of backup.result.files.entries()) {
+      const body = await cloud.downloadLocalBackup(config, name, 'secret');
+      assert.deepStrictEqual(body.profiles.map((p) => p.id), [profiles[i].id]);
+    }
+    assert.deepStrictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles.map((p) => p.id), ['one', 'two']);
+    await assert.rejects(() => cloud.downloadLocalBackupSet(config, 'wrong'));
+    await cloud.localBackupSet(config, { ...options, profiles: [profiles[1]] });
+    assert.deepStrictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles.map((p) => p.id), ['two']);
+    await fs.rm(path.join(splitRoot, 'openbrowser-backup-index.json'));
+    await cloud.localBackup(config, options);
+    assert.strictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles.length, 2);
+    console.log('  PASS  per-environment backup, latest snapshot, and legacy restore');
+  } finally {
+    await fs.rm(splitRoot, { recursive: true, force: true });
+  }
+
+  const binaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-cloud-binary-'));
+  try {
+    const data = crypto.randomBytes(1024 * 1024);
+    const profile = { id: 'binary', advanced: { cloudBackup: true, syncLocalStorage: true } };
+    const dataDir = path.join(binaryRoot, 'data', 'binary', 'Default', 'Local Storage');
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.writeFile(path.join(dataDir, 'data.bin'), data);
+    const config = { dir: path.join(binaryRoot, 'backups') };
+    const backup = await cloud.localBackup(config, { profiles: [profile], profileDataRoot: path.join(binaryRoot, 'data'), includeBrowserData: true }, 'profiles/binary.obpack');
+    const restored = await cloud.downloadLocalBackup(config, backup.result.remoteName, '');
+    assert.deepStrictEqual(Buffer.concat(restored.profiles[0]._dataFiles['Local Storage/data.bin']), data);
+    const records = [
+      { type: 'header', body: { version: 2, profiles: [profile] } },
+      { type: 'file', id: 'binary', name: 'Local Storage/data.bin' },
+      ...Array.from({ length: 4 }, (_, i) => ({ type: 'chunk', data: data.subarray(i * 256 * 1024, (i + 1) * 256 * 1024).toString('base64') })),
+      { type: 'end' },
+    ].map((record) => JSON.stringify(record) + '\n').join('');
+    const v2 = Buffer.concat([Buffer.from('OBP2'), zlib.gzipSync(records, { level: 9 })]);
+    await fs.writeFile(path.join(config.dir, 'legacy-v2.obpack'), v2);
+    const old = await cloud.downloadLocalBackup(config, 'legacy-v2.obpack', '');
+    assert.deepStrictEqual(Buffer.concat(old.profiles[0]._dataFiles['Local Storage/data.bin'].map((chunk) => Buffer.from(chunk, 'base64'))), data);
+    assert.ok(backup.meta.bytes < v2.length, `binary package ${backup.meta.bytes} should be smaller than v2 ${v2.length}`);
+    console.log(`  PASS  binary backup round-trip and v2 compatibility (${backup.meta.bytes} vs ${v2.length} bytes)`);
+  } finally {
+    await fs.rm(binaryRoot, { recursive: true, force: true });
+  }
+
+  const incrementalRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-incremental-'));
+  try {
+    const source = { dir: path.join(incrementalRoot, 'source') };
+    const destination = { dir: path.join(incrementalRoot, 'destination') };
+    const dataRoot = path.join(incrementalRoot, 'data');
+    const profiles = ['a', 'b'].map((id) => ({ id, advanced: { cloudBackup: true, syncLocalStorage: true } }));
+    for (const profile of profiles) {
+      const dir = path.join(dataRoot, profile.id, 'Default', 'Local Storage');
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, 'data'), profile.id);
+    }
+    const options = { profiles, profileDataRoot: dataRoot, includeBrowserData: true, passphrase: 'secret' };
+    const first = await cloud.localBackupSet(source, options);
+    assert.strictEqual(first.meta.changedCount, 2);
+    await fs.cp(source.dir, destination.dir, { recursive: true });
+    const unchanged = await cloud.localBackupSet(source, options);
+    assert.strictEqual(unchanged.meta.changedCount, 0);
+    assert.deepStrictEqual(unchanged.result.files, first.result.files);
+    await fs.writeFile(path.join(dataRoot, 'a', 'Default', 'Local Storage', 'data'), 'changed');
+    const changed = await cloud.localBackupSet(source, options);
+    assert.strictEqual(changed.meta.changedCount, 1);
+    assert.strictEqual(changed.meta.reusedCount, 1);
+    assert.strictEqual(changed.result.files[1], first.result.files[1]);
+    for (const name of changed.result.changedFiles) {
+      await fs.mkdir(path.dirname(path.join(destination.dir, name)), { recursive: true });
+      await fs.copyFile(path.join(source.dir, name), path.join(destination.dir, name));
+    }
+    await fs.copyFile(path.join(source.dir, 'openbrowser-backup-index.json'), path.join(destination.dir, 'openbrowser-backup-index.json'));
+    const restored = await cloud.downloadLocalBackupSet(destination, 'secret');
+    assert.strictEqual(Buffer.concat(restored.profiles[0]._dataFiles['Local Storage/data']).toString(), 'changed');
+    assert.strictEqual(Buffer.concat(restored.profiles[1]._dataFiles['Local Storage/data']).toString(), 'b');
+    const newPassword = await cloud.localBackupSet(source, { ...options, passphrase: 'new secret' });
+    assert.strictEqual(newPassword.meta.changedCount, 2);
+    await fs.rm(path.join(source.dir, newPassword.result.files[0]));
+    await assert.rejects(() => cloud.downloadLocalBackupSet(source, 'new secret'), /备份文件缺失/);
+    const repaired = await cloud.localBackupSet(source, { ...options, passphrase: 'new secret' });
+    assert.strictEqual(repaired.meta.changedCount, 1);
+    console.log('  PASS  incremental reuse, transfer, restore, password change and missing-file repair');
+  } finally {
+    await fs.rm(incrementalRoot, { recursive: true, force: true });
   }
 }
 

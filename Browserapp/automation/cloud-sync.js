@@ -22,6 +22,7 @@ const { assertProfileId, assertSafeProfileChild } = require('./isolation');
 
 const BACKUP_VERSION = 1;
 const REMOTE_NAME = 'openbrowser-backup.obpack';
+const LOCAL_INDEX_NAME = 'openbrowser-backup-index.json';
 // Keep the serialized and packaged limits aligned. Browser data is embedded as
 // Base64 in the JSON payload, so the serialized backup can be larger than the
 // raw browser-data budget even when the latter is respected.
@@ -145,7 +146,7 @@ async function restoreProfileDataFiles(profileRoot, files, { unlimitedSize = fal
   let totalBytes = 0;
   for (const [rel, b64] of entries) {
     if (!rel || (typeof b64 !== 'string' && !Array.isArray(b64))) continue;
-    if (Array.isArray(b64) && (!unlimitedSize || b64.some((chunk) => typeof chunk !== 'string'))) throw new Error('备份文件格式无效');
+    if (Array.isArray(b64) && (!unlimitedSize || b64.some((chunk) => typeof chunk !== 'string' && !Buffer.isBuffer(chunk)))) throw new Error('备份文件格式无效');
     // Reject absolute / drive-relative paths before any normalization that strips leading slashes
     const raw = String(rel).replace(/\0/g, '');
     if (path.isAbsolute(raw) || path.win32.isAbsolute(raw) || path.posix.isAbsolute(raw)) continue;
@@ -160,7 +161,7 @@ async function restoreProfileDataFiles(profileRoot, files, { unlimitedSize = fal
     const baseKey = process.platform === 'win32' ? base.toLowerCase() : base;
     if (absKey !== baseKey && !absKey.startsWith(baseKey + path.sep)) continue;
     const chunks = Array.isArray(b64) ? b64 : [b64];
-    const size = chunks.reduce((sum, chunk) => sum + Buffer.byteLength(chunk, 'base64'), 0);
+    const size = chunks.reduce((sum, chunk) => sum + (Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(chunk, 'base64')), 0);
     if (!unlimitedSize && size > 25 * 1024 * 1024) throw new Error('备份单文件超过安全限制');
     totalBytes += size;
     if (!unlimitedSize && totalBytes > 80 * 1024 * 1024) throw new Error('备份文件总大小超过安全限制');
@@ -169,7 +170,7 @@ async function restoreProfileDataFiles(profileRoot, files, { unlimitedSize = fal
     await assertSafeProfileChild(profileRoot, abs);
     const handle = await fsp.open(abs, 'w', 0o600);
     try {
-      for (const chunk of chunks) await handle.writeFile(Buffer.from(chunk, 'base64'));
+      for (const chunk of chunks) await handle.writeFile(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'base64'));
     } finally { await handle.close(); }
     count += 1;
   }
@@ -463,11 +464,12 @@ async function buildBackupPackage({
 async function parseBackupPackage(buffer, passphrase = '', { unlimitedSize = false } = {}) {
   const raw = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
   const magic = raw.subarray(0, 4).toString();
-  if (magic === 'OBP2' || magic === 'OBE2') {
+  if (['OBP2', 'OBE2', 'OBP3', 'OBE3'].includes(magic)) {
     if (!unlimitedSize) throw new Error('该本地备份格式仅支持从本地恢复');
-    const encrypted = magic === 'OBE2';
+    const encrypted = magic === 'OBE2' || magic === 'OBE3';
     if (raw.length < (encrypted ? 48 : 4)) throw new Error('备份格式无效');
-    return parseLocalV2(Readable.from([raw.subarray(encrypted ? 32 : 4, encrypted ? -16 : undefined)]), raw.subarray(0, encrypted ? 32 : 4), encrypted ? raw.subarray(-16) : null, passphrase);
+    const parser = magic.endsWith('3') ? parseLocalV3 : parseLocalV2;
+    return parser(Readable.from([raw.subarray(encrypted ? 32 : 4, encrypted ? -16 : undefined)]), raw.subarray(0, encrypted ? 32 : 4), encrypted ? raw.subarray(-16) : null, passphrase);
   }
   if (!unlimitedSize && raw.length > MAX_BACKUP_PACKAGE_BYTES) {
     throw new Error('备份包超过 256 MB 安全限制');
@@ -720,9 +722,54 @@ async function downloadLocal(config, remoteName = REMOTE_NAME) {
   return fsp.readFile(file);
 }
 
-// Local v2 packs are newline-delimited records compressed as a stream. File
-// chunks are independent Base64 strings, so neither a file nor the whole pack
-// needs to become one V8 string during backup.
+function localDataCandidates(profile) {
+  const advanced = profile.advanced || {};
+  if (!advanced.cloudBackup) return [];
+  const paths = [];
+  if (advanced.syncCookiesOnClose !== false || advanced.saveCookies !== false) paths.push('Network/Cookies', 'Network/Cookies-journal');
+  if (advanced.syncLocalStorage) paths.push('Local Storage');
+  if (advanced.syncIndexedDB) paths.push('IndexedDB');
+  if (advanced.syncPasswords) paths.push('Login Data', 'Login Data-journal');
+  if (advanced.syncExtensionData) paths.push('Local Extension Settings', 'Extension State');
+  return paths;
+}
+
+async function* localDataFiles(profile, options) {
+  if (!options.includeBrowserData || !options.profileDataRoot) return;
+  const root = path.join(options.profileDataRoot, profile.id, 'Default');
+  async function* walk(relPath) {
+    const abs = path.join(root, relPath);
+    let stat;
+    try { stat = await fsp.lstat(abs); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    if (stat.isSymbolicLink()) return;
+    if (stat.isDirectory()) {
+      for (const name of (await fsp.readdir(abs)).sort()) yield* walk(path.join(relPath, name));
+    } else if (stat.isFile()) yield { abs, name: relPath.replace(/\\/g, '/') };
+  }
+  for (const candidate of localDataCandidates(profile)) yield* walk(candidate);
+}
+
+async function localInputFingerprint(profile, options) {
+  const hash = options.passphrase ? crypto.createHmac('sha256', String(options.passphrase)) : crypto.createHash('sha256');
+  const add = (value) => { const data = Buffer.from(value); const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(data.length)); hash.update(length); hash.update(data); };
+  add(JSON.stringify({ profile: profile ? stripDataFiles(profile) : null, groups: options.groups || [], proxies: options.proxies || [], settings: options.settings || {}, includeBrowserData: Boolean(options.includeBrowserData), format: 3 }));
+  if (profile) for await (const file of localDataFiles(profile, options)) {
+    add(file.name);
+    const fileHash = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(file.abs)) fileHash.update(chunk);
+    add(fileHash.digest());
+  }
+  return hash.digest('hex');
+}
+
+async function localFileHash(target) {
+  const hash = crypto.createHash('sha256');
+  for await (const chunk of fs.createReadStream(target)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+// Local v3 stores bounded binary frames in a compressed stream, avoiding the
+// Base64 expansion of browser data while retaining streaming writes.
 async function localBackup(config, options, remoteName = REMOTE_NAME) {
   const dir = String(config.dir || '').trim();
   if (!dir) throw new Error('请选择本地备份目录');
@@ -742,41 +789,26 @@ async function localBackup(config, options, remoteName = REMOTE_NAME) {
   const salt = passphrase ? crypto.randomBytes(16) : null;
   const iv = passphrase ? crypto.randomBytes(12) : null;
   const cipher = passphrase ? crypto.createCipheriv('aes-256-gcm', crypto.scryptSync(String(passphrase), salt, 32), iv) : null;
-  const header = cipher ? Buffer.concat([Buffer.from('OBE2'), salt, iv]) : Buffer.from('OBP2');
+  const header = cipher ? Buffer.concat([Buffer.from('OBE3'), salt, iv]) : Buffer.from('OBP3');
+  function frame(type, payload = Buffer.alloc(0)) {
+    const prefix = Buffer.allocUnsafe(5);
+    prefix.write(type, 0, 1, 'ascii');
+    prefix.writeUInt32BE(payload.length, 1);
+    return [prefix, payload];
+  }
   async function* records() {
-    yield JSON.stringify({ type: 'header', body: { version: 2, soft: 'OpenBrowser', createdAt, profiles, groups: options.groups || [], proxies: options.proxies || [], settings: options.settings || {} } }) + '\n';
+    yield* frame('H', Buffer.from(JSON.stringify({ version: 3, soft: 'OpenBrowser', createdAt, profiles, groups: options.groups || [], proxies: options.proxies || [], settings: options.settings || {} })));
     if (!options.includeBrowserData || !options.profileDataRoot) {
-      yield JSON.stringify({ type: 'end' }) + '\n';
+      yield* frame('E');
       return;
     }
     for (const profile of profiles) {
-      const advanced = profile.advanced || {};
-      if (!advanced.cloudBackup) continue;
-      const root = path.join(options.profileDataRoot, profile.id, 'Default');
-      const candidates = [];
-      if (advanced.syncCookiesOnClose !== false || advanced.saveCookies !== false) candidates.push('Network/Cookies', 'Network/Cookies-journal');
-      if (advanced.syncLocalStorage) candidates.push('Local Storage');
-      if (advanced.syncIndexedDB) candidates.push('IndexedDB');
-      if (advanced.syncPasswords) candidates.push('Login Data', 'Login Data-journal');
-      if (advanced.syncExtensionData) candidates.push('Local Extension Settings', 'Extension State');
-      async function* walk(relPath) {
-        const abs = path.join(root, relPath);
-        let stat;
-        try { stat = await fsp.lstat(abs); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
-        if (stat.isSymbolicLink()) return;
-        if (stat.isDirectory()) {
-          for (const name of await fsp.readdir(abs)) yield* walk(path.join(relPath, name));
-        } else if (stat.isFile()) {
-          const name = relPath.replace(/\\/g, '/');
-          yield JSON.stringify({ type: 'file', id: profile.id, name }) + '\n';
-          for await (const chunk of fs.createReadStream(abs, { highWaterMark: 256 * 1024 })) {
-            yield JSON.stringify({ type: 'chunk', data: chunk.toString('base64') }) + '\n';
-          }
-        }
+      for await (const file of localDataFiles(profile, options)) {
+        yield* frame('F', Buffer.from(JSON.stringify({ id: profile.id, name: file.name })));
+        for await (const chunk of fs.createReadStream(file.abs, { highWaterMark: 256 * 1024 })) yield* frame('D', chunk);
       }
-      for (const candidate of candidates) yield* walk(candidate);
     }
-    yield JSON.stringify({ type: 'end' }) + '\n';
+    yield* frame('E');
   }
   try {
     await fsp.writeFile(tmp, header, { flag: 'wx', mode: 0o600 });
@@ -794,8 +826,96 @@ async function localBackup(config, options, remoteName = REMOTE_NAME) {
       const stamp = nowIso().replace(/[:.]/g, '-');
       await fsp.copyFile(target, path.join(base, `openbrowser-backup-${stamp}.obpack`), fs.constants.COPYFILE_EXCL).catch(() => {});
     }
-    return { meta: { version: 2, encrypted: Boolean(cipher), createdAt, profileCount: profiles.length, profileIds: profiles.map((p) => p.id), bytes, sha256: hash.digest('hex') }, result: { provider: 'local', path: target, bytes, remoteName: rel } };
+    return { meta: { version: 3, encrypted: Boolean(cipher), createdAt, profileCount: profiles.length, profileIds: profiles.map((p) => p.id), bytes, sha256: hash.digest('hex') }, result: { provider: 'local', path: target, bytes, remoteName: rel } };
   } finally { await fsp.rm(tmp, { force: true }); }
+}
+
+// Publish the index only after every independent package has been written.
+async function localBackupSet(config, options) {
+  if (!String(config.dir || '').trim()) throw new Error('请选择本地备份目录');
+  let profiles = Array.isArray(options.profiles) ? options.profiles : [];
+  if (Array.isArray(options.profileIds) && options.profileIds.length) {
+    const ids = new Set(options.profileIds.map(String));
+    profiles = profiles.filter((p) => ids.has(String(p.id)));
+  } else if (!Array.isArray(options.profileIds)) profiles = profiles.filter((p) => p?.advanced?.cloudBackup);
+  const { base, target } = safeLocalTarget(config.dir, LOCAL_INDEX_NAME);
+  await assertSafeLocalTarget(base, target);
+  let previous = null;
+  try { previous = JSON.parse(await fsp.readFile(target, 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const snapshot = `backups/${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+  const entries = [];
+  const changedFiles = [];
+  const items = profiles.length ? profiles : [null];
+  if (new Set(profiles.map((p) => assertProfileId(p?.id))).size !== profiles.length) throw new Error('环境 ID 重复');
+  for (const profile of items) {
+    const id = profile?.id || null;
+    const fingerprint = await localInputFingerprint(profile, options);
+    const old = previous?.version === 1 && Array.isArray(previous.entries)
+      ? previous.entries.find((entry) => entry.id === id && entry.fingerprint === fingerprint && previous.files?.includes(entry.name)) : null;
+    let reused = false;
+    if (old && typeof old.name === 'string' && /^[a-f0-9]{64}$/.test(old.sha256 || '')) {
+      const file = safeLocalTarget(base, old.name);
+      await assertSafeLocalTarget(file.base, file.target);
+      try {
+        const stat = await fsp.stat(file.target);
+        if (stat.isFile() && await localFileHash(file.target) === old.sha256) {
+          entries.push({ id, name: old.name, fingerprint, sha256: old.sha256, bytes: stat.size });
+          reused = true;
+        }
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    if (!reused) {
+      const name = profile ? `${snapshot}/${profileRemoteName(id)}` : `${snapshot}/openbrowser-settings.obpack`;
+      const pack = await localBackup(config, { ...options, profiles: profile ? [profile] : [], profileIds: profile ? [id] : [] }, name);
+      entries.push({ id, name, fingerprint, sha256: pack.meta.sha256, bytes: pack.meta.bytes });
+      changedFiles.push(name);
+    }
+  }
+  for (let i = 0; i < items.length; i++) {
+    if (await localInputFingerprint(items[i], options) !== entries[i].fingerprint) throw new Error('备份期间环境数据发生变化，请关闭环境后重试');
+  }
+  const names = entries.map((entry) => entry.name);
+  const tmp = path.join(base, `.openbrowser-index-${crypto.randomBytes(16).toString('hex')}.tmp`);
+  try {
+    await fsp.writeFile(tmp, JSON.stringify({ version: 1, files: names, entries }), { flag: 'wx', mode: 0o600 });
+    await assertSafeLocalTarget(base, target);
+    await fsp.rename(tmp, target);
+  } finally { await fsp.rm(tmp, { force: true }); }
+  return {
+    meta: { version: 3, encrypted: Boolean(options.passphrase), createdAt: nowIso(), profileCount: profiles.length, profileIds: profiles.map((p) => p.id), bytes: entries.reduce((sum, p) => sum + p.bytes, 0), changedCount: changedFiles.length, reusedCount: entries.length - changedFiles.length },
+    result: { provider: 'local', path: base, files: names, changedFiles, remoteName: LOCAL_INDEX_NAME },
+  };
+}
+
+async function downloadLocalBackupSet(config, passphrase) {
+  const { base, target } = safeLocalTarget(config.dir, LOCAL_INDEX_NAME);
+  await assertSafeLocalTarget(base, target);
+  let index;
+  try { index = JSON.parse(await fsp.readFile(target, 'utf8')); }
+  catch (error) {
+    if (error.code === 'ENOENT') return downloadLocalBackup(config, REMOTE_NAME, passphrase);
+    throw error;
+  }
+  if (index?.version !== 1 || !Array.isArray(index.files) || !index.files.length || new Set(index.files).size !== index.files.length) throw new Error('本地备份索引无效');
+  let combined;
+  const ids = new Set();
+  for (const name of index.files) {
+    if (typeof name !== 'string') throw new Error('本地备份索引无效');
+    let body;
+    try { body = await downloadLocalBackup(config, name, passphrase); }
+    catch (error) {
+      if (error.code === 'ENOENT') throw new Error(`备份文件缺失：${name}。请将索引引用的文件按原目录结构复制完整`);
+      throw error;
+    }
+    if (!combined) combined = { ...body, profiles: [] };
+    for (const profile of body.profiles) {
+      if (ids.has(profile.id)) throw new Error('本地备份包含重复环境');
+      ids.add(profile.id);
+      combined.profiles.push(profile);
+    }
+  }
+  return combined;
 }
 
 async function parseLocalV2(stream, header, tag, passphrase) {
@@ -836,6 +956,66 @@ async function parseLocalV2(stream, header, tag, passphrase) {
   return body;
 }
 
+async function parseLocalV3(stream, header, tag, passphrase) {
+  const encrypted = header.subarray(0, 4).toString() === 'OBE3';
+  const stages = [stream];
+  if (encrypted) {
+    if (!passphrase) throw new Error('备份已加密，请填写恢复密码');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', crypto.scryptSync(String(passphrase), header.subarray(4, 20), 32), header.subarray(20, 32));
+    decipher.setAuthTag(tag);
+    stages.push(decipher);
+  }
+  const gunzip = zlib.createGunzip();
+  stages.push(gunzip);
+  const done = pipeline(...stages);
+  done.catch(() => {});
+  const iterator = gunzip[Symbol.asyncIterator]();
+  let pending = Buffer.alloc(0);
+  async function readExact(size) {
+    const pieces = [];
+    let remaining = size;
+    while (remaining) {
+      if (!pending.length) {
+        const next = await iterator.next();
+        if (next.done) throw new Error('备份格式无效');
+        pending = next.value;
+      }
+      const length = Math.min(remaining, pending.length);
+      pieces.push(pending.subarray(0, length));
+      pending = pending.subarray(length);
+      remaining -= length;
+    }
+    return pieces.length === 1 ? pieces[0] : Buffer.concat(pieces, size);
+  }
+  let body, current, ended = false;
+  try {
+    while (!ended) {
+      const prefix = await readExact(5);
+      const type = String.fromCharCode(prefix[0]);
+      const size = prefix.readUInt32BE(1);
+      if ((type === 'D' && size > 256 * 1024) || (type === 'F' && size > 64 * 1024) || (type === 'H' && size > 64 * 1024 * 1024) || !['H', 'F', 'D', 'E'].includes(type) || (type === 'E' && size !== 0)) throw new Error('备份格式无效');
+      const data = await readExact(size);
+      if (type === 'H' && !body) {
+        body = JSON.parse(data.toString('utf8'));
+        if (!Array.isArray(body?.profiles)) throw new Error('备份格式无效');
+        for (const profile of body.profiles) { assertProfileId(profile?.id); delete profile._dataFiles; }
+      } else if (type === 'F' && body) {
+        const record = JSON.parse(data.toString('utf8'));
+        const profile = body.profiles.find((p) => p.id === record.id);
+        if (!profile || typeof record.name !== 'string') throw new Error('备份文件格式无效');
+        profile._dataFiles ||= Object.create(null);
+        if (Object.hasOwn(profile._dataFiles, record.name)) throw new Error('备份文件重复');
+        current = profile._dataFiles[record.name] = [];
+      } else if (type === 'D' && current) current.push(data);
+      else if (type === 'E' && body) ended = true;
+      else throw new Error('备份格式无效');
+    }
+    if (pending.length || !(await iterator.next()).done) throw new Error('备份格式无效');
+    await done;
+  } catch (error) { stream.destroy(); gunzip.destroy(); await done.catch(() => {}); throw error; }
+  return body;
+}
+
 async function downloadLocalBackup(config, remoteName, passphrase) {
   const dir = String(config.dir || '').trim();
   if (!dir) throw new Error('请选择本地备份目录');
@@ -847,13 +1027,13 @@ async function downloadLocalBackup(config, remoteName, passphrase) {
     const prefix = Buffer.alloc(Math.min(size, 32));
     await handle.read(prefix, 0, prefix.length, 0);
     const magic = prefix.subarray(0, 4).toString();
-    if (magic !== 'OBP2' && magic !== 'OBE2') return parseBackupPackage(await handle.readFile(), passphrase, { unlimitedSize: true });
-    const encrypted = magic === 'OBE2';
+    if (!['OBP2', 'OBE2', 'OBP3', 'OBE3'].includes(magic)) return parseBackupPackage(await handle.readFile(), passphrase, { unlimitedSize: true });
+    const encrypted = magic === 'OBE2' || magic === 'OBE3';
     if (size < (encrypted ? 48 : 4)) throw new Error('备份格式无效');
     const tag = encrypted ? Buffer.alloc(16) : null;
     if (tag) await handle.read(tag, 0, 16, size - 16);
     const stream = handle.createReadStream({ start: encrypted ? 32 : 4, end: size - (encrypted ? 17 : 1), autoClose: false });
-    return await parseLocalV2(stream, prefix, tag, passphrase);
+    return await (magic.endsWith('3') ? parseLocalV3 : parseLocalV2)(stream, prefix, tag, passphrase);
   } finally { await handle.close(); }
 }
 
@@ -969,6 +1149,8 @@ module.exports = {
   upload,
   download,
   localBackup,
+  localBackupSet,
+  downloadLocalBackupSet,
   downloadLocalBackup,
   encryptPayload,
   decryptPayload,

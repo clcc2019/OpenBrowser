@@ -651,7 +651,11 @@ async function runCloudBackup(payload = {}) {
   const remoteName = payload.remoteName || cloudSync.REMOTE_NAME;
   let meta, result;
   if (cloudSync.isLocalProvider(cloud.provider)) {
-    ({ meta, result } = await cloudSync.localBackup(providerConfigFromCloud(cloud), backupOptions, remoteName));
+    const { lastSyncAt, lastError, ...backupCloud } = backupOptions.settings.cloud;
+    const localOptions = { ...backupOptions, settings: { cloud: backupCloud } };
+    ({ meta, result } = payload.remoteName
+      ? await cloudSync.localBackup(providerConfigFromCloud(cloud), localOptions, remoteName)
+      : await cloudSync.localBackupSet(providerConfigFromCloud(cloud), localOptions));
   } else {
     const backup = await cloudSync.buildBackupPackage(backupOptions);
     meta = backup.meta;
@@ -739,7 +743,9 @@ async function runCloudRestore(payload = {}) {
   const unlimitedSize = cloudSync.isLocalProvider(cloud.provider);
   const passphrase = cloud.passphrase || payload.passphrase || '';
   const body = unlimitedSize
-    ? await cloudSync.downloadLocalBackup(providerConfigFromCloud(cloud), remoteName, passphrase)
+    ? (payload.remoteName
+      ? await cloudSync.downloadLocalBackup(providerConfigFromCloud(cloud), remoteName, passphrase)
+      : await cloudSync.downloadLocalBackupSet(providerConfigFromCloud(cloud), passphrase))
     : await cloudSync.parseBackupPackage(await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName), passphrase, { unlimitedSize });
 
   // optional: only restore subset of profile ids from the pack
@@ -782,7 +788,7 @@ async function runCloudProfilePush(payload = {}) {
   for (const id of ids) {
     const profile = allProfiles.find((p) => p.id === id);
     if (!profile) throw new Error('环境不存在：' + id);
-    const { buffer, meta } = await cloudSync.buildBackupPackage({
+    const options = {
       profiles: [{ ...profile, updatedAt: profile.updatedAt || new Date().toISOString() }],
       groups: Array.isArray(payload.groups) ? payload.groups : (localSettingsCache.uiGroups || []),
       proxies: [],
@@ -792,9 +798,16 @@ async function runCloudProfilePush(payload = {}) {
       passphrase: cloud.passphrase || '',
       profileIds: [id],
       unlimitedSize: cloudSync.isLocalProvider(cloud.provider),
-    });
+    };
     const remoteName = cloudSync.profileRemoteName(id);
-    const result = await cloudSync.upload(cloud.provider, providerConfigFromCloud(cloud), buffer, remoteName);
+    let meta, result;
+    if (cloudSync.isLocalProvider(cloud.provider)) {
+      ({ meta, result } = await cloudSync.localBackup(providerConfigFromCloud(cloud), options, remoteName));
+    } else {
+      const backup = await cloudSync.buildBackupPackage(options);
+      meta = backup.meta;
+      result = await cloudSync.upload(cloud.provider, providerConfigFromCloud(cloud), backup.buffer, remoteName);
+    }
     results.push({ id, meta, result, remoteName });
   }
   cloud.lastSyncAt = new Date().toISOString();
@@ -818,12 +831,10 @@ async function runCloudProfilePull(payload = {}) {
   const unlimitedSize = cloudSync.isLocalProvider(cloud.provider);
   for (const id of ids) {
     const remoteName = cloudSync.profileRemoteName(id);
-    const buffer = await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName);
-    const body = await cloudSync.parseBackupPackage(
-      buffer,
-      cloud.passphrase || payload.passphrase || '',
-      { unlimitedSize },
-    );
+    const passphrase = cloud.passphrase || payload.passphrase || '';
+    const body = unlimitedSize
+      ? await cloudSync.downloadLocalBackup(providerConfigFromCloud(cloud), remoteName, passphrase)
+      : await cloudSync.parseBackupPackage(await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName), passphrase, { unlimitedSize });
     combinedRemote = combinedRemote.concat(body.profiles || []);
     per.push({ id, remoteName, count: (body.profiles || []).length, createdAt: body.createdAt });
   }
@@ -1893,11 +1904,10 @@ startupPromise = app.whenReady().then(async () => {
       filters: [{ name: 'OpenBrowser Backup', extensions: ['obpack', 'json', 'gz'] }],
     });
     if (result.canceled || !result.filePaths[0]) return { canceled: true };
-    const buffer = await fsp.readFile(result.filePaths[0]);
-    const body = await cloudSync.parseBackupPackage(
-      buffer,
+    const selectedPath = result.filePaths[0];
+    const body = await cloudSync.downloadLocalBackup(
+      { dir: path.dirname(selectedPath) }, path.basename(selectedPath),
       payload?.passphrase || localSettingsCache.cloud?.passphrase || '',
-      { unlimitedSize: true },
     );
     const mode = String(payload?.mode || localSettingsCache.cloud?.restoreMode || 'merge');
     const applied = await applyBackupBody(body, {

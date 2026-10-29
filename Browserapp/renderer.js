@@ -6537,7 +6537,10 @@ $('#cloud-backup-now')?.addEventListener('click', async (event) => runCloudSetti
       cloud,
     });
     updateCloudStatus(result.cloud || cloud);
-    const message = tx('备份完成') + ' · ' + (result.meta?.profileCount || 0) + ' ' + tx('个环境') + ' · ' + Math.round((result.meta?.bytes || 0) / 1024) + ' KB';
+    const incremental = result.result?.provider === 'local' && Array.isArray(result.result.changedFiles)
+      ? ' · 新生成 ' + result.meta.changedCount + ' 个文件，复用 ' + result.meta.reusedCount + ' 个文件'
+        + (result.result.changedFiles.length ? ' · 新文件目录：' + result.result.changedFiles[0].split('/').slice(0, 2).join('/') : '') : '';
+    const message = tx('备份完成') + ' · ' + (result.meta?.profileCount || 0) + ' ' + tx('个环境') + ' · ' + Math.round((result.meta?.bytes || 0) / 1024) + ' KB' + incremental;
     setCloudActionFeedback(message, 'success');
     toast(message);
     log('Cloud', '全量备份 · ' + (result.meta?.profileCount || 0) + ' 环境');

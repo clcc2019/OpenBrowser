@@ -1121,6 +1121,7 @@
     <button class="outline" type="button" id="cloud-pull-selected">拉取合并（按当前恢复策略）</button>
   </div>
   <p id="cloud-action-feedback" class="cloud-action-feedback" role="status" aria-live="polite" hidden></p>
+  <p class="storage-warning">本地目录备份按环境分别保存；未变化的文件会复用。跨电脑增量传输时，请保留 backups 目录结构，只复制新增文件，并在文件复制完成后更新根目录的 openbrowser-backup-index.json。恢复依赖索引引用的所有文件，请勿删除仍在使用的旧文件；也可单独导入环境文件。</p>
   <p class="storage-warning" id="cloud-sync-status">尚未同步。单环境是否同步请在「编辑环境 → 偏好设置 → 云备份」中开关，主列表不放同步开关。</p>
 </article>
 <div class="settings-section-heading" id="settings-runtime" data-settings-section>
