@@ -178,6 +178,64 @@ async function main() {
   } finally {
     await fs.rm(incrementalRoot, { recursive: true, force: true });
   }
+
+  const retentionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-retention-'));
+  try {
+    const config = { dir: retentionRoot };
+    const profiles = ['a', 'b'].map((id) => ({ id, name: id, advanced: { cloudBackup: true } }));
+    const options = { profiles, groups: [{ id: 'group' }], proxies: [{ id: 'proxy' }], passphrase: 'secret' };
+    const first = await cloud.localBackupSet(config, options);
+    const unrelated = path.join(retentionRoot, 'backups', '123-0123456789abcdef', 'notes.txt');
+    await fs.mkdir(path.dirname(unrelated), { recursive: true });
+    await fs.writeFile(unrelated, 'keep');
+    const legacyTimestamp = path.join(retentionRoot, 'openbrowser-backup-2026-10-30T01-02-03-123Z.obpack');
+    await fs.writeFile(legacyTimestamp, 'old duplicate');
+    await fs.writeFile(path.join(retentionRoot, 'my-notes.obpack'), 'keep');
+    const next = await cloud.localBackupSet(config, { ...options, profiles: [{ ...profiles[0], name: 'new' }, profiles[1]] });
+    await assert.rejects(() => fs.stat(path.join(retentionRoot, first.result.files[0])), { code: 'ENOENT' });
+    assert.strictEqual(next.result.files[1], first.result.files[1]);
+    await assert.rejects(() => fs.stat(legacyTimestamp), { code: 'ENOENT' });
+    assert.strictEqual(await fs.readFile(unrelated, 'utf8'), 'keep');
+    assert.strictEqual(await fs.readFile(path.join(retentionRoot, 'my-notes.obpack'), 'utf8'), 'keep');
+
+    const indexPath = path.join(retentionRoot, 'openbrowser-backup-index.json');
+    const indexBeforeFailure = await fs.readFile(indexPath, 'utf8');
+    await assert.rejects(() => cloud.localBackupProfile(config, { profiles: [profiles[0]], passphrase: '' }, 'a'), /密码已更改/);
+    await assert.rejects(() => cloud.localBackupProfile(config, { profiles: [profiles[0]], passphrase: 'wrong' }, 'a'));
+    assert.strictEqual(await fs.readFile(indexPath, 'utf8'), indexBeforeFailure);
+    assert.strictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles[0].name, 'new');
+
+    const pushed = { ...profiles[0], name: 'closed' };
+    await cloud.localBackupProfile(config, { profiles: [pushed], groups: [], proxies: [], passphrase: 'secret' }, 'a');
+    await assert.rejects(() => fs.stat(path.join(retentionRoot, next.result.files[0])), { code: 'ENOENT' });
+    const restored = await cloud.downloadLocalBackupSet(config, 'secret');
+    assert.deepStrictEqual(restored.profiles.map((p) => p.name), ['closed', 'b']);
+    assert.deepStrictEqual(restored.groups, options.groups);
+    assert.deepStrictEqual(restored.proxies, options.proxies);
+    assert.strictEqual((await cloud.downloadLocalProfile(config, 'a', 'secret')).profiles[0].name, 'closed');
+    await Promise.all([
+      cloud.localBackupProfile(config, { profiles: [{ ...profiles[0], name: 'concurrent-a' }], passphrase: 'secret' }, 'a'),
+      cloud.localBackupProfile(config, { profiles: [{ ...profiles[1], name: 'concurrent-b' }], passphrase: 'secret' }, 'b'),
+    ]);
+    assert.deepStrictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles.map((p) => p.name), ['concurrent-a', 'concurrent-b']);
+
+    // A pre-upgrade close-time backup may be newer than the indexed package.
+    await cloud.localBackup(config, { profiles: [{ ...profiles[0], name: 'legacy-newer' }], profileIds: ['a'], passphrase: 'secret' }, cloud.profileRemoteName('a'));
+    const legacyPath = path.join(retentionRoot, cloud.profileRemoteName('a'));
+    const future = new Date(Date.now() + 5000);
+    await fs.utimes(legacyPath, future, future);
+    assert.strictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles[0].name, 'legacy-newer');
+    assert.strictEqual((await cloud.downloadLocalProfile(config, 'a', 'secret')).profiles[0].name, 'legacy-newer');
+    await cloud.localBackupSet(config, options);
+    await assert.rejects(() => fs.stat(legacyPath), { code: 'ENOENT' });
+    const fresh = { dir: path.join(retentionRoot, 'fresh') };
+    await cloud.localBackupProfile(fresh, { profiles: [profiles[0]], passphrase: 'secret' }, 'a');
+    await cloud.localBackupProfile(fresh, { profiles: [profiles[1]], passphrase: 'secret' }, 'b');
+    assert.deepStrictEqual((await cloud.downloadLocalBackupSet(fresh, 'secret')).profiles.map((p) => p.id), ['a', 'b']);
+    console.log('  PASS  latest-only cleanup, close-time updates, legacy migration and concurrent backups');
+  } finally {
+    await fs.rm(retentionRoot, { recursive: true, force: true });
+  }
 }
 
 main().catch((error) => {

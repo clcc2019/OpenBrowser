@@ -802,7 +802,7 @@ async function runCloudProfilePush(payload = {}) {
     const remoteName = cloudSync.profileRemoteName(id);
     let meta, result;
     if (cloudSync.isLocalProvider(cloud.provider)) {
-      ({ meta, result } = await cloudSync.localBackup(providerConfigFromCloud(cloud), options, remoteName));
+      ({ meta, result } = await cloudSync.localBackupProfile(providerConfigFromCloud(cloud), options, id));
     } else {
       const backup = await cloudSync.buildBackupPackage(options);
       meta = backup.meta;
@@ -833,7 +833,7 @@ async function runCloudProfilePull(payload = {}) {
     const remoteName = cloudSync.profileRemoteName(id);
     const passphrase = cloud.passphrase || payload.passphrase || '';
     const body = unlimitedSize
-      ? await cloudSync.downloadLocalBackup(providerConfigFromCloud(cloud), remoteName, passphrase)
+      ? await cloudSync.downloadLocalProfile(providerConfigFromCloud(cloud), id, passphrase)
       : await cloudSync.parseBackupPackage(await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName), passphrase, { unlimitedSize });
     combinedRemote = combinedRemote.concat(body.profiles || []);
     per.push({ id, remoteName, count: (body.profiles || []).length, createdAt: body.createdAt });
