@@ -694,11 +694,20 @@ function buildFingerprint(profile = {}) {
   // --- User-Agent + Client Hints ---
   // Custom profile.userAgent wins; otherwise deterministic seeded UA.
   // clientHints / privacy.fingerprint.clientHints feed UserAgentMetadata.
-  const uaOverride = String(fpIn.userAgent || profile.userAgent || '').trim();
+  let uaOverride = String(fpIn.userAgent || profile.userAgent || '').trim();
   const clientHintsIn = (fpIn.clientHints && typeof fpIn.clientHints === 'object')
     ? fpIn.clientHints
     : (privacy.clientHints && typeof privacy.clientHints === 'object' ? privacy.clientHints : {});
   const kernelMajor = Number(String(profile.kernelVersion || '').match(/^\d+/)?.[0]) || 0;
+  const kernelFull = /^\d+\.\d+\.\d+\.\d+$/.test(String(profile.kernelVersion || ''))
+    ? String(profile.kernelVersion) : `${kernelMajor}.0.0.0`;
+  // Preserve the persona and any custom UA tokens, updating only the Chrome version.
+  // Without a known kernel version (or a Chrome token), keep the saved UA intact.
+  const uaMajor = Number(uaOverride.match(/Chrome\/(\d+)/i)?.[1]) || 0;
+  const syncUa = Boolean(kernelMajor && uaMajor);
+  if (syncUa && kernelMajor !== uaMajor) {
+    uaOverride = uaOverride.replace(/(Chrome\/)\d+(?:\.\d+)*/i, (_, prefix) => `${prefix}${kernelMajor}.0.0.0`);
+  }
   const configuredOs = desktopOs(String(fpIn.os || clientHintsIn.os || profile.os || '').toLowerCase());
   let uaProfile;
   if (uaOverride) {
@@ -706,8 +715,8 @@ function buildFingerprint(profile = {}) {
     uaProfile = buildUaProfile({
       userAgent: uaOverride,
       os: fpIn.os || clientHintsIn.os || osFromUa,
-      chromeMajor: Number(fpIn.chromeMajor || clientHintsIn.chromeMajor) || undefined,
-      chromeFull: fpIn.ua_full_version || clientHintsIn.ua_full_version || fpIn.fullVersion,
+      chromeMajor: syncUa ? kernelMajor : (Number(fpIn.chromeMajor || clientHintsIn.chromeMajor) || undefined),
+      chromeFull: syncUa ? kernelFull : (fpIn.ua_full_version || clientHintsIn.ua_full_version || fpIn.fullVersion),
       platform: fpIn.platform,
       architecture: clientHintsIn.architecture || fpIn.architecture,
       platform_version: clientHintsIn.platform_version || fpIn.platformVersion,
@@ -715,7 +724,7 @@ function buildFingerprint(profile = {}) {
       mobile: clientHintsIn.mobile,
       wow64: clientHintsIn.wow64,
       bitness: clientHintsIn.bitness,
-      ua_full_version: clientHintsIn.ua_full_version || fpIn.ua_full_version,
+      ua_full_version: syncUa ? kernelFull : (clientHintsIn.ua_full_version || fpIn.ua_full_version),
     });
   } else {
     uaProfile = randomUaForSeed(u32(seed, 44), {
@@ -723,6 +732,13 @@ function buildFingerprint(profile = {}) {
       // The UA is the source of truth for every OS-facing fingerprint surface.
       osList: configuredOs ? [configuredOs] : ['windows', 'windows', 'macos', 'linux'],
     });
+    if (kernelMajor) {
+      uaProfile = buildUaProfile({
+        userAgent: uaProfile.userAgent, os: uaProfile.os,
+        architecture: uaProfile.metadata.architecture,
+        chromeMajor: kernelMajor, ua_full_version: kernelFull,
+      });
+    }
     // Apply explicit clientHints overrides on top of seeded UA
     if (Object.keys(clientHintsIn).length) {
       uaProfile = buildUaProfile({
@@ -730,7 +746,8 @@ function buildFingerprint(profile = {}) {
         os: uaProfile.os,
         chromeMajor: uaProfile.chromeMajor,
         ...clientHintsIn,
-        ua_full_version: clientHintsIn.ua_full_version || uaProfile.chromeFull,
+        ...(kernelMajor ? { chromeMajor: kernelMajor } : {}),
+        ua_full_version: kernelMajor ? kernelFull : (clientHintsIn.ua_full_version || uaProfile.chromeFull),
       });
     }
   }

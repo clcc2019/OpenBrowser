@@ -1012,6 +1012,12 @@ class BrowserEngine {
       }
       if (selection.mode === 'system-manual') {
         this.emit({ type: 'kernel-fallback', message: '用户已手动选择本机浏览器回退。', browser: selection.browser.path });
+        if (!selection.browser.version) {
+          try {
+            const output = execFileSync(selection.browser.path, ['--version'], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+            selection.browser.version = String(output).match(/\b\d+\.\d+\.\d+\.\d+\b/)?.[0] || '';
+          } catch (_) { /* Leave the saved UA unchanged if the version cannot be detected. */ }
+        }
       }
       return selection.browser;
     }
@@ -1895,7 +1901,7 @@ class BrowserEngine {
       try {
         return buildFingerprint({
           ...profile,
-          kernelVersion: this.kernelStatus()?.kernel?.version || profile.kernelVersion,
+          kernelVersion: profile.kernelVersion || this.browserSelection()?.browser?.version,
           exitTimezone: timezone,
           exitLatitude: pageNetwork?.latitude ?? profile.exitLatitude,
           exitLongitude: pageNetwork?.longitude ?? profile.exitLongitude,
@@ -1912,7 +1918,7 @@ class BrowserEngine {
         exitTimezone: timezone,
         exitIp: pageNetwork?.ip || profile.exitIp || '',
         exitCountryCode: pageNetwork?.countryCode || profile.exitCountryCode || '',
-        userAgent: profile.userAgent || uaFromFp,
+        userAgent: uaFromFp,
         group_name: profile.group_name || profile.groupName || '',
         privacy: {
           ...(profile.privacy || {}),
@@ -1926,7 +1932,7 @@ class BrowserEngine {
       }, {
         timezone,
         network: pageNetwork,
-        userAgent: profile.userAgent || uaFromFp,
+        userAgent: uaFromFp,
         group_name: profile.group_name || profile.groupName || '',
         browserName,
         extensionCount,
@@ -2795,7 +2801,7 @@ class BrowserEngine {
     const customStartUrls = this.resolveStartupUrls(profile);
     const infoStartUrl = profile.advanced.showInfoPage !== false
       ? await this.buildStartPageUrl(
-        { ...profile, exitIp: pageNetwork.ip || profile.exitIp || '', title: profile.title || profile.name },
+        { ...profile, kernelVersion: browser.version, exitIp: pageNetwork.ip || profile.exitIp || '', title: profile.title || profile.name },
         root,
         browser.name,
         extensions.length
@@ -2840,7 +2846,6 @@ class BrowserEngine {
       '--disable-session-crashed-bubble',
       '--disable-background-mode',
       '--enable-unsafe-extension-debugging',
-      '--extensions-on-chrome-urls',
       '--enable-features=AutomaticFullscreenContentSetting,WindowPlacement,WindowManagement',
       '--disable-gesture-requirement-for-presentation',
       '--disable-fullscreen-low-power-mode',

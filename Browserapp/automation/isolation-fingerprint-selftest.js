@@ -133,6 +133,17 @@ async function main() {
   assert.strictEqual(kernelAligned.userAgentMetadata.fullVersionList.find((item) => item.brand === 'Google Chrome')?.version.split('.')[0], '151');
   pass('automatic UA and Client Hints align with installed kernel major');
 
+  const oldUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  const oldProfile = { id: 'env-old-ua', userAgent: oldUa, kernelVersion: '151.0.7922.34', privacy: { fingerprint: { clientHints: { chromeMajor: 131, ua_full_version: '131.0.1234.1' } } } };
+  const updatedUa = buildFingerprint(oldProfile);
+  assert.strictEqual(updatedUa.userAgent, oldUa.replace('Chrome/131.', 'Chrome/151.'));
+  assert.strictEqual(updatedUa.userAgentMetadata.uaFullVersion, '151.0.7922.34');
+  assert.strictEqual(updatedUa.userAgentMetadata.brands.find((item) => item.brand === 'Chromium')?.version, '151');
+  assert.strictEqual(oldProfile.userAgent, oldUa);
+  assert.strictEqual(buildFingerprint({ ...oldProfile, kernelVersion: '' }).userAgent, oldUa);
+  assert.strictEqual(kernelAligned.userAgentMetadata.uaFullVersion, '151.0.7922.34');
+  pass('saved UA follows kernel version without changing stored profile');
+
   // OS-facing fingerprint values must follow the UA OS, not a separate random choice.
   const osCases = [
     {

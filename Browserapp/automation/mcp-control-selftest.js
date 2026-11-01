@@ -286,7 +286,12 @@ async function main() {
     name: 'MCP Fingerprint Copy',
     startUrl: 'https://example.org/duplicate',
   });
-  record('local-api duplicate profile without exit data', duplicateResult.status === 200 && duplicateResult.body.code === 0 && duplicateResult.body.data.profile?.id !== 'mcp-fp' && duplicateResult.body.data.profile?.exitNetwork === undefined);
+  record('local-api duplicate profile without exit data', duplicateResult.status === 200 && duplicateResult.body.code === 0 && /^env-\d{3,}$/.test(duplicateResult.body.data.profile?.id || '') && duplicateResult.body.data.profile?.exitNetwork === undefined);
+  const secondDuplicate = await request('POST', '/api/v2/browser-profile/duplicate', {
+    source_profile_id: 'mcp-fp', name: 'Second Copy',
+  });
+  const firstNumber = Number(duplicateResult.body.data.profile?.id?.slice(4));
+  record('local-api duplicate profile IDs increment', secondDuplicate.body.data?.profile?.id === `env-${String(firstNumber + 1).padStart(3, '0')}`);
   record('local-api duplicate profile clears cookies and platform credentials', duplicateResult.body.data.profile?.cookies === ''
     && duplicateResult.body.data.profile?.platform?.username === ''
     && duplicateResult.body.data.profile?.platform?.password === ''

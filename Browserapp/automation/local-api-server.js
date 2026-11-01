@@ -788,9 +788,13 @@ class LocalApiServer {
       if (!sourceId) return fail('source profile id required', 400);
       const source = this.engine.profiles.get(sourceId);
       if (!source) return fail('source profile not found', 404);
-      const numbers = [...this.engine.profiles.values()].map((item) => Number(item.number)).filter((n) => Number.isInteger(n) && n > 0);
+      const profiles = [...this.engine.profiles.values()];
+      const numbers = profiles.flatMap((item) => {
+        const idNumber = /^env-(\d+)$/i.exec(String(item.id || ''));
+        return [Number(item.number), idNumber ? Number(idNumber[1]) : 0];
+      }).filter((n) => Number.isSafeInteger(n) && n > 0);
       const number = (Math.max(0, ...numbers) || 0) + 1;
-      const id = 'ob-' + Date.now().toString(36) + '-' + crypto.randomBytes(5).toString('hex');
+      const id = `env-${String(number).padStart(3, '0')}`;
       const base = this.engine.sanitizeProfile(source);
       const requestedStartUrl = duplicateInput.startUrl !== undefined
         ? String(duplicateInput.startUrl || '').trim()
