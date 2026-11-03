@@ -635,8 +635,7 @@ async function runCloudBackup(payload = {}) {
     : [...(engine?.profiles?.values?.() || [])];
   const profileIds = Array.isArray(payload.profileIds) ? payload.profileIds.map(String) : null;
   const groups = Array.isArray(payload.groups) ? payload.groups : (localSettingsCache.uiGroups || []);
-  let proxies = [];
-  try { proxies = automation?.proxyStore?.list?.({}) || []; } catch (_) {}
+  const proxies = automation?.proxyStore?.list?.({}) || [];
   const backupOptions = {
     profiles: allProfiles,
     groups,
@@ -730,14 +729,13 @@ async function applyBackupBody(body, {
 
   let proxies = body.proxies || [];
   if (Array.isArray(proxies) && proxies.length) {
-    let localProxies = [];
-    try { localProxies = automation?.proxyStore?.list?.({}) || []; } catch (_) {}
+    const localProxies = automation?.proxyStore?.list?.({}) || [];
     proxies = cloudSync.mergeProxies(localProxies, proxies, mode);
     if (automation?.proxyStore?.replaceAll) {
-      await automation.proxyStore.replaceAll(proxies).catch(() => {});
+      await automation.proxyStore.replaceAll(proxies);
     } else if (automation?.proxyStore) {
       for (const item of proxies) {
-        try { await automation.proxyStore.create(item); } catch (_) {}
+        await automation.proxyStore.create(item);
       }
     }
   }
@@ -1904,8 +1902,7 @@ startupPromise = app.whenReady().then(async () => {
     const cloud = { ...localSettingsCache.cloud, ...(payload?.cloud || {}) };
     const profiles = Array.isArray(payload?.profiles) ? payload.profiles : [...(engine?.profiles?.values?.() || [])];
     const groups = Array.isArray(payload?.groups) ? payload.groups : (localSettingsCache.uiGroups || []);
-    let proxies = [];
-    try { proxies = automation?.proxyStore?.list?.({}) || []; } catch (_) {}
+    const proxies = automation?.proxyStore?.list?.({}) || [];
     const { buffer, meta } = await cloudSync.buildBackupPackage({
       profiles,
       groups,

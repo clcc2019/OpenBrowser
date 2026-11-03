@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require(Buffer.from('ZWxlY3Ryb24=', 'base64').toString('utf8'));
+const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('ops', Object.freeze({
   getInfo: () => ipcRenderer.invoke('system:info'),

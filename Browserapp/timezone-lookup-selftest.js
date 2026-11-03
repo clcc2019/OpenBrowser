@@ -78,10 +78,9 @@ engine.checkProxy = async () => {
 
 (async () => {
   const resolved = await engine.ensureExitNetworkForLocale(cachedProfile);
-  ok('rechecks a cached network without timezone', lookupCount === 1 && resolved.timezone === 'America/New_York');
+  ok('uses cached proxy network without testing at startup', lookupCount === 0 && resolved.timezone === '');
   await engine.ensureExitNetworkForLocale(cachedProfile);
-  ok('does not repeat lookup after timezone is filled', lookupCount === 1);
-  ok('stores normalized exit timezone', cachedProfile.exitTimezone === 'America/New_York');
+  ok('does not test proxy on repeated lookup', lookupCount === 0);
   console.log(`\n${passed} assertions passed`);
 })().catch((error) => {
   console.error(error.stack || error.message || error);

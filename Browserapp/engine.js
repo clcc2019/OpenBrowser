@@ -14,6 +14,9 @@ const { prepareMarkerExtension, prepareMacDockWrapper, normalizeEnvNumber } = re
 const { toFileUrl, killProcessTree } = require('./automation/protocol/cross-platform');
 const { platformPreflight } = require('./automation/platform-preflight');
 const { disableVulkanOnWayland } = require('./automation/linux-rendering');
+const { mergeLaunchArgs } = require('./automation/command-line-flags');
+const credentialCrypto = require('./automation/credential-crypto');
+const { ProfileStoreSqlite } = require('./automation/profile-store-sqlite');
 const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
 const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
@@ -271,24 +274,27 @@ async function writeJsonAtomically(filePath, value, mode = 0o600) {
   // renderer-triggered write that is interrupted halfway through.
   let previous = null;
   try {
-    const raw = await fsp.readFile(filePath, 'utf8');
-    JSON.parse(raw);
+    const raw = await fsp.readFile(filePath);
+    JSON.parse(credentialCrypto.decrypt(raw));
     previous = raw;
   } catch (error) {
     if (error.code === 'ENOENT') previous = null;
     // A corrupt current file is deliberately not copied over the good .bak.
   }
   if (previous != null) await writeRawAtomically(`${filePath}.bak`, previous, mode);
-  await writeRawAtomically(filePath, value, mode);
+  await writeRawAtomically(filePath, credentialCrypto.encrypt(value), mode);
 }
 
 async function readEngineStateCandidate(filePath) {
-  const raw = await fsp.readFile(filePath, 'utf8');
-  const saved = JSON.parse(raw);
+  const raw = await fsp.readFile(filePath);
+  let text;
+  try { text = credentialCrypto.decrypt(raw); }
+  catch (error) { error.code = 'ERR_CREDENTIAL_DECRYPT'; throw error; }
+  const saved = JSON.parse(text);
   if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
     throw new Error('引擎状态文件格式无效');
   }
-  return { path: filePath, saved };
+  return { path: filePath, saved, plaintext: !credentialCrypto.isEncrypted(raw) };
 }
 
 async function engineStateRecoveryCandidates(filePath) {
@@ -370,6 +376,9 @@ class BrowserEngine {
     this.assignments = new Map();
     this.listeners = new Set();
     this.stateFile = path.join(app.getPath('userData'), 'openbrowser-engine.json');
+    this.sqliteState = null;
+    this.stateBackend = options.stateBackend || process.env.OPENBROWSER_STATE_BACKEND
+      || (fs.existsSync(path.join(app.getPath('userData'), 'openbrowser-sqlite-enabled')) ? 'sqlite' : 'json');
     const profileDataRoot = String(options.profileDataRoot || path.join(app.getPath('userData'), 'browser-profiles-v2'));
     const profileDataRootCheck = validateDataRootIsolationSecure(profileDataRoot);
     if (!profileDataRootCheck.ok) throw new Error(profileDataRootCheck.message);
@@ -434,10 +443,23 @@ class BrowserEngine {
     let recoveredState = false;
     let state = null;
     let primaryStateError = null;
-    try {
-      state = await readEngineStateCandidate(this.stateFile);
-    } catch (error) {
-      primaryStateError = error;
+    if (this.stateBackend === 'sqlite') {
+      this.sqliteState = new ProfileStoreSqlite(path.join(this.app.getPath('userData'), 'openbrowser-state-v1.db')).open();
+      try {
+        const saved = this.sqliteState.read();
+        if (saved) state = { saved, plaintext: false };
+      } catch (error) { this.sqliteState.close(); this.sqliteState = null; throw error; }
+    }
+    if (!state) {
+      try {
+        state = await readEngineStateCandidate(this.stateFile);
+      } catch (error) {
+        primaryStateError = error;
+      }
+    }
+    if (primaryStateError?.code === 'ERR_CREDENTIAL_DECRYPT') {
+      this.sqliteState?.close(); this.sqliteState = null;
+      throw primaryStateError;
     }
     if (!state) {
       const recovery = await engineStateRecoveryCandidates(this.stateFile);
@@ -450,7 +472,12 @@ class BrowserEngine {
       }
     }
     if (!state && primaryStateError && primaryStateError.code !== 'ENOENT') {
+      this.sqliteState?.close(); this.sqliteState = null;
       throw new Error(`引擎状态文件损坏且没有可用备份: ${primaryStateError.message || primaryStateError}`);
+    }
+    if (this.sqliteState && state && !this.sqliteState.read()) {
+      try { this.sqliteState.write({ ...state.saved, profiles: state.saved.profiles || [] }); }
+      catch (error) { this.sqliteState.close(); this.sqliteState = null; throw error; }
     }
     if (state) {
       const saved = state.saved;
@@ -505,7 +532,7 @@ class BrowserEngine {
       this.extensions.set(builtIn.id, builtIn);
       await this.persist();
     }
-    if (migrateKernelPolicy || recoveredState) await this.persist();
+    if (migrateKernelPolicy || recoveredState || state?.plaintext) await this.persist();
   }
 
   resolveStoredProxyProfile(incoming) {
@@ -581,7 +608,9 @@ class BrowserEngine {
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
       systemBrowserPath: this.systemBrowserPath,
     }, null, 2);
-    const write = () => writeJsonAtomically(this.stateFile, payload);
+    const write = () => this.sqliteState
+      ? this.sqliteState.write(JSON.parse(payload))
+      : writeJsonAtomically(this.stateFile, payload);
     const previous = this._persistQueue || Promise.resolve();
     const queued = previous.then(write, write);
     this._persistQueue = queued.catch(() => {});
@@ -678,7 +707,8 @@ class BrowserEngine {
     const memory = parseLimitedOption(memoryCandidate, [0, 2, 4, 6, 8]);
     const rawProxy = String(value.proxy || '').trim();
     if (rawProxy.length > MAX_PROFILE_PROXY_LENGTH) throw new Error('Proxy URL is too long');
-    const networkMode = value.networkMode === 'direct' || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy';
+    const networkMode = value.networkMode === 'proxy' ? 'proxy'
+      : (value.networkMode === 'direct' || !rawProxy || /^(direct|offline|none)$/i.test(rawProxy) ? 'direct' : 'proxy');
     const effectiveStartUrl = String(value.startUrl || platformValue.startUrl || advancedValue.startUrls || '').trim().slice(0, 2000);
     const proxyAssociation = profileProxyAssociation(value);
     const proxyId = networkMode === 'direct' ? null : normalizedProxyAssociationId(proxyAssociation.value);
@@ -711,7 +741,7 @@ class BrowserEngine {
         proxyId,
         ipChannel: normalizeIpLookupChannel(proxyMetaValue.ipChannel ?? proxyMetaValue.ip_channel),
         refreshUrl: String(proxyMetaValue.refreshUrl ?? proxyMetaValue.refresh_url ?? '').slice(0, 1000),
-        checkOnStart: Boolean(proxyMetaValue.checkOnStart),
+        checkOnStart: false,
         refreshOnStart: Boolean(proxyMetaValue.refreshOnStart),
         systemProxy: allowed(proxyMetaValue.systemProxy, ['global', 'use', 'off'], 'global'),
         directBypass: Boolean(proxyMetaValue.directBypass),
@@ -723,8 +753,8 @@ class BrowserEngine {
             ? String(proxyMetaValue.backupProxies).split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8)
             : []),
         fillFingerprint: proxyMetaValue.fillFingerprint !== false,
-        requireReady: proxyMetaValue.requireReady !== false,
-        notReadyPolicy: allowed(proxyMetaValue.notReadyPolicy, ['block', 'direct', 'continue'], proxyMetaValue.requireReady === false ? 'continue' : 'block'),
+        requireReady: false,
+        notReadyPolicy: 'continue',
         tlsProfile: allowed(proxyMetaValue.tlsProfile, ['auto', 'chrome', 'chrome_legacy', 'node', 'off'], 'auto'),
         tlsChromeMajor: (() => {
           const n = Number(proxyMetaValue.tlsChromeMajor);
@@ -1025,11 +1055,10 @@ class BrowserEngine {
   }
 
   proxyArg(value) {
-    const proxy = String(value || '').trim();
-    if (!proxy || /^(direct|offline|none)/i.test(proxy)) return null;
-    if (/^(https?|socks4|socks5):\/\/[a-zA-Z0-9._-]+:\d{1,5}$/i.test(proxy)) return proxy;
-    if (/^[a-zA-Z0-9._-]+:\d{1,5}$/.test(proxy)) return `http://${proxy}`;
-    return null;
+    const config = parsedProxy(value);
+    if (!config || config.authenticated) return null;
+    const host = config.host.includes(':') ? `[${config.host}]` : config.host;
+    return `${config.protocol}://${host}:${config.port}`;
   }
 
   proxyConfig(value) { return parseProxy(value); }
@@ -1093,7 +1122,7 @@ class BrowserEngine {
     for (const target of targets) await fsp.rm(target, { recursive: true, force: true }).catch(() => {});
   }
 
-  async applyProfilePreferences(root, profile) {
+  async applyProfilePreferences(root, profile, fingerprint = null) {
     const defaultRoot = path.join(root, 'Default'); const file = path.join(defaultRoot, 'Preferences'); await fsp.mkdir(defaultRoot, { recursive: true });
     let prefs = {}; try { prefs = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) {}
     prefs.profile ||= {}; prefs.profile.default_content_setting_values ||= {};
@@ -1137,7 +1166,9 @@ class BrowserEngine {
       const lang = String(profile.language || 'en-US').trim();
       const primary = lang.split(',')[0].trim();
       const base = primary.split('-')[0];
-      prefs.intl.accept_languages = base && base !== primary ? `${primary},${base}` : primary;
+      const actual = Array.isArray(fingerprint?.languages) ? fingerprint.languages.filter(Boolean) : [];
+      prefs.intl.accept_languages = actual.length ? actual.join(',') : (base && base !== primary ? `${primary},${base}` : primary);
+      prefs.intl.selected_languages = prefs.intl.accept_languages;
     }
     prefs.webkit ||= {}; prefs.webkit.webprefs ||= {};
     if (profile.privacy.fontMode === 'custom') prefs.webkit.webprefs.default_font_size = profile.privacy.fontSize;
@@ -1149,6 +1180,17 @@ class BrowserEngine {
       prefs.session.restore_on_startup = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession ? 1 : 5;
     }
     await fsp.writeFile(file, JSON.stringify(prefs), 'utf8');
+    const localStateFile = path.join(root, 'Local State');
+    let localState;
+    try { localState = JSON.parse(await fsp.readFile(localStateFile, 'utf8')); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      localState = {};
+    }
+    if (!localState || typeof localState !== 'object' || Array.isArray(localState)) throw new Error('浏览器 Local State 格式无效');
+    localState.intl ||= {};
+    localState.intl.app_locale = String((fingerprint?.languages || [])[0] || profile.language || 'en-US').split(',')[0].trim();
+    await writeRawAtomically(localStateFile, JSON.stringify(localState));
   }
 
   /**
@@ -1158,7 +1200,7 @@ class BrowserEngine {
    * only rm's disjoint paths (Sessions / cache dirs / retained data files) and can overlap,
    * shortening the launch critical path (scales with disk latency and profile size).
    */
-  async prepareProfileFilesForStart(root, profile, restoreSession) {
+  async prepareProfileFilesForStart(root, profile, restoreSession, fingerprint = null) {
     await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
     const lockF = path.join(root, '.openbrowser-instance.lock');
     if (fs.existsSync(lockF)) {
@@ -1173,7 +1215,7 @@ class BrowserEngine {
     }
     const jobs = [
       // Shared-file chain: resetZoom then applyProfilePreferences, ordered.
-      (async () => { await this.resetZoom(root); await this.applyProfilePreferences(root, profile); })(),
+      (async () => { await this.resetZoom(root); await this.applyProfilePreferences(root, profile, fingerprint); })(),
       this.enforceDataRetention(root, profile),
     ];
     if (!restoreSession) jobs.push(this.resetTabs(root));
@@ -1634,16 +1676,14 @@ class BrowserEngine {
     const needsGeo = (geoMode === 'ip' || geoMode === 'allow') && !hasGeo;
     if ((network?.countryCode || network?.ip) && !needsCountry && !needsTimezone && !needsGeo) return network;
     const proxyRaw = String(profile.proxy || '');
-    const isDirect = profile.networkMode === 'direct' || !proxyRaw || /^(direct|offline|none)$/i.test(proxyRaw);
+    const isDirect = profile.networkMode === 'direct' || (profile.networkMode !== 'proxy' && (!proxyRaw || /^(direct|offline|none)$/i.test(proxyRaw)));
+    // Proxied profiles use cached exit data until the user explicitly tests them.
+    if (!isDirect) return network || null;
     try {
-      if (!isDirect) {
-        network = await this.checkProxy(profile, { allowExtract: false });
-      } else {
-        // Local direct exit: geo lookup is best-effort for language/timezone only.
-        network = await lookupDirectCountry();
-        this.networkInfo.set(profile.id, network);
-        this.emit({ type: 'status', id: profile.id, running: this.running.has(profile.id), network });
-      }
+      // Local direct exit: geo lookup is best-effort for language/timezone only.
+      network = await lookupDirectCountry();
+      this.networkInfo.set(profile.id, network);
+      this.emit({ type: 'status', id: profile.id, running: this.running.has(profile.id), network });
       if (network) {
         const normalizedTimezone = normalizeTimezoneValue(network.timezone);
         if (normalizedTimezone !== network.timezone) {
@@ -1662,11 +1702,7 @@ class BrowserEngine {
         await this.persist();
       }
       return network;
-    } catch (error) {
-      // Direct start succeeded without proxy; geo API failure must not surface as proxy error.
-      if (!isDirect) {
-        this.emit({ type: 'proxy-error', id: profile.id, message: '出口信息检测失败（语言/时区可能回退）：' + error.message });
-      }
+    } catch (_) {
       return this.networkInfo.get(profile.id) || null;
     }
   }
@@ -1875,18 +1911,14 @@ class BrowserEngine {
    */
   async buildStartPageUrl(profile, root, browserName, extensionCount) {
     let pageNetwork = this.networkInfo.get(profile.id) || null;
-    // 启动前尽量补全出口信息，启动页打开即可显示 IP（直连/代理同理）
+    // 代理出口信息只使用缓存；用户可在启动页手动刷新。
     const hasProxy = profile.proxy && !/^(direct|offline|none)$/i.test(String(profile.proxy));
-    if (!pageNetwork?.ip) {
+    if (!pageNetwork?.ip && !hasProxy && profile.networkMode !== 'proxy') {
       try {
-        if (hasProxy) {
-          pageNetwork = await this.checkProxy(profile);
-        } else {
-          pageNetwork = await lookupDirectCountry();
-          if (pageNetwork) {
-            pageNetwork = { ...pageNetwork, protocol: 'direct' };
-            this.networkInfo.set(profile.id, pageNetwork);
-          }
+        pageNetwork = await lookupDirectCountry();
+        if (pageNetwork) {
+          pageNetwork = { ...pageNetwork, protocol: 'direct' };
+          this.networkInfo.set(profile.id, pageNetwork);
         }
       } catch (_) {
         pageNetwork = this.networkInfo.get(profile.id) || null;
@@ -2765,7 +2797,7 @@ class BrowserEngine {
       profile = await this.prepareProfileProxyForStart(profile);
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     this.profiles.set(profile.id, profile);
-    this.emitStartProgress(profile.id, 'proxy', 18, '正在检测代理与出口…');
+    this.emitStartProgress(profile.id, 'proxy', 18, '正在准备网络设置…');
     await this.ensureExitNetworkForLocale(profile).catch(() => {});
     profile = this.applyResolvedLocale(profile);
     this.profiles.set(profile.id, profile);
@@ -2794,10 +2826,19 @@ class BrowserEngine {
     startupResources.lifecycleGeneration = lifecycleGeneration;
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
-    // Parallelized (independent IO overlaps; Preferences writers stay serialized). See method.
-    await this.prepareProfileFilesForStart(root, profile, restoreSession);
-    await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
     const pageNetwork = this.networkInfo.get(profile.id) || {};
+    const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
+    const fingerprint = buildFingerprint({
+      ...profile,
+      fingerprintLaunchSeed: allowSeedRefresh ? crypto.randomBytes(16).toString('hex') : '',
+      kernelVersion: browser.version,
+      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || pageNetwork.timezone),
+      exitLatitude: profile.exitLatitude ?? pageNetwork.latitude,
+      exitLongitude: profile.exitLongitude ?? pageNetwork.longitude,
+    });
+    // Parallelized (independent IO overlaps; Preferences writers stay serialized). See method.
+    await this.prepareProfileFilesForStart(root, profile, restoreSession, fingerprint);
+    await removeSingletonFiles(root, { attempts: 6, delayMs: 40 });
     const customStartUrls = this.resolveStartupUrls(profile);
     const infoStartUrl = profile.advanced.showInfoPage !== false
       ? await this.buildStartPageUrl(
@@ -2808,17 +2849,7 @@ class BrowserEngine {
       )
       : null;
     const startUrl = customStartUrls[0] || infoStartUrl;
-    const proxyConfig = this.proxyConfig(profile.proxy);
-    // Site-stability keeps static marks; refresh-on-start only when stability is off.
-    const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
-    const fingerprint = buildFingerprint({
-      ...profile,
-      fingerprintLaunchSeed: allowSeedRefresh ? crypto.randomBytes(16).toString('hex') : '',
-      kernelVersion: browser.version,
-      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || pageNetwork.timezone),
-      exitLatitude: profile.exitLatitude ?? pageNetwork.latitude,
-      exitLongitude: profile.exitLongitude ?? pageNetwork.longitude,
-    });
+    const proxyConfig = parsedProxy(profile.proxy);
     if (proxyConfig) {
       const meta = profile.proxyMeta || {};
       const major = Number(meta.tlsChromeMajor)
@@ -2831,11 +2862,15 @@ class BrowserEngine {
       };
     }
     if (proxyConfig?.authenticated) {
-      proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
-      startupResources.proxyForwarder = proxyForwarder;
+      try {
+        proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
+        startupResources.proxyForwarder = proxyForwarder;
+      } catch (error) {
+        this.emit({ type: 'proxy-warn', id: profile.id, message: '代理转发器启动失败：' + error.message });
+      }
     }
     this.emitStartProgress(profile.id, 'configure', 48, '正在配置启动参数…');
-    const args = [
+    let args = [
       `--user-data-dir=${root}`,
       `--disk-cache-dir=${path.join(root, 'OpenBrowserCache')}`,
       `--crash-dumps-dir=${path.join(root, 'OpenBrowserCrashReports')}`,
@@ -2843,12 +2878,10 @@ class BrowserEngine {
       '--no-first-run',
       '--no-default-browser-check',
       '--hide-crash-restore-bubble',
-      '--disable-session-crashed-bubble',
       '--disable-background-mode',
       '--enable-unsafe-extension-debugging',
       '--enable-features=AutomaticFullscreenContentSetting,WindowPlacement,WindowManagement',
       '--disable-gesture-requirement-for-presentation',
-      '--disable-fullscreen-low-power-mode',
       // Random loopback port only; never bind 0.0.0.0. Restrict CDP WebSocket origins
       // (was * — any local page that learns the port could attach and steal session).
       '--remote-debugging-port=0',
@@ -2856,9 +2889,7 @@ class BrowserEngine {
     ];
     if (disableVulkanOnWayland()) args.push('--disable-vulkan');
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
-    for (const flag of chromeArgsForFingerprint(fingerprint, profile)) {
-      if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
-    }
+    args = mergeLaunchArgs(args, chromeArgsForFingerprint(fingerprint, profile));
     // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
     let runtimeFingerprint = fingerprint;
     kernelWindowName = null;
@@ -2902,6 +2933,9 @@ class BrowserEngine {
     const disabledFeatures = [];
     // Authenticated proxies must be exposed to Chrome through the local bridge.
     let proxy = proxyForwarder ? proxyForwarder.url : this.proxyArg(profile.proxy);
+    // Keep proxy-mode traffic off the direct connection even when no usable
+    // endpoint or local authentication bridge is available.
+    if (profile.networkMode === 'proxy' && !proxy) proxy = 'http://127.0.0.1:9';
     // systemProxy: off = 强制本机直连(不走系统代理)；use/global + Direct = 不传 --proxy-server（跟随系统路由）
     const sysMode = profile.proxyMeta?.systemProxy || 'global';
     if (!proxy && sysMode === 'off') {
@@ -2909,8 +2943,6 @@ class BrowserEngine {
     }
     if (proxy) {
       args.push(`--proxy-server=${proxy}`);
-      // HTTP/SOCKS proxies are IPv4; disable IPv6 so Chrome cannot skip the proxy.
-      if (!args.includes('--disable-ipv6')) args.push('--disable-ipv6');
       if (!args.some((a) => a.startsWith('--force-webrtc-ip-handling-policy='))) {
         args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
       }
@@ -2945,7 +2977,6 @@ class BrowserEngine {
       '--disable-ipc-flooding-protection',
       '--metrics-recording-only',
       '--no-pings',
-      '--dns-prefetch-disable',
     ];
     for (const flag of perfFlags) {
       if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
@@ -2967,11 +2998,8 @@ class BrowserEngine {
     if (!args.some((a) => a.startsWith('--renderer-process-limit='))) {
       args.push('--renderer-process-limit=4');
     }
-    if (disabledFeatures.length) {
-      const existing = args.findIndex((a) => a.startsWith('--disable-features='));
-      if (existing >= 0) args[existing] = args[existing] + ',' + [...new Set(disabledFeatures)].join(',');
-      else args.push(`--disable-features=${[...new Set(disabledFeatures)].join(',')}`);
-    }
+    if (disabledFeatures.length) args.push(`--disable-features=${disabledFeatures.join(',')}`);
+    args = mergeLaunchArgs(args);
     // Per-env marker extension: software logo + environment number (1, 2, …)
     const envNumber = normalizeEnvNumber(profile.number || profile.name || profile.id || '1');
     let markerExtensionPath = null;
@@ -3829,6 +3857,11 @@ class BrowserEngine {
   async prepareProfileProxyForStart(profile) {
     let working = this.resolveStoredProxyProfile(this.sanitizeProfile(profile));
     const meta = working.proxyMeta || {};
+    if (working.networkMode === 'direct') return working;
+    if (!working.proxy || /^(direct|offline|none)$/i.test(String(working.proxy))) {
+      const backup = (meta.backupProxies || []).find((value) => value && !/^(direct|offline|none)$/i.test(String(value)));
+      if (backup) working = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: backup });
+    }
     const hasProxy = working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy));
     const extractUrl = String(meta.apiExtractUrl || '').trim();
     // Align with refreshProfileProxy: refresh first (rotate IP), then extract current endpoint.
@@ -3836,8 +3869,7 @@ class BrowserEngine {
       try {
         await invokeProxyRefresh(meta.refreshUrl);
       } catch (error) {
-        this.emit({ type: 'proxy-error', id: working.id, message: '启动前刷新代理失败：' + (error.message || error) });
-        throw new Error('启动前刷新代理失败：' + (error.message || error));
+        this.emit({ type: 'proxy-warn', id: working.id, message: '启动前刷新代理失败，继续启动：' + (error.message || error) });
       }
     }
     if (extractUrl) {
@@ -3850,69 +3882,14 @@ class BrowserEngine {
         );
         working = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: rawProxy });
       } catch (error) {
-        if (!hasProxy) throw new Error('动态代理提取失败：' + (error.message || error));
         this.emit({
           type: 'proxy-warn',
           id: working.id,
           code: 'extract-error',
-          message: '动态代理提取失败，继续使用静态代理：' + (error.message || error),
+          message: (hasProxy ? '动态代理提取失败，继续使用静态代理：' : '动态代理提取失败，继续启动：') + (error.message || error),
           extractError: String(error.message || error),
         });
       }
-    }
-    const shouldCheck = meta.checkOnStart || meta.refreshOnStart || Boolean(extractUrl);
-    if (shouldCheck && working.proxy && !/^(direct|offline|none)$/i.test(String(working.proxy))) {
-      const candidates = [];
-      const push = (value) => {
-        const raw = String(value || '').trim();
-        if (!raw || /^(direct|offline|none)$/i.test(raw)) return;
-        if (!candidates.includes(raw)) candidates.push(raw);
-      };
-      push(working.proxy);
-      for (const item of meta.backupProxies || []) push(item);
-      let lastError = null;
-      let ok = false;
-      for (let index = 0; index < candidates.length; index += 1) {
-        const candidate = candidates[index];
-        try {
-          const network = await this.testProxy(working, {
-            allowExtract: false,
-            proxy: candidate,
-            proxySource: index === 0 ? 'primary' : 'backup',
-          });
-          working = this.sanitizeProfile({ ...working, networkMode: 'proxy', proxy: network.proxyRaw || candidate });
-          this.applyNetworkToProfile(working, network, { persist: false });
-          ok = true;
-          break;
-        } catch (error) {
-          lastError = error;
-        }
-      }
-      if (!ok && lastError) {
-        const policy = String(meta.notReadyPolicy || (meta.requireReady === false ? 'continue' : 'block'));
-        const message = '启动前代理未就绪：' + (lastError.message || lastError);
-        this.emit({ type: 'proxy-error', id: working.id, code: 'proxy-not-ready', message, policy });
-        if (policy === 'direct') {
-          working = this.sanitizeProfile({ ...working, networkMode: 'direct', proxy: 'Direct' });
-          this.emit({ type: 'proxy-fallback', id: working.id, message: '代理未就绪，已按策略回落直连' });
-        } else if (policy === 'continue') {
-          this.emit({ type: 'proxy-warn', id: working.id, message: message + '（continue 策略，继续启动）' });
-        } else {
-          throw new Error(message);
-        }
-      }
-    } else if (
-      working.networkMode === 'proxy'
-      && working.proxy
-      && !/^(direct|offline|none)$/i.test(String(working.proxy))
-      && meta.requireReady !== false
-      && meta.notReadyPolicy === 'block'
-      && !shouldCheck
-      && !this.networkInfo.get(working.id)?.ip
-    ) {
-      // Soft gate: proxy mode without any known exit IP and without deferred check still starts,
-      // but mark not-ready so callers/UI can surface it. Hard block only when check was requested.
-      this.emit({ type: 'proxy-warn', id: working.id, code: 'proxy-unchecked', message: '代理模式尚未检测出口，继续启动' });
     }
     return working;
   }

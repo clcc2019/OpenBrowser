@@ -51,7 +51,10 @@ async function testStateRecovery() {
     await engine.init(null);
     assert.strictEqual(engine.profiles.get(profile.id).proxy, profile.proxy, 'valid .bak must recover proxy credentials');
     await engine.flushPersistence();
-    const persisted = JSON.parse(await fs.readFile(stateFile, 'utf8'));
+    const encrypted = await fs.readFile(stateFile);
+    const credentialCrypto = require('./automation/credential-crypto');
+    assert.ok(credentialCrypto.isEncrypted(encrypted));
+    const persisted = JSON.parse(credentialCrypto.decrypt(encrypted));
     assert.strictEqual(persisted.profiles[0].proxy, profile.proxy, 'recovered state must be rewritten durably');
   } finally {
     await fs.rm(root, { recursive: true, force: true }).catch(() => {});

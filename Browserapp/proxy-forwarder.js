@@ -1,5 +1,6 @@
 const net = require('net');
 const tls = require('tls');
+const { proxyDnsLookup } = require('./automation/doh-resolver');
 
 const IP_LOOKUP_CHANNELS = Object.freeze(['ip-api', 'ip2location', 'ifconfig-me']);
 
@@ -431,10 +432,10 @@ class BufferedReader {
   }
 }
 
-function connectSocket(host, port, timeout = 8000, signal = null) {
+function connectSocket(host, port, timeout = 8000, signal = null, lookup = undefined) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason instanceof Error ? signal.reason : new Error('Proxy bridge closed'));
-    const socket = net.connect({ host, port });
+    const socket = net.connect({ host, port, lookup });
     let connected = false;
     let settled = false;
     const removeAbortListener = () => signal?.removeEventListener('abort', onAbort);
@@ -527,7 +528,7 @@ function encodeSocksAddress(host) {
 async function connectSocksTargetOnce(config, host, port, signal = null) {
   let upstream;
   try {
-    upstream = await connectSocket(config.host, config.port, 8000, signal); upstream.on('error', () => {});
+    upstream = await connectSocket(config.host, config.port, 8000, signal, proxyDnsLookup()); upstream.on('error', () => {});
     const reader = new BufferedReader(upstream); const timeout = 8000;
     upstream.write(config.authenticated ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]));
     const method = await reader.read(2, timeout); if (method[0] !== 5 || method[1] === 255) throw new Error('SOCKS5 proxy rejected available authentication methods');
@@ -640,7 +641,7 @@ async function startSocks5Bridge(config, onStatus) {
       await local.read(greeting[1]); client.write(Buffer.from([5, 0]));
       const requestHead = await local.read(4); if (requestHead[0] !== 5 || requestHead[1] !== 1) throw new Error('Only SOCKS5 CONNECT is supported');
       const requestAddress = await readSocksAddress(local, requestHead[3]); const requestPort = await local.read(2);
-      const upstream = await connectSocket(config.host, config.port); sockets.add(upstream);
+      const upstream = await connectSocket(config.host, config.port, 8000, null, proxyDnsLookup()); sockets.add(upstream);
       upstream.on('error', () => { if (!client.destroyed) client.destroy(); }); client.on('error', () => upstream.destroy()); upstream.once('close', () => sockets.delete(upstream));
       const remote = new BufferedReader(upstream);
       upstream.write(config.authenticated ? Buffer.from([5, 2, 0, 2]) : Buffer.from([5, 1, 0]));
@@ -685,9 +686,10 @@ function connectHttpUpstream(config, onConnect) {
     const opts = tlsConnectOptionsFromProfile(tlsProfile, { servername: config.host, rejectUnauthorized: true });
     opts.host = config.host;
     opts.port = config.port;
+    opts.lookup = proxyDnsLookup();
     return tls.connect(opts, onConnect);
   }
-  return net.connect({ host: config.host, port: config.port }, onConnect);
+  return net.connect({ host: config.host, port: config.port, lookup: proxyDnsLookup() }, onConnect);
 }
 
 async function startHttpBridge(config, onStatus) {

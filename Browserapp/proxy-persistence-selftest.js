@@ -5,6 +5,8 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const { ProxyStore } = require('./automation/proxy-store');
+const credentialCrypto = require('./automation/credential-crypto');
+async function readStoredJson(file) { return JSON.parse(credentialCrypto.decrypt(await fs.readFile(file))); }
 
 async function main() {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'openbrowser-proxy-persistence-'));
@@ -71,7 +73,10 @@ async function main() {
     assert.strictEqual(store.get('split-special-auth').remark, '持久化备注');
     assert.ok(store.get('split-special-auth').raw.endsWith('#' + encodeURIComponent('持久化备注')));
 
-    const migratedDisk = JSON.parse(await fs.readFile(filePath, 'utf8'));
+    const migratedBytes = await fs.readFile(filePath);
+    assert.ok(credentialCrypto.isEncrypted(migratedBytes));
+    assert.ok(!migratedBytes.includes(Buffer.from('p:a/ss%')));
+    const migratedDisk = JSON.parse(credentialCrypto.decrypt(migratedBytes));
     assert.strictEqual(migratedDisk.version, 2);
     assert.strictEqual(migratedDisk.items[0].username, 'user@mail');
     assert.strictEqual(migratedDisk.items[0].password, 'p:a/ss%');
@@ -158,7 +163,7 @@ async function main() {
     await concurrentRestart.load();
     assert.strictEqual(concurrentRestart.list().length, 45);
     assert.strictEqual(concurrentRestart.get(created[0].id).password, 'race-pass-19');
-    JSON.parse(await fs.readFile(filePath, 'utf8'));
+    await readStoredJson(filePath);
     const leftovers = (await fs.readdir(directory)).filter((name) => name.includes('.tmp-'));
     assert.deepStrictEqual(leftovers, []);
 
@@ -208,7 +213,7 @@ async function main() {
     const restoredBackupStore = new ProxyStore(backupPath);
     await restoredBackupStore.load();
     assert.strictEqual(restoredBackupStore.get(backupItem.id).password, 'old-pass');
-    JSON.parse(await fs.readFile(backupPath, 'utf8'));
+    await readStoredJson(backupPath);
     const corruptSnapshots = (await fs.readdir(directory))
       .filter((name) => name.startsWith('backup-recovery.json.corrupt-'));
     assert.strictEqual(corruptSnapshots.length, 1);
@@ -231,7 +236,7 @@ async function main() {
     assert.strictEqual(await fs.readFile(unrecoverablePath, 'utf8'), '{still-corrupt');
 
     const startupRecoveryPath = path.join(directory, 'startup-recovery.json');
-    const corruptBinary = Buffer.from([0x4f, 0x42, 0x53, 0x31, 0x76, 0x31, 0x31, 0xff, 0xfe, 0x80]);
+    const corruptBinary = Buffer.from([0xff, 0xfe, 0x80, 0x76, 0x31]);
     await fs.writeFile(startupRecoveryPath, corruptBinary);
     const startupRecoveryStore = new ProxyStore(startupRecoveryPath);
     const startupRecovered = await startupRecoveryStore.load({ recoverCorrupt: true });
@@ -242,7 +247,7 @@ async function main() {
       Buffer.compare(await fs.readFile(startupRecoveryStore.lastLoadRecovery.corruptPath), corruptBinary),
       0,
     );
-    assert.deepStrictEqual(JSON.parse(await fs.readFile(startupRecoveryPath, 'utf8')), { version: 2, items: [] });
+    assert.deepStrictEqual(await readStoredJson(startupRecoveryPath), { version: 2, items: [] });
 
     const invalidShapePath = path.join(directory, 'invalid-shape.json');
     const invalidShapeBytes = '{"version":2,"items":{}}';

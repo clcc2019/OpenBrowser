@@ -3,6 +3,7 @@
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const credentialCrypto = require('./credential-crypto');
 const {
   parseProxy,
   parseProxyInput,
@@ -206,7 +207,10 @@ function proxyStoreCorruption(message, cause = null) {
 }
 
 function decodeStoredData(raw) {
-  const text = Buffer.isBuffer(raw) ? raw.toString('utf8') : String(raw);
+  const encrypted = credentialCrypto.isEncrypted(raw);
+  let text;
+  try { text = credentialCrypto.decrypt(raw); }
+  catch (error) { error.code = 'ERR_CREDENTIAL_DECRYPT'; throw error; }
   let parsed;
   try {
     parsed = JSON.parse(text);
@@ -226,7 +230,7 @@ function decodeStoredData(raw) {
   });
   return {
     data: { version: 2, items },
-    migrated: Array.isArray(parsed)
+    migrated: !encrypted || Array.isArray(parsed)
       || Number(parsed.version) !== 2
       || JSON.stringify(sourceItems) !== JSON.stringify(items),
   };
@@ -275,7 +279,7 @@ class ProxyStore {
   }
 
   async _persistData(nextData, { allowCorruptReplace = false } = {}) {
-    const payload = JSON.stringify(nextData, null, 2);
+    const payload = credentialCrypto.encrypt(JSON.stringify(nextData, null, 2));
     let current = { kind: 'missing', raw: null };
     let raw = null;
     try {
@@ -323,7 +327,7 @@ class ProxyStore {
 
   async _readCandidate(candidatePath) {
     const [raw, stat] = await Promise.all([
-      fsp.readFile(candidatePath, 'utf8'),
+      fsp.readFile(candidatePath),
       fsp.stat(candidatePath),
     ]);
     return { path: candidatePath, raw, stat, ...decodeStoredData(raw) };

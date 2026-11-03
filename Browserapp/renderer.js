@@ -308,7 +308,7 @@ function normalizeProfileSettings(profile) {
     proxyMeta: {
       ipChannel: String(proxyMeta.ipChannel || 'ip-api'),
       refreshUrl: String(proxyMeta.refreshUrl || ''),
-      checkOnStart: Boolean(proxyMeta.checkOnStart),
+      checkOnStart: false,
       refreshOnStart: Boolean(proxyMeta.refreshOnStart),
       systemProxy: String(proxyMeta.systemProxy || 'global'),
       directBypass: Boolean(proxyMeta.directBypass),
@@ -318,10 +318,8 @@ function normalizeProfileSettings(profile) {
         ? proxyMeta.backupProxies.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8)
         : String(proxyMeta.backupProxies || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: proxyMeta.fillFingerprint !== false,
-      requireReady: proxyMeta.requireReady !== false,
-      notReadyPolicy: ['block', 'direct', 'continue'].includes(String(proxyMeta.notReadyPolicy || ''))
-        ? String(proxyMeta.notReadyPolicy)
-        : (proxyMeta.requireReady === false ? 'continue' : 'block'),
+      requireReady: false,
+      notReadyPolicy: 'continue',
       tlsProfile: ['auto', 'chrome', 'chrome_legacy', 'node', 'off'].includes(String(proxyMeta.tlsProfile || ''))
         ? String(proxyMeta.tlsProfile)
         : 'auto',
@@ -1871,7 +1869,7 @@ function editorDraft(strict = true) {
     proxyMeta: {
       ipChannel: $('#editor-ip-channel')?.value || 'ip-api',
       refreshUrl: ($('#editor-refresh-url')?.value || '').trim(),
-      checkOnStart: Boolean($('#editor-proxy-check-start')?.checked),
+      checkOnStart: false,
       refreshOnStart: Boolean($('#editor-proxy-refresh-start')?.checked),
       systemProxy: $('#editor-system-proxy')?.value || 'global',
       directBypass: Boolean($('#editor-direct-bypass')?.checked),
@@ -1879,8 +1877,8 @@ function editorDraft(strict = true) {
       apiExtractUrl: ($('#editor-api-extract-url')?.value || '').trim(),
       backupProxies: ($('#editor-backup-proxies')?.value || '').split(/[\r\n,;]+/).map((s) => s.trim()).filter(Boolean).slice(0, 8),
       fillFingerprint: $('#editor-proxy-fill-fingerprint')?.checked !== false,
-      requireReady: $('#editor-proxy-require-ready')?.checked !== false,
-      notReadyPolicy: $('#editor-proxy-not-ready-policy')?.value || 'block',
+      requireReady: false,
+      notReadyPolicy: 'continue',
       tlsProfile: $('#editor-proxy-tls-profile')?.value || 'auto',
       tlsChromeMajor: (() => {
         const raw = ($('#editor-proxy-tls-chrome-major')?.value || '').trim();
@@ -6475,7 +6473,6 @@ async function pushProfilesToCloud(ids) {
   toast('正在推送 ' + list.length + ' 个环境…');
   const result = await window.ops.cloudProfilePush({
     profileIds: list,
-    profiles: ui.profiles,
     groups: ui.groups || [],
     cloud,
   });
@@ -6495,7 +6492,6 @@ async function pullProfilesFromCloud(ids) {
   toast('正在拉取 ' + list.length + ' 个环境…');
   const result = await window.ops.cloudProfilePull({
     profileIds: list,
-    localProfiles: ui.profiles,
     localGroups: ui.groups || [],
     mode,
     cloud,
@@ -6537,7 +6533,6 @@ $('#cloud-backup-now')?.addEventListener('click', async (event) => runCloudSetti
     await window.ops.cloudSetConfig(cloud);
     toast(tx('正在全量备份…'));
     const result = await window.ops.cloudBackup({
-      profiles: ui.profiles,
       groups: ui.groups || [],
       cloud,
     });
@@ -6573,7 +6568,6 @@ $('#cloud-restore-now')?.addEventListener('click', async (event) => {
       const result = await window.ops.cloudRestore({
         cloud,
         mode,
-        localProfiles: ui.profiles,
         localGroups: ui.groups || [],
       });
       applyRestoredProfiles(result);
@@ -6593,7 +6587,7 @@ $('#cloud-restore-now')?.addEventListener('click', async (event) => {
 $('#cloud-export-file')?.addEventListener('click', async () => {
   try {
     const cloud = readCloudForm();
-    const result = await window.ops.cloudExportFile({ profiles: ui.profiles, groups: ui.groups || [], cloud });
+    const result = await window.ops.cloudExportFile({ groups: ui.groups || [], cloud });
     if (result?.canceled) return;
     toast(tx('已导出备份文件'));
   } catch (error) { toast(error.message); }
@@ -6609,7 +6603,6 @@ $('#cloud-import-file')?.addEventListener('click', async () => {
     const result = await window.ops.cloudImportFile({
       passphrase: cloud.passphrase || '',
       mode,
-      localProfiles: ui.profiles,
       localGroups: ui.groups || [],
     });
     if (result?.canceled) return;
@@ -6659,7 +6652,6 @@ $('#cloud-pull-selected')?.addEventListener('click', async () => {
     const result = await window.ops.cloudRestore({
       cloud,
       mode: cloud.restoreMode || 'merge',
-      localProfiles: ui.profiles,
       localGroups: ui.groups || [],
     });
     applyRestoredProfiles(result);

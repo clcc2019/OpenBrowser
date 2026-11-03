@@ -243,7 +243,7 @@
                   <span class="editor-panel-index" aria-hidden="true">02</span>
                 </div>
                 <div class="editor-section-heading"><span>连接策略</span><small>先选择网络模式，再填写代理参数</small></div>
-                <label class="check-row"><input id="editor-proxy-check-start" type="checkbox"> 每次启动检测出口 IP（动态代理建议开启）</label>
+                <label class="check-row"><input id="editor-proxy-check-start" type="checkbox" disabled> 启动时检测出口 IP（已关闭）</label>
                 <p class="network-mode-hint">本地直连 = 本机网络；代理模式 = HTTP / HTTPS / SOCKS5。</p>
                 <div class="segmented" id="editor-network-mode" role="radiogroup" aria-label="网络模式">
                   <label><input type="radio" name="editor-network" value="direct" checked>本地直连</label>
@@ -283,12 +283,10 @@
                     <label class="check-row"><input id="editor-proxy-fill-fingerprint" type="checkbox" checked> 检测后自动对齐指纹（时区/语言/定位）</label>
                   </div>
                   <div class="form-two">
-                    <label class="check-row"><input id="editor-proxy-require-ready" type="checkbox" checked> 启动要求代理就绪</label>
+                    <label class="check-row"><input id="editor-proxy-require-ready" type="checkbox" disabled> 启动检测失败时阻断</label>
                     <label>未就绪策略
-                      <select id="editor-proxy-not-ready-policy">
-                        <option value="block">阻断启动</option>
-                        <option value="direct">回退直连</option>
-                        <option value="continue">继续使用当前代理</option>
+                      <select id="editor-proxy-not-ready-policy" disabled>
+                        <option value="continue">继续启动</option>
                       </select>
                     </label>
                   </div>

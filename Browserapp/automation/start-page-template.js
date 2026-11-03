@@ -229,7 +229,7 @@ function buildStartPageHtml(data = {}) {
     function languageMatchesCountry(language,country){if(!language||!country)return true;var region=String(language).split('-')[1];return !region||region.toUpperCase()===String(country).toUpperCase()}
     function evaluateConsistency(){if(!fingerprint.timezone)return;var expected=BOOT.expected||{};var exitTz=currentNetwork.timezone||'';var tzMatch=!exitTz||fingerprint.timezone===exitTz;if(tzMatch){setCheck('check-timezone','good','一致',exitTz?'浏览器与出口均为 '+exitTz+'。':'出口未返回时区，浏览器时区为 '+fingerprint.timezone+'。')}else{setCheck('check-timezone','warn','不一致','浏览器为 '+fingerprint.timezone+'，出口为 '+exitTz+'。')}addFinding('timezone',tzMatch?'good':'warn',2);var language=fingerprint.languages[0]||'';var languageMatch=languageMatchesCountry(language,currentNetwork.countryCode);if(languageMatch){setCheck('check-language','good','合理',language+' 与出口地区 '+(currentNetwork.countryCode||'未知')+' 未发现明显冲突。')}else{setCheck('check-language','warn','需核对',language+' 与出口地区 '+currentNetwork.countryCode+' 不一致。')}addFinding('language',languageMatch?'good':'warn',1);var uaMatch=!expected.userAgent||expected.userAgent===fingerprint.userAgent;addFinding('ua',uaMatch?'good':'warn',2)}
 
-    byId('btn-refresh').addEventListener('click',function(){refreshNetwork()});
+    byId('btn-refresh').addEventListener('click',function(){refreshNetwork();if(!isDirectMode(currentNetwork))checkReachability()});
     // Collect after inject settles; each sample is also POSTed to
     // /api/fingerprint-report → fingerprint-inject.log (no need to copy UI).
     try { window.__openbrowserCollectFingerprint = function(phase){ try { return collectFingerprint(phase); } catch(e){ try{ console.warn(e); }catch(_){} } }; } catch(_){}
@@ -240,10 +240,10 @@ function buildStartPageHtml(data = {}) {
     setTimeout(function(){collectFingerprint('t1200')},1200);
     setTimeout(function(){collectFingerprint('t2500')},2500);
     setTimeout(function(){collectFingerprint('t4000')},4000);
-    collectWebrtc();checkReachability();checkDnsLeak();renderScore();
+    collectWebrtc();if(isDirectMode(currentNetwork))checkReachability();else Array.prototype.forEach.call(document.querySelectorAll('#reachability-grid .check'),function(item){setCheck(item.id,'na','未检测','点击重新检测可手动检查。')});checkDnsLeak();renderScore();
     if(currentNetwork&&currentNetwork.ip)applyNetwork(currentNetwork);
     else if(isDirectMode(currentNetwork)){applyNetwork(Object.assign({protocol:'direct'},currentNetwork));refreshNetwork({silent:true})}
-    else refreshNetwork({silent:true});
+    else applyNetwork(currentNetwork || {});
   })();
   </script>
 </body>

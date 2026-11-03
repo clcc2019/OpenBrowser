@@ -231,8 +231,8 @@ function main() {
   assert.strictEqual(sanitized.privacy.stabilityMode, 'force');
   assert.deepStrictEqual(sanitized.privacy.stabilityHosts, ['risk.example']);
   assert.strictEqual(sanitized.privacy.mediaLabels.audioinput, 'A');
-  assert.strictEqual(sanitized.proxyMeta.requireReady, true);
-  assert.strictEqual(sanitized.proxyMeta.notReadyPolicy, 'block');
+  assert.strictEqual(sanitized.proxyMeta.requireReady, false);
+  assert.strictEqual(sanitized.proxyMeta.notReadyPolicy, 'continue');
   assert.strictEqual(sanitized.proxyMeta.tlsProfile, 'chrome');
   assert.strictEqual(sanitized.proxyMeta.tlsChromeMajor, 131);
 
@@ -254,68 +254,17 @@ function main() {
 }
 
 async function runProxyPolicies(engineBlock, BrowserEngine) {
-  let blockedErr = null;
-  try {
-    await engineBlock.prepareProfileProxyForStart({
-      id: 'prof_stability_4',
-      name: 'block',
-      networkMode: 'proxy',
+  for (const policy of ['block', 'continue', 'direct']) {
+    const profile = await engineBlock.prepareProfileProxyForStart({
+      id: 'prof_stability_4', name: 'proxy', networkMode: 'proxy',
       proxy: 'socks5://127.0.0.1:1',
-      proxyMeta: { checkOnStart: true, notReadyPolicy: 'block', requireReady: true },
+      proxyMeta: { checkOnStart: true, notReadyPolicy: policy, requireReady: true },
       privacy: {},
     });
-  } catch (error) {
-    blockedErr = error;
+    assert.strictEqual(profile.networkMode, 'proxy');
+    assert.strictEqual(profile.proxy, 'socks5://127.0.0.1:1');
+    assert.strictEqual(profile.proxyMeta.notReadyPolicy, 'continue');
   }
-  assert.ok(blockedErr, 'block policy must throw');
-  assert.ok(String(blockedErr.message).includes('未就绪') || String(blockedErr.message).includes('检测失败') || String(blockedErr.message).includes('dead'));
-
-  // continue policy
-  const engineCont = Object.create(BrowserEngine.prototype);
-  engineCont.profiles = new Map();
-  engineCont.networkInfo = new Map();
-  const events = [];
-  engineCont.emit = (e) => events.push(e);
-  engineCont.sanitizeProfile = BrowserEngine.prototype.sanitizeProfile.bind(engineCont);
-  engineCont.prepareProfileProxyForStart = BrowserEngine.prototype.prepareProfileProxyForStart.bind(engineCont);
-  engineCont.applyNetworkToProfile = () => {};
-  engineCont.testProxy = async () => {
-    throw Object.assign(new Error('dead'), { errorClass: 'unreachable' });
-  };
-  const continued = await engineCont.prepareProfileProxyForStart({
-    id: 'prof_stability_5',
-    name: 'continue',
-    networkMode: 'proxy',
-    proxy: 'socks5://127.0.0.1:1',
-    proxyMeta: { checkOnStart: true, notReadyPolicy: 'continue', requireReady: false },
-    privacy: {},
-  });
-  assert.ok(String(continued.proxy).includes('127.0.0.1:1'));
-  assert.ok(events.some((e) => e.type === 'proxy-warn' || e.type === 'proxy-error'));
-
-  // direct fallback
-  const engineDirect = Object.create(BrowserEngine.prototype);
-  engineDirect.profiles = new Map();
-  engineDirect.networkInfo = new Map();
-  const events2 = [];
-  engineDirect.emit = (e) => events2.push(e);
-  engineDirect.sanitizeProfile = BrowserEngine.prototype.sanitizeProfile.bind(engineDirect);
-  engineDirect.prepareProfileProxyForStart = BrowserEngine.prototype.prepareProfileProxyForStart.bind(engineDirect);
-  engineDirect.applyNetworkToProfile = () => {};
-  engineDirect.testProxy = async () => {
-    throw Object.assign(new Error('dead'), { errorClass: 'unreachable' });
-  };
-  const direct = await engineDirect.prepareProfileProxyForStart({
-    id: 'prof_stability_6',
-    name: 'direct-fallback',
-    networkMode: 'proxy',
-    proxy: 'socks5://127.0.0.1:1',
-    proxyMeta: { checkOnStart: true, notReadyPolicy: 'direct', requireReady: true },
-    privacy: {},
-  });
-  assert.strictEqual(direct.networkMode, 'direct');
-  assert.ok(/direct/i.test(direct.proxy));
-  assert.ok(events2.some((e) => e.type === 'proxy-fallback'));
 
   // source integrity: banned external product names must not appear
   const fpSrc = fs.readFileSync(path.join(__dirname, 'fingerprint.js'), 'utf8');
@@ -380,14 +329,13 @@ async function runProxyPolicies(engineBlock, BrowserEngine) {
     "stabilityMode: $('#editor-stability-mode')",
     "battery: $('#editor-battery')",
     "mediaDevices: ($('#editor-media-devices')",
-    "requireReady: $('#editor-proxy-require-ready')",
-    "notReadyPolicy: $('#editor-proxy-not-ready-policy')",
+    "requireReady: false",
+    "notReadyPolicy: 'continue'",
     "tlsProfile: $('#editor-proxy-tls-profile')",
     "editorSet('#editor-stability-mode'",
     "editorSet('#editor-battery'",
     "editorCheck('#editor-proxy-require-ready'",
     "stabilityMode: ['off', 'auto', 'force']",
-    "requireReady: proxyMeta.requireReady !== false",
     "apiExtractUrl: String(proxyMeta.apiExtractUrl || '')",
   ]) {
     assert.ok(rendererSrc.includes(needle), 'renderer wiring missing: ' + needle);

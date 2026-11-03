@@ -23,6 +23,8 @@
     "selftest:timezone": "node timezone-lookup-selftest.js",
     "selftest:mcp": "node automation/mcp-control-selftest.js",
     "selftest:profiles": "node profile-workflow-selftest.js",
+    "selftest:sqlitestore": "node automation/profile-store-sqlite-selftest.js",
+    "selftest:credentials": "node automation/credential-crypto-selftest.js",
     "selftest:viewport": "node viewport-resize-selftest.js",
     "log:startup": "node scripts/read-startup-log.js",
     "log:fingerprint": "node scripts/read-fp-log.js",
@@ -46,7 +48,7 @@
     "selftest:apikey": "node automation/api-key-store-selftest.js"
   },
   "devDependencies": {
-    "desktop-shell": "npm:electron@43.1.1",
+    "desktop-shell": "npm:electron@45.2.1",
     "rcedit": "5.0.2"
   }
 }

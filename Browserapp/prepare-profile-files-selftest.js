@@ -44,14 +44,17 @@ async function oneRun(i) {
   }));
   await fsp.writeFile(path.join(def, 'Network', 'Cookies'), 'x');
 
-  await eng.prepareProfileFilesForStart(root, profile, false);
+  await eng.prepareProfileFilesForStart(root, profile, false, { languages: ['ja-JP', 'en-US', 'en'] });
 
   const prefs = JSON.parse(await fsp.readFile(path.join(def, 'Preferences'), 'utf8'));
+  const localState = JSON.parse(await fsp.readFile(path.join(root, 'Local State'), 'utf8'));
   // resetZoom landed:
   const zoomOk = Object.keys(prefs.partition.per_host_zoom_levels).length === 0 && prefs.browser.default_zoom_level === 0;
   // applyProfilePreferences landed (NOT clobbered by resetZoom's write):
   const prefOk = prefs.profile.exit_type === 'Normal' && prefs.profile.exited_cleanly === true
-    && prefs.intl && prefs.intl.accept_languages === 'ja-JP,ja';
+    && prefs.intl && prefs.intl.accept_languages === 'ja-JP,en-US,en'
+    && prefs.intl.selected_languages === 'ja-JP,en-US,en'
+    && localState.intl.app_locale === 'ja-JP';
   // rm jobs ran:
   const tabsGone = !fs.existsSync(path.join(def, 'Sessions'));
   const cacheGone = !fs.existsSync(path.join(def, 'Cache'));

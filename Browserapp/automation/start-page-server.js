@@ -726,10 +726,10 @@ class StartPageServer {
       startedAtLabel: formatTime(extras.time || Date.now() / 1000),
       browserName: extras.browserName || '',
       extensionCount: extras.extensionCount || 0,
-      networkMode: profile.networkMode === 'direct' || !profile.proxy || /^(direct|offline|none)$/i.test(String(profile.proxy)) ? 'direct' : 'proxy',
-      proxyProtocol: profile.networkMode === 'direct' || !profile.proxy || /^(direct|offline|none)$/i.test(String(profile.proxy))
+      networkMode: profile.networkMode === 'direct' || (profile.networkMode !== 'proxy' && (!profile.proxy || /^(direct|offline|none)$/i.test(String(profile.proxy)))) ? 'direct' : 'proxy',
+      proxyProtocol: profile.networkMode === 'direct' || (profile.networkMode !== 'proxy' && (!profile.proxy || /^(direct|offline|none)$/i.test(String(profile.proxy))))
         ? 'direct'
-        : String(profile.proxy).split(':', 1)[0].toLowerCase(),
+        : String(profile.proxy || '').split(':', 1)[0].toLowerCase(),
       expectedFingerprint: {
         ...(extras.expectedFingerprint && typeof extras.expectedFingerprint === 'object' ? extras.expectedFingerprint : {}),
         language: String(
@@ -935,8 +935,7 @@ class StartPageServer {
       }
       if (refresh && profile) {
         const isDirect = profile.networkMode === 'direct'
-          || !profile.proxy
-          || /^(direct|offline|none)$/i.test(String(profile.proxy));
+          || (profile.networkMode !== 'proxy' && (!profile.proxy || /^(direct|offline|none)$/i.test(String(profile.proxy))));
         try {
           const network = isDirect
             ? await this.lookupDirectNetwork()
@@ -1147,13 +1146,15 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
         }
         if (profile) {
           const isDirect = profile.networkMode === 'direct'
-            || !profile.proxy
-            || /^(direct|offline|none)$/i.test(String(profile.proxy));
+            || (profile.networkMode !== 'proxy' && (!profile.proxy || /^(direct|offline|none)$/i.test(String(profile.proxy))));
           if (!isDirect) proxy = String(profile.proxy || '');
         } else if (session?.networkMode === 'proxy' && session?.proxyProtocol && session.proxyProtocol !== 'direct') {
           // session alone may not hold full proxy URL; leave direct probe
           proxy = '';
         }
+      }
+      if ((profile?.networkMode === 'proxy' || session?.networkMode === 'proxy') && !proxy) {
+        return this.#json(res, 400, { ok: false, msg: '代理地址不可用' });
       }
       try {
         const data = await this.lookupReachability({

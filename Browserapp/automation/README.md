@@ -1,5 +1,15 @@
 # 自动化模块
 
+### 可选 SQLite 环境状态
+
+设置 `OPENBROWSER_STATE_BACKEND=sqlite` 后启动应用，或在用户数据目录创建 `openbrowser-sqlite-enabled` 标记文件，可将环境状态保存在 `openbrowser-state-v1.db` 中。首次启用时会读取并导入原有 `openbrowser-engine.json`，原文件保留；每个环境的数据在写入 SQLite 和 WAL 前加密。该功能需要运行时支持 `node:sqlite`。
+
+SQLite 启用后，JSON 原文件不会继续更新。停用 SQLite 会重新读取旧 JSON，后续在 SQLite 中做出的修改不会自动回写；请保留数据库、WAL 和凭据密钥，不要把旧 JSON 当作最新备份。系统凭据存储不可用时，本机密钥默认位于 `~/.openbrowser/credential.key`；密钥丢失后无法解密对应数据。
+
+### 代理上游 DoH
+
+本地代理转发器连接代理服务器时默认通过 Cloudflare DoH 查询其域名，解析失败时不会回退系统 DNS。`localhost` 在本机解析。该设置只影响经过本地转发器的上游连接，不覆盖 Chromium 的 DNS、未经过转发器的代理或网页目标域名解析；DNS 查询会发送给 Cloudflare。如果需要解析内网域名或使用系统 DNS，可在启动前设置 `OPENBROWSER_PROXY_DNS=system`。
+
 ## 模块
 
 | 文件 | 说明 |

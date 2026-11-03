@@ -158,7 +158,7 @@ async function main() {
       ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
       platform: 'MacIntel',
       hintPlatform: 'macOS',
-      renderer: /Apple|OpenGL 4\.1/i,
+      renderer: /Apple|OpenGL 4\.1|ANGLE Metal Renderer/i,
     },
     {
       id: 'env-linux',
@@ -265,7 +265,7 @@ async function main() {
   assert.ok(args.some((a) => a.startsWith('--user-agent=')));
   assert.ok(args.some((a) => a.startsWith('--window-size=')));
   assert.ok(args.some((a) => a.includes('webrtc') || a.includes('WebRTC') || a.includes('webrtc-ip')));
-  assert.ok(args.includes('--disable-blink-features=AutomationControlled'));
+  assert.ok(!args.some((arg) => arg.startsWith('--disable-blink-features')));
   assert.ok(!args.some((a) => a.includes('enable-automation')));
   assert.ok(scriptA.includes('webdriver') && scriptA.includes('false'));
   assert.ok(scriptA.includes('OffscreenCanvas'));

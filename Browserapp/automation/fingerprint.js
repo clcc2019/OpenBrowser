@@ -2455,9 +2455,8 @@ function buildWorkerInjectionScript(fp) {
 
 function chromeArgsForFingerprint(fp, profile = {}) {
   const args = [];
-  // Critical: without this, Chromium/CDP sets navigator.webdriver = true
-  args.push('--disable-blink-features=AutomationControlled');
-  // Never enable automation switch (some launchers add it by default)
+  // Avoid Chromium's unsupported Blink feature switches. The document-start
+  // injection handles the exposed navigator.webdriver value.
   if (fp.userAgent) args.push(`--user-agent=${fp.userAgent}`);
   // TLS extension permutation by Chrome major from UA
   if (fp.uaProfile) {
@@ -2487,8 +2486,7 @@ function chromeArgsForFingerprint(fp, profile = {}) {
   if (fp.webrtc === 'disabled' || fp.webrtc === 'proxy') {
     args.push(
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
-      '--webrtc-ip-handling-policy=disable_non_proxied_udp',
-      '--enforce-webrtc-ip-permission-check'
+      '--webrtc-ip-handling-policy=disable_non_proxied_udp'
     );
   }
   if (fp.webgl?.mode === 'blocked') {
@@ -2497,7 +2495,6 @@ function chromeArgsForFingerprint(fp, profile = {}) {
     args.push('--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-compositing');
   }
   if (fp.audio?.mode === 'muted' || profile.privacy?.audio === 'muted') args.push('--mute-audio');
-  if (fp.doNotTrack === '1' || profile.privacy?.dnt || profile.privacy?.dntMode === 'on') args.push('--do-not-track');
   // Use full BCP47 when present (ja-JP / zh-CN); Chrome accepts --lang=ja-JP
   const lang = (fp.languages && fp.languages[0]) || profile.language;
   if (lang) {

@@ -123,61 +123,30 @@ async function main() {
   });
   assert.ok(/direct/i.test(direct.proxy) || direct.networkMode === 'direct');
 
-  // --- prepare with extract overwrites proxy even if check not required fails later ---
-  // extract succeeds; check skipped if no checkOnStart and no refreshOnStart - wait, extractUrl forces shouldCheck true
-  // So prepare with extract will try testProxy which needs real network - mock testProxy
+  // Dynamic extraction still configures the proxy, without checking or failing over.
   const engine2 = makeEngineStub();
-  let tested = [];
-  engine2.testProxy = async (profile, options = {}) => {
-    const forced = String(options.proxy || options.forcedProxy || '').trim();
-    const target = forced || profile.proxy;
-    tested.push({ target, forced, source: options.proxySource || null, profileProxy: profile.proxy });
-    if (String(target).includes('10.20.30.40')) {
-      const err = new Error('primary dead');
-      err.errorClass = 'unreachable';
-      throw err;
-    }
-    if (String(target).includes('1081')) {
-      return {
-        ip: '198.51.100.2',
-        countryCode: 'US',
-        timezone: 'America/New_York',
-        latitude: 40.7,
-        longitude: -74,
-        latencyMs: 88,
-        networkType: 'hosting',
-        checkedAt: new Date().toISOString(),
-        protocol: 'socks5',
-        endpoint: '127.0.0.1:1081',
-        proxySource: options.proxySource || 'backup',
-        proxyRaw: target,
-      };
-    }
-    const err = new Error('fail');
-    err.errorClass = 'unknown';
-    throw err;
-  };
-  const failedOver = await engine2.prepareProfileProxyForStart({
-    id: 'prof_proxy_feature_4',
-    name: 'failover',
-    networkMode: 'proxy',
+  let tests = 0;
+  engine2.testProxy = async () => { tests += 1; throw new Error('unexpected startup test'); };
+  const extracted = await engine2.prepareProfileProxyForStart({
+    id: 'prof_proxy_feature_4', name: 'dynamic', networkMode: 'proxy',
     proxy: 'socks5://old:old@1.1.1.1:1',
-    proxyMeta: {
-      checkOnStart: true,
-      apiExtractUrl: `${base}/extract-text`,
-      backupProxies: ['socks5://127.0.0.1:1081', 'socks5://127.0.0.1:1082'],
-    },
-    privacy: { languageMode: 'ip', timezoneMode: 'ip', geoMode: 'ip' },
+    proxyMeta: { checkOnStart: true, apiExtractUrl: `${base}/extract-text`, backupProxies: ['socks5://127.0.0.1:1081'] },
   });
-  // extract replaces primary with 10.20.30.40, that fails, backup 1081 succeeds
-  assert.ok(String(failedOver.proxy).includes('1081'), 'backup proxy should be selected, got ' + failedOver.proxy);
-  assert.ok(tested.some((p) => String(p.target).includes('10.20.30.40')), 'extracted primary should be tested');
-  assert.ok(tested.some((p) => String(p.target).includes('1081') && p.forced), 'backup must be forced-tested, not re-resolved');
-  assert.ok(tested.every((p) => p.forced), 'every candidate must use forced proxy option');
-  const net = engine2.networkInfo.get('prof_proxy_feature_4');
-  assert.strictEqual(net.ip, '198.51.100.2');
-  assert.strictEqual(net.timezone, 'America/New_York');
-
+  assert.ok(extracted.proxy.includes('10.20.30.40'));
+  assert.strictEqual(tests, 0);
+  const events = [];
+  engine2.emit = (event) => events.push(event);
+  for (const proxy of ['', 'socks5://127.0.0.1:1080']) {
+    const prepared = await engine2.prepareProfileProxyForStart({
+      id: 'failure', name: 'failure', networkMode: 'proxy', proxy,
+      proxyMeta: { refreshOnStart: true, refreshUrl: `${base}/missing`, apiExtractUrl: `${base}/missing-extract` },
+    });
+    assert.strictEqual(prepared.proxy, proxy);
+  }
+  assert.ok(events.some((event) => event.code === 'extract-error'));
+  assert.ok(events.some((event) => event.message.includes('刷新代理失败')));
+  assert.strictEqual(tests, 0);
+  const net = { ip: '198.51.100.2', countryCode: 'US', timezone: 'America/New_York', latitude: 40.7, longitude: -74 };
   // sanitize must NOT copy refreshUrl into apiExtractUrl
   const noBleed = engine.sanitizeProfile({
     id: 'prof_proxy_feature_5',
@@ -225,7 +194,7 @@ async function main() {
   assert.ok(refreshWithWarn.network?.ip === '203.0.113.9');
 
   // fingerprint patch
-  const patch = engine2.fingerprintPatchFromNetwork(net, failedOver);
+  const patch = engine2.fingerprintPatchFromNetwork(net, extracted);
   assert.strictEqual(patch.language, 'en-US');
   assert.strictEqual(patch.privacy.timezone, 'America/New_York');
 
@@ -354,8 +323,8 @@ async function main() {
     assert.ok(html.includes(`id="${id}"`), 'missing html id ' + id);
   }
   assert.ok(html.includes('value="ifconfig-me"'), 'ifconfig.me must be selectable as an IP query channel');
-  assert.ok(renderer.includes("requireReady: $('#editor-proxy-require-ready')"), 'editor draft must collect requireReady');
-  assert.ok(renderer.includes("notReadyPolicy: $('#editor-proxy-not-ready-policy')"), 'editor draft must collect notReadyPolicy');
+  assert.ok(renderer.includes("requireReady: false"), 'editor must disable startup blocking');
+  assert.ok(renderer.includes("notReadyPolicy: 'continue'"), 'editor must continue startup');
   assert.ok(renderer.includes("tlsProfile: $('#editor-proxy-tls-profile')"), 'editor draft must collect tlsProfile');
   assert.ok(renderer.includes("apiExtractUrl: String(proxyMeta.apiExtractUrl || '')"), 'normalize must not bleed refreshUrl into apiExtractUrl');
   assert.strictEqual((renderer.match(/\$\('#editor-test-proxy'\)\?\.addEventListener\('click', testEditorProxy\);/g) || []).length, 1, 'test proxy listener should be single');
@@ -379,7 +348,7 @@ async function main() {
   // forced proxy option must bypass resolveProfileProxyConfig
   const engineSrc = fs.readFileSync(path.join(__dirname, 'engine.js'), 'utf8');
   assert.ok(engineSrc.includes('options.proxy || options.forcedProxy'), 'testProxy must accept forced proxy option');
-  assert.ok(engineSrc.includes("proxySource: index === 0 ? 'primary' : 'backup'"), 'prepare must force-test each candidate');
+  assert.ok(!engineSrc.slice(engineSrc.indexOf('async prepareProfileProxyForStart'), engineSrc.indexOf('async readExtension', engineSrc.indexOf('async prepareProfileProxyForStart'))).includes('this.testProxy('), 'startup must not test proxies');
   assert.ok(engineSrc.includes('extractError: extractError ? String(extractError.message || extractError) : null'), 'refresh must surface extract errors');
   assert.ok(!engineSrc.includes("apiExtractUrl: String(proxyMetaValue.apiExtractUrl || proxyMetaValue.refreshUrl || '')"), 'sanitize must not bleed refreshUrl into apiExtractUrl');
 
