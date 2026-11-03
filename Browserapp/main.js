@@ -673,6 +673,8 @@ async function applyBackupBody(body, {
   localProfiles = null,
   localGroups = null,
   unlimitedSize = false,
+  loadProfileFiles = null,
+  onProgress = null,
 } = {}) {
   const profileRoot = engine?.getProfileDataRoot?.() || localSettingsCache.profileDataRoot;
   const remoteProfiles = (body.profiles || []).map((p) => {
@@ -696,17 +698,34 @@ async function applyBackupBody(body, {
 
   const merged = cloudSync.mergeProfiles(localList, remoteProfiles, mode);
   const groups = cloudSync.mergeGroups(localGroupList, body.groups || [], mode);
+  const restoredIds = new Set(merged.restoredIds);
+
+  // Chromium can overwrite restored files or read a partially restored profile.
+  for (const id of restoredIds) {
+    if (engine?.running?.has(id)) throw new Error('请先关闭需要恢复的环境，再执行恢复');
+  }
+  if (mode === 'overwrite' || mode === 'remote-wins') {
+    const retainedIds = new Set(merged.profiles.map((profile) => profile.id));
+    for (const id of engine?.running?.keys?.() || []) {
+      if (!retainedIds.has(id)) throw new Error('请先关闭需要恢复的环境，再执行恢复');
+    }
+  }
 
   // restore browser data files for profiles that came from remote package
+  let completed = 0;
+  onProgress?.({ completed, total: restoredIds.size });
   for (const profile of merged.profiles) {
-    const files = dataById.get(profile.id);
-    if (files) {
+    const files = restoredIds.has(profile.id) && loadProfileFiles
+      ? await loadProfileFiles(profile.id)
+      : dataById.get(profile.id);
+    if (files && restoredIds.has(profile.id)) {
       restoredFiles += await cloudSync.restoreProfileDataFiles(
         path.join(profileRoot, profile.id),
         files,
         { unlimitedSize },
       );
     }
+    if (restoredIds.has(profile.id)) onProgress?.({ completed: ++completed, total: restoredIds.size });
   }
 
   let proxies = body.proxies || [];
@@ -745,7 +764,10 @@ async function runCloudRestore(payload = {}) {
   const body = unlimitedSize
     ? (payload.remoteName
       ? await cloudSync.downloadLocalBackup(providerConfigFromCloud(cloud), remoteName, passphrase)
-      : await cloudSync.downloadLocalBackupSet(providerConfigFromCloud(cloud), passphrase))
+      : await cloudSync.downloadLocalBackupSet(providerConfigFromCloud(cloud), passphrase, {
+        metadataOnly: true,
+        onProgress: (progress) => emit({ type: 'cloud-restore-progress', phase: 'reading', ...progress }),
+      }))
     : await cloudSync.parseBackupPackage(await cloudSync.download(cloud.provider, providerConfigFromCloud(cloud), remoteName), passphrase, { unlimitedSize });
 
   // optional: only restore subset of profile ids from the pack
@@ -759,6 +781,15 @@ async function runCloudRestore(payload = {}) {
     localProfiles: payload.localProfiles,
     localGroups: payload.localGroups,
     unlimitedSize,
+    onProgress: (progress) => emit({ type: 'cloud-restore-progress', phase: 'restoring', ...progress }),
+    loadProfileFiles: body._localProfileFiles ? async (id) => {
+      const name = body._localProfileFiles.get(id);
+      if (!name) return null;
+      const pack = await cloudSync.downloadLocalBackup(providerConfigFromCloud(cloud), name, passphrase);
+      const profile = pack.profiles.find((item) => item.id === id);
+      if (!profile) throw new Error('环境备份内容无效');
+      return profile._dataFiles;
+    } : null,
   });
 
   cloud.lastSyncAt = new Date().toISOString();
@@ -1883,7 +1914,8 @@ startupPromise = app.whenReady().then(async () => {
       profileDataRoot: engine?.getProfileDataRoot?.() || localSettingsCache.profileDataRoot,
       includeBrowserData: cloud.includeBrowserData !== false,
       passphrase: cloud.passphrase || '',
-      profileIds: payload?.profileIds || null,
+      // A manual file export is a full backup unless a subset was requested.
+      profileIds: Array.isArray(payload?.profileIds) ? payload.profileIds : [],
       // Manual exports share the package limits to avoid unbounded JSON
       // serialization in the Electron main process.
       unlimitedSize: false,

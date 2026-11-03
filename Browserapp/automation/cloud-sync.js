@@ -205,6 +205,7 @@ function mergeProfiles(localList = [], remoteList = [], mode = 'merge') {
   const local = Array.isArray(localList) ? localList.map(stripDataFiles) : [];
   const remote = Array.isArray(remoteList) ? remoteList.map(stripDataFiles) : [];
   const stats = { added: 0, updated: 0, kept: 0, skipped: 0, conflicts: 0 };
+  const restoredIds = new Set();
 
   if (mode === 'overwrite' || mode === 'remote-wins') {
     stats.added = remote.filter((r) => !local.some((l) => l.id === r.id)).length;
@@ -212,6 +213,7 @@ function mergeProfiles(localList = [], remoteList = [], mode = 'merge') {
     stats.kept = 0;
     return {
       profiles: remote.map((p) => ({ ...p, syncedAt: nowIso() })),
+      restoredIds: remote.map((p) => p.id),
       stats: { ...stats, mode },
     };
   }
@@ -225,6 +227,7 @@ function mergeProfiles(localList = [], remoteList = [], mode = 'merge') {
     if (!remoteItem?.id) continue;
     const localItem = byId.get(remoteItem.id);
     if (!localItem) {
+      restoredIds.add(remoteItem.id);
       byId.set(remoteItem.id, { ...remoteItem, syncedAt: nowIso(), _source: 'remote' });
       stats.added += 1;
       continue;
@@ -261,7 +264,8 @@ function mergeProfiles(localList = [], remoteList = [], mode = 'merge') {
         advanced: { ...(localItem.advanced || {}), ...(remoteItem.advanced || {}) },
       };
     }
-    const fromRemote = winner === remoteItem || winner.cookies === remoteItem.cookies;
+    const fromRemote = winner !== localItem;
+    if (fromRemote) restoredIds.add(remoteItem.id);
     byId.set(remoteItem.id, {
       ...stripDataFiles(winner),
       syncedAt: nowIso(),
@@ -279,6 +283,7 @@ function mergeProfiles(localList = [], remoteList = [], mode = 'merge') {
 
   return {
     profiles: [...byId.values()],
+    restoredIds: [...restoredIds],
     stats: { ...stats, mode: mode || 'merge' },
   };
 }
@@ -1049,11 +1054,11 @@ async function downloadLocalProfile(config, id, passphrase) {
   });
 }
 
-async function downloadLocalBackupSet(config, passphrase) {
-  return withLocalBackupLock(config, () => downloadLocalBackupSetUnlocked(config, passphrase));
+async function downloadLocalBackupSet(config, passphrase, { metadataOnly = false, onProgress = null } = {}) {
+  return withLocalBackupLock(config, () => downloadLocalBackupSetUnlocked(config, passphrase, { metadataOnly, onProgress }));
 }
 
-async function downloadLocalBackupSetUnlocked(config, passphrase) {
+async function downloadLocalBackupSetUnlocked(config, passphrase, { metadataOnly = false, onProgress = null } = {}) {
   const { base, target } = safeLocalTarget(config.dir, LOCAL_INDEX_NAME);
   await assertSafeLocalTarget(base, target);
   let index;
@@ -1065,7 +1070,8 @@ async function downloadLocalBackupSetUnlocked(config, passphrase) {
   if (index?.version !== 1 || !Array.isArray(index.files) || !index.files.length || new Set(index.files).size !== index.files.length) throw new Error('本地备份索引无效');
   let combined;
   const ids = new Set();
-  for (const name of index.files) {
+  const profileFiles = new Map();
+  for (const [indexNumber, name] of index.files.entries()) {
     if (typeof name !== 'string') throw new Error('本地备份索引无效');
     let body;
     try { body = await downloadLocalBackup(config, name, passphrase); }
@@ -1077,8 +1083,11 @@ async function downloadLocalBackupSetUnlocked(config, passphrase) {
     for (const profile of body.profiles) {
       if (ids.has(profile.id)) throw new Error('本地备份包含重复环境');
       ids.add(profile.id);
+      profileFiles.set(profile.id, name);
+      if (metadataOnly) delete profile._dataFiles;
       combined.profiles.push(profile);
     }
+    onProgress?.({ completed: indexNumber + 1, total: index.files.length });
   }
   // Older releases wrote close-time pushes to a separate per-profile file.
   // Prefer it only when it is newer than the corresponding indexed package.
@@ -1089,9 +1098,12 @@ async function downloadLocalBackupSetUnlocked(config, passphrase) {
       const latest = await downloadLocalBackup(config, name, passphrase);
       const replacement = latest.profiles.find((item) => item.id === profile.id);
       if (!replacement) throw new Error(`环境备份内容无效：${name}`);
+      profileFiles.set(profile.id, name);
+      if (metadataOnly) delete replacement._dataFiles;
       combined.profiles[i] = replacement;
     }
   }
+  if (metadataOnly) Object.defineProperty(combined, '_localProfileFiles', { value: profileFiles });
   return combined;
 }
 

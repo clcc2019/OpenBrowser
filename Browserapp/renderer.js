@@ -6396,12 +6396,15 @@ function updateCloudStatus(c) {
 function setCloudActionFeedback(message, state) {
   const feedback = $('#cloud-action-feedback');
   if (!feedback) return;
+  const progress = $('#cloud-restore-progress');
+  if (progress) progress.hidden = true;
   feedback.hidden = false;
   feedback.dataset.state = state;
   feedback.textContent = message;
 }
 
 let cloudActionBusy = false;
+let cloudRestoreWriting = false;
 async function runCloudSettingsAction(button, pending, action) {
   if (cloudActionBusy) return;
   cloudActionBusy = true;
@@ -6409,6 +6412,7 @@ async function runCloudSettingsAction(button, pending, action) {
   const disabled = buttons.map((item) => item.disabled);
   const label = button.textContent;
   buttons.forEach((item) => { item.disabled = true; });
+  button.setAttribute('aria-busy', 'true');
   button.textContent = pending;
   setCloudActionFeedback(pending, 'pending');
   try {
@@ -6416,6 +6420,7 @@ async function runCloudSettingsAction(button, pending, action) {
   } finally {
     buttons.forEach((item, index) => { item.disabled = disabled[index]; });
     button.textContent = label;
+    button.removeAttribute('aria-busy');
     cloudActionBusy = false;
   }
 }
@@ -6446,7 +6451,7 @@ function formatMergeStats(stats) {
 function applyRestoredProfiles(result) {
   if (!result?.profiles) return;
   ui.profiles = result.profiles.map((p) => normalizeProfileSettings(p));
-  if (Array.isArray(result.groups) && result.groups.length) {
+  if (Array.isArray(result.groups)) {
     ui.groups = result.groups;
   }
   save();
@@ -6550,7 +6555,8 @@ $('#cloud-backup-now')?.addEventListener('click', async (event) => runCloudSetti
     toast(message);
   }
 }));
-$('#cloud-restore-now')?.addEventListener('click', async () => {
+$('#cloud-restore-now')?.addEventListener('click', async (event) => {
+  if (cloudActionBusy) return;
   const cloud = readCloudForm();
   const mode = cloud.restoreMode || 'merge';
   const warn = mode === 'overwrite'
@@ -6559,21 +6565,30 @@ $('#cloud-restore-now')?.addEventListener('click', async () => {
       ? '仅从云端新增本地没有的环境，已有环境不变。继续？'
       : '智能合并：同 ID 取较新版本，本地独有环境会保留。继续？');
   if (!confirm(warn)) return;
-  try {
-    await window.ops.cloudSetConfig(cloud);
-    toast(tx('正在恢复…'));
-    const result = await window.ops.cloudRestore({
-      cloud,
-      mode,
-      localProfiles: ui.profiles,
-      localGroups: ui.groups || [],
-    });
-    applyRestoredProfiles(result);
-    await refreshCloudPanel();
-    const detail = formatMergeStats(result.mergeStats);
-    toast('恢复完成 · ' + (result.profiles?.length || 0) + ' 个环境' + (detail ? ' · ' + detail : ''));
-    log('Cloud', '恢复 · ' + mode + ' · ' + (result.profiles?.length || 0) + (detail ? ' · ' + detail : ''));
-  } catch (error) { toast('恢复失败：' + error.message); }
+  await runCloudSettingsAction(event.currentTarget, tx('正在恢复…'), async () => {
+    cloudRestoreWriting = false;
+    try {
+      await window.ops.cloudSetConfig(cloud);
+      toast(tx('正在恢复…'));
+      const result = await window.ops.cloudRestore({
+        cloud,
+        mode,
+        localProfiles: ui.profiles,
+        localGroups: ui.groups || [],
+      });
+      applyRestoredProfiles(result);
+      await refreshCloudPanel();
+      const detail = formatMergeStats(result.mergeStats);
+      const message = '恢复完成 · 当前 ' + (result.profiles?.length || 0) + ' 个环境 · 恢复 ' + (result.restoredFiles || 0) + ' 个数据文件' + (detail ? ' · ' + detail : '');
+      setCloudActionFeedback(message, 'success');
+      toast(message);
+      log('Cloud', '恢复 · ' + mode + ' · ' + (result.profiles?.length || 0) + (detail ? ' · ' + detail : ''));
+    } catch (error) {
+      const message = '恢复失败：' + error.message + (cloudRestoreWriting ? '。部分数据可能已写入，请检查原因后重试。' : '');
+      setCloudActionFeedback(message, 'error');
+      toast(message);
+    }
+  });
 });
 $('#cloud-export-file')?.addEventListener('click', async () => {
   try {
@@ -6683,6 +6698,21 @@ switchView = function(view) {
 };
 
 window.ops.onEvent((value) => {
+  if (value?.type === 'cloud-restore-progress' && cloudActionBusy && $('#cloud-restore-now')?.getAttribute('aria-busy') === 'true') {
+    const total = Math.max(0, Number(value.total) || 0);
+    const completed = Math.min(total, Math.max(0, Number(value.completed) || 0));
+    if (value.phase === 'restoring' && total) cloudRestoreWriting = true;
+    const label = value.phase === 'reading' ? '正在读取备份' : '正在恢复环境数据';
+    const message = total ? `${label} · ${completed} / ${total}${value.phase === 'restoring' && completed === total ? ' · 正在保存配置…' : ''}` : `${label} · 正在保存配置…`;
+    setCloudActionFeedback(message, 'pending');
+    const progress = $('#cloud-restore-progress');
+    if (progress && total) {
+      progress.hidden = false;
+      progress.value = (completed / total) * 100;
+      progress.setAttribute('aria-label', label);
+      progress.setAttribute('aria-valuetext', `${completed} / ${total}`);
+    }
+  }
   if (value?.type === 'kernel-progress') {
     const progress = document.getElementById('kernel-progress');
     if (!progress) return;

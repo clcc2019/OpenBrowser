@@ -9,6 +9,15 @@ const zlib = require('zlib');
 const cloud = require('./cloud-sync');
 
 async function main() {
+  const manualProfiles = [{ id: 'opted-out', advanced: { cloudBackup: false } }, { id: 'opted-in', advanced: { cloudBackup: true } }];
+  const manual = await cloud.buildBackupPackage({ profiles: manualProfiles, profileIds: [], includeBrowserData: false });
+  assert.deepStrictEqual((await cloud.parseBackupPackage(manual.buffer)).profiles.map((p) => p.id), ['opted-out', 'opted-in']);
+  const local = [{ id: 'same', updatedAt: '2026-02-01T00:00:00Z' }];
+  const remote = [{ id: 'same', updatedAt: '2026-01-01T00:00:00Z' }, { id: 'new' }];
+  assert.deepStrictEqual(cloud.mergeProfiles(local, remote, 'merge').restoredIds, ['new']);
+  assert.deepStrictEqual(cloud.mergeProfiles(local, remote, 'local-wins').restoredIds, ['new']);
+  assert.deepStrictEqual(cloud.mergeProfiles(local, remote, 'overwrite').restoredIds, ['same', 'new']);
+  console.log('  PASS  manual export includes all profiles and restore respects merge decisions');
   assert.throws(() => cloud.safeRemotePath('../outside.obpack'));
   assert.throws(() => cloud.safeRemotePath('/tmp/outside.obpack'));
   assert.throws(() => cloud.safeRemotePath('C:\\outside.obpack'));
@@ -99,6 +108,13 @@ async function main() {
       assert.deepStrictEqual(body.profiles.map((p) => p.id), [profiles[i].id]);
     }
     assert.deepStrictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles.map((p) => p.id), ['one', 'two']);
+    const metadata = await cloud.downloadLocalBackupSet(config, 'secret', { metadataOnly: true });
+    assert.deepStrictEqual(metadata.profiles.map((p) => p.id), ['one', 'two']);
+    assert(metadata.profiles.every((p) => !p._dataFiles));
+    for (const profile of metadata.profiles) {
+      const pack = await cloud.downloadLocalBackup(config, metadata._localProfileFiles.get(profile.id), 'secret');
+      assert.strictEqual(pack.profiles[0].id, profile.id);
+    }
     await assert.rejects(() => cloud.downloadLocalBackupSet(config, 'wrong'));
     await cloud.localBackupSet(config, { ...options, profiles: [profiles[1]] });
     assert.deepStrictEqual((await cloud.downloadLocalBackupSet(config, 'secret')).profiles.map((p) => p.id), ['two']);
@@ -168,6 +184,14 @@ async function main() {
     const restored = await cloud.downloadLocalBackupSet(destination, 'secret');
     assert.strictEqual(Buffer.concat(restored.profiles[0]._dataFiles['Local Storage/data']).toString(), 'changed');
     assert.strictEqual(Buffer.concat(restored.profiles[1]._dataFiles['Local Storage/data']).toString(), 'b');
+    const metadata = await cloud.downloadLocalBackupSet(destination, 'secret', { metadataOnly: true });
+    for (const profile of metadata.profiles) {
+      assert.strictEqual(profile._dataFiles, undefined);
+      const pack = await cloud.downloadLocalBackup(destination, metadata._localProfileFiles.get(profile.id), 'secret');
+      const target = path.join(incrementalRoot, 'restored', profile.id);
+      await cloud.restoreProfileDataFiles(target, pack.profiles[0]._dataFiles, { unlimitedSize: true });
+      assert.strictEqual(await fs.readFile(path.join(target, 'Default', 'Local Storage', 'data'), 'utf8'), profile.id === 'a' ? 'changed' : 'b');
+    }
     const newPassword = await cloud.localBackupSet(source, { ...options, passphrase: 'new secret' });
     assert.strictEqual(newPassword.meta.changedCount, 2);
     await fs.rm(path.join(source.dir, newPassword.result.files[0]));
