@@ -102,8 +102,8 @@ async function main() {
     const profiles = ['one', 'two'].map((id) => ({ id, advanced: { cloudBackup: true } }));
     const options = { profiles, groups: [{ id: 'group' }], passphrase: 'secret' };
     const backup = await cloud.localBackupSet(config, options);
-    assert.strictEqual(backup.result.files.length, 2);
-    for (const [i, name] of backup.result.files.entries()) {
+    assert.strictEqual(backup.result.files.length, 3);
+    for (const [i, name] of backup.result.files.slice(1).entries()) {
       const body = await cloud.downloadLocalBackup(config, name, 'secret');
       assert.deepStrictEqual(body.profiles.map((p) => p.id), [profiles[i].id]);
     }
@@ -166,7 +166,7 @@ async function main() {
     }
     const options = { profiles, profileDataRoot: dataRoot, includeBrowserData: true, passphrase: 'secret' };
     const first = await cloud.localBackupSet(source, options);
-    assert.strictEqual(first.meta.changedCount, 2);
+    assert.strictEqual(first.meta.changedCount, 3);
     await fs.cp(source.dir, destination.dir, { recursive: true });
     const unchanged = await cloud.localBackupSet(source, options);
     assert.strictEqual(unchanged.meta.changedCount, 0);
@@ -174,9 +174,16 @@ async function main() {
     await fs.writeFile(path.join(dataRoot, 'a', 'Default', 'Local Storage', 'data'), 'changed');
     const changed = await cloud.localBackupSet(source, options);
     assert.strictEqual(changed.meta.changedCount, 1);
-    assert.strictEqual(changed.meta.reusedCount, 1);
-    assert.strictEqual(changed.result.files[1], first.result.files[1]);
-    for (const name of changed.result.changedFiles) {
+    assert.strictEqual(changed.meta.reusedCount, 2);
+    assert.strictEqual(changed.result.files[2], first.result.files[2]);
+    const sharedChanged = await cloud.localBackupSet(source, { ...options, groups: [{ id: 'new-group' }] });
+    assert.strictEqual(sharedChanged.meta.changedCount, 1);
+    assert.deepStrictEqual(sharedChanged.result.files.slice(1), changed.result.files.slice(1));
+    assert.deepStrictEqual((await cloud.downloadLocalBackupSet(source, 'secret')).groups, [{ id: 'new-group' }]);
+    const synced = await cloud.localBackupSet(source, { ...options, groups: [{ id: 'new-group' }], profiles: profiles.map((p) => ({ ...p, syncedAt: new Date().toISOString() })) });
+    assert.strictEqual(synced.meta.changedCount, 0);
+    assert((await fs.readdir(path.join(source.dir, 'backups'), { withFileTypes: true })).every((entry) => entry.isFile()));
+    for (const name of [...changed.result.changedFiles, ...sharedChanged.result.changedFiles]) {
       await fs.mkdir(path.dirname(path.join(destination.dir, name)), { recursive: true });
       await fs.copyFile(path.join(source.dir, name), path.join(destination.dir, name));
     }
@@ -193,7 +200,7 @@ async function main() {
       assert.strictEqual(await fs.readFile(path.join(target, 'Default', 'Local Storage', 'data'), 'utf8'), profile.id === 'a' ? 'changed' : 'b');
     }
     const newPassword = await cloud.localBackupSet(source, { ...options, passphrase: 'new secret' });
-    assert.strictEqual(newPassword.meta.changedCount, 2);
+    assert.strictEqual(newPassword.meta.changedCount, 3);
     await fs.rm(path.join(source.dir, newPassword.result.files[0]));
     await assert.rejects(() => cloud.downloadLocalBackupSet(source, 'new secret'), /备份文件缺失/);
     const repaired = await cloud.localBackupSet(source, { ...options, passphrase: 'new secret' });
@@ -216,8 +223,8 @@ async function main() {
     await fs.writeFile(legacyTimestamp, 'old duplicate');
     await fs.writeFile(path.join(retentionRoot, 'my-notes.obpack'), 'keep');
     const next = await cloud.localBackupSet(config, { ...options, profiles: [{ ...profiles[0], name: 'new' }, profiles[1]] });
-    await assert.rejects(() => fs.stat(path.join(retentionRoot, first.result.files[0])), { code: 'ENOENT' });
-    assert.strictEqual(next.result.files[1], first.result.files[1]);
+    await assert.rejects(() => fs.stat(path.join(retentionRoot, first.result.files[1])), { code: 'ENOENT' });
+    assert.strictEqual(next.result.files[2], first.result.files[2]);
     await assert.rejects(() => fs.stat(legacyTimestamp), { code: 'ENOENT' });
     assert.strictEqual(await fs.readFile(unrelated, 'utf8'), 'keep');
     assert.strictEqual(await fs.readFile(path.join(retentionRoot, 'my-notes.obpack'), 'utf8'), 'keep');
@@ -231,12 +238,16 @@ async function main() {
 
     const pushed = { ...profiles[0], name: 'closed' };
     await cloud.localBackupProfile(config, { profiles: [pushed], groups: [], proxies: [], passphrase: 'secret' }, 'a');
-    await assert.rejects(() => fs.stat(path.join(retentionRoot, next.result.files[0])), { code: 'ENOENT' });
+    await assert.rejects(() => fs.stat(path.join(retentionRoot, next.result.files[1])), { code: 'ENOENT' });
     const restored = await cloud.downloadLocalBackupSet(config, 'secret');
     assert.deepStrictEqual(restored.profiles.map((p) => p.name), ['closed', 'b']);
     assert.deepStrictEqual(restored.groups, options.groups);
     assert.deepStrictEqual(restored.proxies, options.proxies);
     assert.strictEqual((await cloud.downloadLocalProfile(config, 'a', 'secret')).profiles[0].name, 'closed');
+    const indexBeforeUnchanged = await fs.readFile(indexPath, 'utf8');
+    const unchangedPush = await cloud.localBackupProfile(config, { profiles: [{ ...pushed, syncedAt: new Date().toISOString() }], passphrase: 'secret' }, 'a');
+    assert.strictEqual(unchangedPush.meta.changedCount, 0);
+    assert.strictEqual(await fs.readFile(indexPath, 'utf8'), indexBeforeUnchanged);
     await Promise.all([
       cloud.localBackupProfile(config, { profiles: [{ ...profiles[0], name: 'concurrent-a' }], passphrase: 'secret' }, 'a'),
       cloud.localBackupProfile(config, { profiles: [{ ...profiles[1], name: 'concurrent-b' }], passphrase: 'secret' }, 'b'),

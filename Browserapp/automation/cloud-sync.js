@@ -753,7 +753,9 @@ async function* localDataFiles(profile, options) {
 async function localInputFingerprint(profile, options) {
   const hash = options.passphrase ? crypto.createHmac('sha256', String(options.passphrase)) : crypto.createHash('sha256');
   const add = (value) => { const data = Buffer.from(value); const length = Buffer.alloc(8); length.writeBigUInt64BE(BigInt(data.length)); hash.update(length); hash.update(data); };
-  add(JSON.stringify({ profile: profile ? stripDataFiles(profile) : null, groups: options.groups || [], proxies: options.proxies || [], settings: options.settings || {}, includeBrowserData: Boolean(options.includeBrowserData), format: 3 }));
+  const inputProfile = profile ? stripDataFiles(profile) : null;
+  if (inputProfile) delete inputProfile.syncedAt;
+  add(JSON.stringify({ profile: inputProfile, groups: options.groups || [], proxies: options.proxies || [], settings: options.settings || {}, includeBrowserData: Boolean(options.includeBrowserData), format: 3 }));
   if (profile) for await (const file of localDataFiles(profile, options)) {
     add(file.name);
     const fileHash = crypto.createHash('sha256');
@@ -854,6 +856,10 @@ async function cleanupLocalBackups(base, entries, { full = false, legacyProfileI
   try { snapshots = await fsp.readdir(backups, { withFileTypes: true }); }
   catch (error) { if (error.code !== 'ENOENT') throw error; snapshots = []; }
   for (const snapshot of snapshots) {
+    if (snapshot.isFile() && /^pack-[a-f0-9]{32}\.obpack$/.test(snapshot.name)) {
+      if (!retained.has(`backups/${snapshot.name}`)) await fsp.unlink(path.join(backups, snapshot.name));
+      continue;
+    }
     if (!snapshot.isDirectory() || !/^\d+-[a-f0-9]{16}$/.test(snapshot.name)) continue;
     const snapshotDir = path.join(backups, snapshot.name);
     for (const relativeDir of ['', 'profiles']) {
@@ -919,14 +925,14 @@ async function localBackupSetUnlocked(config, options) {
   let previous = null;
   try { previous = JSON.parse(await fsp.readFile(target, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const snapshot = `backups/${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
   const entries = [];
   const changedFiles = [];
-  const items = profiles.length ? profiles : [null];
+  const items = [null, ...profiles];
   if (new Set(profiles.map((p) => assertProfileId(p?.id))).size !== profiles.length) throw new Error('环境 ID 重复');
   for (const profile of items) {
     const id = profile?.id || null;
-    const fingerprint = await localInputFingerprint(profile, options);
+    const itemOptions = profile ? { ...options, groups: [], proxies: [], settings: {} } : options;
+    const fingerprint = await localInputFingerprint(profile, itemOptions);
     const old = previous?.version === 1 && Array.isArray(previous.entries)
       ? previous.entries.find((entry) => entry.id === id && entry.fingerprint === fingerprint && previous.files?.includes(entry.name)) : null;
     let reused = false;
@@ -942,14 +948,15 @@ async function localBackupSetUnlocked(config, options) {
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
     if (!reused) {
-      const name = profile ? `${snapshot}/${profileRemoteName(id)}` : `${snapshot}/openbrowser-settings.obpack`;
-      const pack = await localBackup(config, { ...options, profiles: profile ? [profile] : [], profileIds: profile ? [id] : [] }, name);
+      const name = `backups/pack-${crypto.randomBytes(16).toString('hex')}.obpack`;
+      const pack = await localBackup(config, { ...itemOptions, profiles: profile ? [profile] : [], profileIds: profile ? [id] : [] }, name);
       entries.push({ id, name, fingerprint, sha256: pack.meta.sha256, bytes: pack.meta.bytes });
       changedFiles.push(name);
     }
   }
   for (let i = 0; i < items.length; i++) {
-    if (await localInputFingerprint(items[i], options) !== entries[i].fingerprint) throw new Error('备份期间环境数据发生变化，请关闭环境后重试');
+    const itemOptions = items[i] ? { ...options, groups: [], proxies: [], settings: {} } : options;
+    if (await localInputFingerprint(items[i], itemOptions) !== entries[i].fingerprint) throw new Error('备份期间环境数据发生变化，请关闭环境后重试');
   }
   const names = entries.map((entry) => entry.name);
   await publishLocalIndex(base, target, entries);
@@ -1010,13 +1017,18 @@ async function localBackupProfile(config, options, id) {
       } finally { await handle.close(); }
     }
     const shared = await downloadLocalBackup(config, index.files[0], options.passphrase || '');
-    const packOptions = { ...options, profiles: [profile], profileIds: [id], groups: shared.groups || [], proxies: shared.proxies || [], settings: shared.settings || {} };
+    const hasSharedEntry = index.entries.some((entry) => entry.id === null);
+    const packOptions = { ...options, profiles: [profile], profileIds: [id], groups: hasSharedEntry ? [] : shared.groups || [], proxies: hasSharedEntry ? [] : shared.proxies || [], settings: hasSharedEntry ? {} : shared.settings || {} };
     const fingerprint = await localInputFingerprint(profile, packOptions);
-    const name = `backups/${Date.now()}-${crypto.randomBytes(8).toString('hex')}/${profileRemoteName(id)}`;
+    const old = index.entries.find((item) => item.id === id);
+    if (old?.fingerprint === fingerprint) {
+      return { meta: { version: 3, encrypted: Boolean(options.passphrase), profileCount: 1, profileIds: [id], bytes: old.bytes, changedCount: 0, reusedCount: 1 }, result: { provider: 'local', path: safeLocalTarget(base, old.name).target, bytes: old.bytes, remoteName: old.name } };
+    }
+    const name = `backups/pack-${crypto.randomBytes(16).toString('hex')}.obpack`;
     const pack = await localBackup(config, packOptions, name);
     if (await localInputFingerprint(profile, packOptions) !== fingerprint) throw new Error('备份期间环境数据发生变化，请关闭环境后重试');
     const entry = { id, name, fingerprint, sha256: pack.meta.sha256, bytes: pack.meta.bytes };
-    const entries = index.entries.filter((item) => item.id !== id && item.id !== null);
+    const entries = index.entries.filter((item) => item.id !== id);
     const position = index.entries.findIndex((item) => item.id === id);
     entries.splice(position < 0 ? entries.length : Math.min(position, entries.length), 0, entry);
     await publishLocalIndex(base, target, entries);
