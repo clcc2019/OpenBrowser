@@ -103,6 +103,18 @@ async function testProfileLockRecovery() {
     assert.strictEqual(await fs.readFile(file, 'utf8'), '{broken lock', 'corrupt lock must be retained');
     await fs.rm(file, { force: true });
 
+    // A previous boot invalidates even a recycled live PID, but only after a
+    // process scan confirms that no browser currently owns this profile.
+    const oldTime = new Date(Date.now() - (os.uptime() + 60) * 1000);
+    await fs.writeFile(file, JSON.stringify({ ...stale, pid: process.pid }), 'utf8');
+    await fs.utimes(file, oldTime, oldTime);
+    const previousBootLock = await acquireProfileLock(profileRoot, { profileId: 'env-a' });
+    assert.strictEqual(await releaseProfileLock(profileRoot, previousBootLock), true);
+    await fs.writeFile(file, '{broken lock', 'utf8');
+    await fs.utimes(file, oldTime, oldTime);
+    const previousBootCorruptLock = await acquireProfileLock(profileRoot, { profileId: 'env-a' });
+    assert.strictEqual(await releaseProfileLock(profileRoot, previousBootCorruptLock), true);
+
     const guard = `${file}.guard`;
     await fs.mkdir(guard, { recursive: true });
     await fs.writeFile(path.join(guard, 'owner.json'), JSON.stringify({

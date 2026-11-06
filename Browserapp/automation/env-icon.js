@@ -438,7 +438,7 @@ function rebuildAppShortcutIcons() {
 // v2: the Dock wrapper now strips CFBundleIconName, so wrappers built by v1 must be rebuilt
 // or they keep resolving their icon out of the kernel's asset catalog.
 // v3: do not inject --no-proxy-server (it overrides Chromium --proxy-server and leaks the real IP).
-const ARTIFACT_STAMP_VERSION = 3;
+const ARTIFACT_STAMP_VERSION = 4;
 
 /** True when the stamp matches and every expected output is still present. */
 function artifactIsFresh(stampPath, key, outputs) {
@@ -469,7 +469,7 @@ async function prepareMarkerExtension({ profileId, envNumber, userDataPath, temp
   const stampPath = path.join(dest, '.artifact-stamp');
   const stampKey = JSON.stringify({ v: ARTIFACT_STAMP_VERSION, label });
   const expected = [16, 32, 48, 128].map((size) => path.join(dest, `icon-${size}.png`))
-    .concat([path.join(dest, 'manifest.json'), path.join(dest, 'marker.js')]);
+    .concat([path.join(dest, 'manifest.json')]);
   if (artifactIsFresh(stampPath, stampKey, expected)) return dest;
 
   const sizes = [16, 32, 48, 128];
@@ -497,55 +497,11 @@ async function prepareMarkerExtension({ profileId, envNumber, userDataPath, temp
       48: 'icon-48.png',
       128: 'icon-128.png',
     },
-    content_scripts: [
-      {
-        matches: ['http://*/*', 'https://*/*'],
-        js: ['marker.js'],
-        run_at: 'document_idle',
-      },
-    ],
   };
   await fsp.writeFile(path.join(dest, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
 
-  // In-page badge shows env number (toolbar icon already has logo-native+number)
-  const markerJs = `(() => {
-  const id = 'openbrowser-profile-marker';
-  const label = ${JSON.stringify(label)};
-  const existing = document.getElementById(id);
-  if (existing) {
-    existing.textContent = label;
-    existing.setAttribute('data-env', label);
-    return;
-  }
-  const badge = document.createElement('div');
-  badge.id = id;
-  badge.setAttribute('data-env', label);
-  badge.textContent = label;
-  badge.title = 'OpenBrowser 环境 ' + label;
-  Object.assign(badge.style, {
-    position: 'fixed',
-    right: '14px',
-    bottom: '14px',
-    zIndex: '2147483647',
-    minWidth: '28px',
-    height: '28px',
-    padding: '0 10px',
-    borderRadius: '999px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(145deg,#007AFF,#0056CC)',
-    color: '#fff',
-    font: '700 13px/1 system-ui,-apple-system,Segoe UI,sans-serif',
-    boxShadow: '0 8px 24px rgba(0,122,255,.35)',
-    border: '2px solid rgba(255,255,255,.85)',
-    pointerEvents: 'none',
-    letterSpacing: '0.02em',
-  });
-  (document.documentElement || document.body).appendChild(badge);
-})();
-`;
-  await fsp.writeFile(path.join(dest, 'marker.js'), markerJs, 'utf8');
+  // Remove the script left by older generated extensions.
+  await fsp.rm(path.join(dest, 'marker.js'), { force: true });
 
   if (templateDir) {
     await fsp.writeFile(path.join(dest, '.source-template'), String(templateDir), 'utf8').catch(() => {});

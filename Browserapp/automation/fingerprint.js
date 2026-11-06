@@ -27,6 +27,7 @@ const {
   cdpUserAgentOverride,
   buildUaInjectionScript,
   parseOsFromUa,
+  normalizeOsKey,
   OS_PRESETS,
 } = require('./user-agent');
 
@@ -599,7 +600,8 @@ function buildWebglFpPayload(webgl = {}) {
 }
 
 function desktopOs(os) {
-  return ['windows', 'macos', 'macos_arm', 'linux'].includes(os) ? os : null;
+  const normalized = normalizeOsKey(os);
+  return ['windows', 'macos', 'macos_arm', 'linux'].includes(normalized) ? normalized : null;
 }
 
 function webglPresetsForOs(os) {
@@ -2512,7 +2514,7 @@ function chromeArgsForFingerprint(fp, profile = {}) {
   return args;
 }
 
-async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}) {
+async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}, options = {}) {
   const privacy = profile.privacy || {};
   const timezone = normalizeTimezoneValue(privacy.timezoneMode === 'custom'
     ? privacy.timezone
@@ -2554,6 +2556,9 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     } catch (error) {
       const msg = String(error && error.message || error || '');
       if (/already in effect|cannot be overridden|not available/i.test(msg)) return;
+      // Chrome only accepts some emulation commands on top-level targets.
+      // Subframes inherit those settings; their document-start script is still required.
+      if (options.targetType === 'iframe' && /only be executed on top-level targets/i.test(msg)) return;
       throw error;
     }
   };
@@ -2623,6 +2628,12 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
       documentStartOk = true;
     }
   }
+  if (!documentStartOk && options.requireDocumentStart) {
+    throw new Error('Failed to register document-start fingerprint script');
+  }
+  // A paused subframe cannot execute Runtime.evaluate until resumed. Its
+  // registered document-start script runs when Chromium resumes the target.
+  if (options.skipCurrentDocument) return;
   // Already-open documents: best-effort patch. Never abort startup if evaluate throws
   // (Chromium often reports "Uncaught" for redefine races; document-start still applies on next nav).
   try {

@@ -17,17 +17,5 @@
     "32": "icon-32.png",
     "48": "icon-48.png",
     "128": "icon-128.png"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "http://*/*",
-        "https://*/*"
-      ],
-      "js": [
-        "marker.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ]
+  }
 }

@@ -40,6 +40,8 @@ const ok = (n, c) => { assert.ok(c, n); console.log('  PASS  ' + n); passed += 1
   }
   ok('first build writes all icon sizes and the manifest', built);
   ok('first build records a stamp', fs.existsSync(stamp));
+  ok('generated extension does not inject a page marker', !JSON.parse(fs.readFileSync(manifest, 'utf8')).content_scripts);
+  ok('bundled extension does not inject a page marker', !JSON.parse(fs.readFileSync(path.join(__dirname, 'bundled-extension/manifest.json'), 'utf8')).content_scripts);
 
   // --- an unchanged environment reuses what is on disk ---
   const before = icons.map((f) => fs.statSync(f).mtimeMs);
@@ -68,10 +70,12 @@ const ok = (n, c) => { assert.ok(c, n); console.log('  PASS  ' + n); passed += 1
 
   // --- a stale stamp version forces a rebuild ---
   await fsp.writeFile(stamp, 'stale', 'utf8');
+  await fsp.writeFile(path.join(dest, 'marker.js'), 'old marker', 'utf8');
   const mtimeBefore = fs.statSync(manifest).mtimeMs;
   await new Promise((r) => setTimeout(r, 15));
   await prepareMarkerExtension({ ...args, envNumber: 9 });
   ok('an unrecognised stamp forces a rebuild', fs.statSync(manifest).mtimeMs !== mtimeBefore);
+  ok('rebuilding removes the old marker script', !fs.existsSync(path.join(dest, 'marker.js')));
 
   // --- macOS Dock wrapper: the environment number must be what the Dock actually draws ---
   // The wrapper copies the kernel's Info.plist to keep its bundle identity, and that plist

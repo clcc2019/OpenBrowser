@@ -1480,7 +1480,11 @@ class BrowserEngine {
       : baseFp;
     // session-scoped CDP calls for targets attached with flatten:true
     const sessionCall = async (method, params = {}, timeout = 8000) => connection.command(method, params, { sessionId, timeout });
-    await applyFingerprintToTab(sessionCall, null, injectFp, enriched);
+    await applyFingerprintToTab(sessionCall, null, injectFp, enriched, {
+      requireDocumentStart: true,
+      targetType: targetInfo?.type,
+      skipCurrentDocument: targetInfo?.type === 'iframe' && targetInfo.waitingForDebugger === true,
+    });
     if (!item.fpAppliedTargets) item.fpAppliedTargets = new Set();
     if (targetInfo?.targetId) item.fpAppliedTargets.add(targetInfo.targetId);
     item.fingerprint = baseFp;
@@ -1506,21 +1510,45 @@ class BrowserEngine {
       const { sessionId, targetInfo = {}, waitingForDebugger } = event.params || {};
       if (!sessionId) return;
       (async () => {
+        let mayResume = true;
+        let timer;
         try {
           if (targetInfo.type === 'page' || targetInfo.type === 'iframe') {
-            // Nested attach so workers/iframes under this page also pause for inject.
-            await connection.command('Target.setAutoAttach', {
-              autoAttach: true,
-              waitForDebuggerOnStart: true,
-              flatten: true,
-            }, { sessionId });
-            // Critical: inject fingerprint BEFORE resuming the page/iframe target.
-            // Polling in startRunningWatch is only a fallback, not the primary path.
-            await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, targetInfo);
+            const inject = async () => {
+              await connection.command('Target.setAutoAttach', {
+                autoAttach: true,
+                waitForDebuggerOnStart: true,
+                flatten: true,
+              }, { sessionId });
+              // Critical: inject fingerprint BEFORE resuming the target.
+              await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
+            };
+            const timeoutMs = this.fingerprintAttachTimeoutMs || 8000;
+            await Promise.race([
+              inject(),
+              new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Fingerprint injection timed out')), timeoutMs); }),
+            ]);
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
             await connection.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 10000 });
           }
         } catch (error) {
+          if ((targetInfo.type === 'page' || targetInfo.type === 'iframe') && waitingForDebugger) {
+            // Never resume a document whose injection failed or timed out. Close
+            // it; if Chromium cannot close this target, stop the browser instead.
+            mayResume = false;
+            let closed = false;
+            if (targetInfo.targetId) {
+              try {
+                const result = await connection.command('Target.closeTarget', { targetId: targetInfo.targetId }, { timeout: 3000 });
+                closed = result?.success === true;
+              } catch (_) {}
+            }
+            if (!closed && !item.cleanedUp && !item.stopping) {
+              await this.handleBrowserGone(item.profile.id, item, 'fingerprint-injection-failed', {
+                expected: false, error: error.message, kill: true, waitForExit: true,
+              }).catch((cleanupError) => report(cleanupError, targetInfo));
+            }
+          }
           report(error, targetInfo);
           this.emit({
             type: 'fingerprint-injection-failed',
@@ -1529,7 +1557,8 @@ class BrowserEngine {
             message: error.message,
           });
         } finally {
-          if (waitingForDebugger) {
+          clearTimeout(timer);
+          if (waitingForDebugger && mayResume) {
             await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId })
               .catch((error) => report(error, targetInfo));
           }
@@ -2861,12 +2890,16 @@ class BrowserEngine {
         chromeMajor: major || undefined,
       };
     }
-    if (proxyConfig?.authenticated) {
+    if (profile.networkMode === 'proxy' && !proxyConfig) {
+      throw Object.assign(new Error('代理模式缺少有效节点，请配置代理或明确选择本地直连'), { code: 'proxy-required' });
+    }
+    if (proxyConfig && (proxyConfig.authenticated || proxyConfig.protocol === 'socks5')) {
       try {
         proxyForwarder = await startAuthenticatedProxy(proxyConfig, (value) => this.emit({ type: 'proxy-error', id: profile.id, code: value.code, message: value.message }));
         startupResources.proxyForwarder = proxyForwarder;
       } catch (error) {
-        this.emit({ type: 'proxy-warn', id: profile.id, message: '代理转发器启动失败：' + error.message });
+        this.emit({ type: 'proxy-error', id: profile.id, code: 'proxy-bridge-failed', message: '代理转发器启动失败：' + error.message });
+        throw error;
       }
     }
     this.emitStartProgress(profile.id, 'configure', 48, '正在配置启动参数…');
@@ -2943,17 +2976,16 @@ class BrowserEngine {
     }
     if (proxy) {
       args.push(`--proxy-server=${proxy}`);
-      if (!args.some((a) => a.startsWith('--force-webrtc-ip-handling-policy='))) {
-        args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
-      }
+      args = args.filter((a) => !a.startsWith('--force-webrtc-ip-handling-policy='));
+      args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
       // 本机启动页必须直连，不走代理；可叠加用户直连白名单
       let bypass = '<-loopback>;127.0.0.1;localhost';
-      if (profile.proxyMeta?.directBypass && profile.proxyMeta.bypassList) {
+      if (profile.networkMode !== 'proxy' && profile.proxyMeta?.directBypass && profile.proxyMeta.bypassList) {
         const extra = String(profile.proxyMeta.bypassList).split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
         if (extra.length) bypass += ';' + extra.join(';');
       }
       const existingBypass = args.findIndex((a) => a.startsWith('--proxy-bypass-list='));
-      if (existingBypass >= 0) args[existingBypass] = args[existingBypass] + ';' + bypass;
+      if (existingBypass >= 0) args[existingBypass] = '--proxy-bypass-list=' + bypass;
       else args.push(`--proxy-bypass-list=${bypass}`);
     }
     // Startup URLs: do NOT put the OpenBrowser start page (or first custom URL) on the
@@ -2967,7 +2999,6 @@ class BrowserEngine {
     // Cross-platform process overhead reducers (safe for multi-profile fleets).
     // Applied for all envs — not only proxied ones — so Win/mac idle CPU stays low.
     const perfFlags = [
-      '--disable-background-networking',
       '--disable-component-update',
       '--disable-default-apps',
       '--disable-client-side-phishing-detection',
@@ -2978,6 +3009,7 @@ class BrowserEngine {
       '--metrics-recording-only',
       '--no-pings',
     ];
+    if (profile.advanced.blockNotifications !== false) perfFlags.unshift('--disable-background-networking');
     for (const flag of perfFlags) {
       if (!args.some((a) => a.split('=')[0] === flag.split('=')[0])) args.push(flag);
     }

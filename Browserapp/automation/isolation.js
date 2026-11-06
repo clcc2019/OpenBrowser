@@ -4,6 +4,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const os = require('os');
 const { execFile, execFileSync } = require('child_process');
 
 // PowerShell startup plus the WMI provider can exceed two seconds on a busy
@@ -270,9 +271,27 @@ async function acquireProfileLock(profileRoot, meta = {}) {
       handle = await fsp.open(file, 'wx', 0o600);
     } catch (error) {
       if (error?.code !== 'EEXIST') throw error;
+      const lockStat = await fsp.stat(file).catch((statError) => {
+        if (statError.code === 'ENOENT') return null;
+        throw statError;
+      });
+      if (!lockStat) continue;
+      const previousBoot = lockStat.mtimeMs < Date.now() - os.uptime() * 1000 - 5000;
       let existing;
       try { existing = JSON.parse(await fsp.readFile(file, 'utf8')); } catch (_) {
-        throw lockOwnerError('PROFILE_LOCK_UNRECOVERABLE', 'Profile lock is malformed and cannot be recovered');
+        if (!previousBoot) throw lockOwnerError('PROFILE_LOCK_UNRECOVERABLE', 'Profile lock is malformed and cannot be recovered');
+      }
+      // A previous-boot timestamp makes recorded PIDs unreliable, but a new
+      // process may already be using the profile. Require a successful scan.
+      if (previousBoot && (!existing || lockBelongsToProfile(existing, identity))) {
+        const scan = scanProcessesUsingProfile(profileRoot);
+        const active = (scan.pids || []).filter(isPidAlive);
+        if (active.length) throw lockOwnerError('PROFILE_LOCKED', `Profile browser is still running (pid ${active[0]})`, existing);
+        if (!scan.known) throw lockOwnerError('PROFILE_LOCK_UNRECOVERABLE', 'Profile process scan is unconfirmed; refusing to remove profile lock', existing);
+        const current = await fsp.stat(file).catch(() => null);
+        if (!current || current.ino !== lockStat.ino || current.mtimeMs !== lockStat.mtimeMs || current.size !== lockStat.size) continue;
+        await fsp.rm(file, { force: true });
+        continue;
       }
       const numericPid = Number(existing?.pid);
       const pidValid = Number.isSafeInteger(numericPid) && numericPid > 0;

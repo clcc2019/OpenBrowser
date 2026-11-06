@@ -117,6 +117,34 @@ async function run() {
   const echoed = await until(client, Buffer.from('PING'));
   assert(echoed.includes(Buffer.from('PING')));
   client.destroy(); await forwarder.close(); await new Promise((resolve) => upstream.close(resolve));
+  // An unauthenticated SOCKS bridge must send the hostname to the proxy,
+  // rather than resolving the destination on the local machine.
+  let targetName = '';
+  const socksServer = net.createServer((socket) => {
+    let buffer = Buffer.alloc(0);
+    let greeting = true;
+    socket.on('data', (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      if (greeting && buffer.length >= 2 && buffer.length >= 2 + buffer[1]) {
+        buffer = buffer.subarray(2 + buffer[1]);
+        greeting = false;
+        socket.write(Buffer.from([5, 0]));
+      }
+      if (!greeting && buffer.length >= 5 && buffer[3] === 3 && buffer.length >= 7 + buffer[4]) {
+        targetName = buffer.subarray(5, 5 + buffer[4]).toString();
+        buffer = Buffer.alloc(0);
+        socket.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, 0, 80]));
+      }
+    });
+  });
+  const socksPort = await listen(socksServer);
+  const socksBridge = await startAuthenticatedProxy(parseProxy(`socks5://127.0.0.1:${socksPort}`));
+  const socksClient = await connect(socksBridge.port);
+  socksClient.write('CONNECT remote-resolution.invalid:443 HTTP/1.1\r\nHost: remote-resolution.invalid:443\r\n\r\n');
+  const socksResponse = await until(socksClient, Buffer.from('\r\n\r\n'));
+  assert(socksResponse.toString('latin1').startsWith('HTTP/1.1 200'));
+  assert.strictEqual(targetName, 'remote-resolution.invalid');
+  socksClient.destroy(); await socksBridge.close(); await new Promise((resolve) => socksServer.close(resolve));
   console.log('PROXY_FORWARDER_SELFTEST_OK formats=8 escaped_separator=1 special_credentials=1 mixed_input=1 remark=1 ipv6_target=1 ifconfig_ip=1 auth_header=1 connect_tunnel=1 echo=1 credentials_masked=1');
 }
 

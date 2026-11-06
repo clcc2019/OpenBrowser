@@ -70,6 +70,22 @@ const OS_PRESETS = {
   },
 };
 
+/**
+ * Normalize OS labels coming from the profile editor/API before looking up a
+ * preset. The UI uses labels such as "Linux" and "Windows", while the UA
+ * builder uses lower-case preset ids. Unknown values are retained so mobile
+ * or future OS handling can still be delegated to the existing fallback.
+ */
+function normalizeOsKey(value) {
+  const raw = String(value || '').trim();
+  const key = raw.toLowerCase();
+  if (/^windows(?:\s|$)/.test(key) || key === 'win' || key === 'win32') return 'windows';
+  if (/^(?:mac(?:os)?|os x|darwin)(?:\s|$)/.test(key)) return 'macos';
+  if (/^linux(?:\s|$)/.test(key)) return 'linux';
+  if (key === 'macos_arm' || key === 'mac-arm64' || key === 'mac arm64') return 'macos_arm';
+  return raw;
+}
+
 function detectHostOs() {
   if (process.platform === 'darwin') return 'macos';
   if (process.platform === 'linux') return 'linux';
@@ -137,7 +153,8 @@ function normalizeChromeFull(major, full) {
  * Build a complete UA string (desktop Chrome).
  */
 function buildUserAgentString(options = {}) {
-  const osKey = OS_PRESETS[options.os] ? options.os : (options.os === 'mac' ? 'macos' : detectHostOs());
+  const requestedOs = normalizeOsKey(options.os);
+  const osKey = OS_PRESETS[requestedOs] ? requestedOs : detectHostOs();
   const preset = OS_PRESETS[osKey] || OS_PRESETS.windows;
   const major = Number(options.chromeMajor || options.major || 131) || 131;
   const full = normalizeChromeFull(major, options.chromeFull || options.fullVersion);
@@ -152,7 +169,7 @@ function buildUserAgentString(options = {}) {
  */
 function buildUserAgentMetadata(ua, overrides = {}) {
   const parsed = parseChromeVersion(ua) || { full: '131.0.0.0', major: 131 };
-  const osKey = overrides.os || parseOsFromUa(ua);
+  const osKey = normalizeOsKey(overrides.os || parseOsFromUa(ua));
   const preset = OS_PRESETS[osKey] || OS_PRESETS.windows;
   const major = Number(overrides.chromeMajor || parsed.major) || 131;
   const fullVersion = normalizeChromeFull(
@@ -200,8 +217,8 @@ function buildUserAgentMetadata(ua, overrides = {}) {
  */
 function buildUaProfile(options = {}) {
   let userAgent = String(options.userAgent || options.ua || '').trim();
-  const osKey = options.os
-    || (userAgent ? parseOsFromUa(userAgent) : detectHostOs());
+  const osKey = normalizeOsKey(options.os
+    || (userAgent ? parseOsFromUa(userAgent) : detectHostOs()));
   const majorHint = Number(options.chromeMajor || options.major) || 0;
 
   if (!userAgent) {
@@ -440,6 +457,7 @@ function randomUaForSeed(seedU32, options = {}) {
 
 module.exports = {
   OS_PRESETS,
+  normalizeOsKey,
   GREASE_BRANDS,
   detectHostOs,
   parseChromeMajor,

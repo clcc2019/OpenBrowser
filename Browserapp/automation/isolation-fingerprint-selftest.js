@@ -177,6 +177,23 @@ async function main() {
   }
   pass('UA, navigator platform, Client Hints and WebGL remain OS-consistent');
 
+  // Profile editor/API labels are title-cased (for example, "Linux"). They
+  // must resolve to the same preset ids as the UA parser instead of falling
+  // back to the Windows preset.
+  const linuxLabel = buildUaProfile({ userAgent: osCases[2].ua, os: 'Linux' });
+  assert.strictEqual(linuxLabel.os, 'linux');
+  assert.strictEqual(linuxLabel.platform, 'Linux x86_64');
+  assert.strictEqual(linuxLabel.metadata.platform, 'Linux');
+  const linuxConfigured = buildFingerprint({
+    id: 'env-linux-label',
+    os: 'Linux',
+    userAgent: osCases[2].ua,
+    privacy: { fingerprint: { os: 'Linux' } },
+  });
+  assert.strictEqual(linuxConfigured.platform, 'Linux x86_64');
+  assert.strictEqual(linuxConfigured.userAgentMetadata.platform, 'Linux');
+  pass('title-cased Linux OS labels keep Linux UA platform metadata');
+
   for (const item of osCases) {
     const fp = buildFingerprint({ id: `auto-${item.id}`, os: item.hintPlatform, kernelVersion: '149.0.7827.114', privacy: {} });
     assert.strictEqual(fp.platform, item.platform);
