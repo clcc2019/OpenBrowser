@@ -223,7 +223,6 @@
                 <label>备注<textarea id="editor-note" rows="3" maxlength="2000" placeholder="浏览器窗口备注"></textarea></label>
                 <div class="form-two" hidden>
                   <label>浏览器<select id="editor-browser"><option>Google Chrome</option></select></label>
-                  <label>操作系统<select id="editor-os"><option value="Windows">Windows</option><option value="macOS">macOS</option><option value="Linux">Linux</option></select></label>
                   <label><span data-i18n="common.language">语言</span><select id="editor-language">
                     <option value="en-US">English (US)</option>
                     <option value="zh-CN">中文（简体）</option>
@@ -328,6 +327,9 @@
                   <span class="editor-panel-index" aria-hidden="true">03</span>
                 </div>
                 <div class="editor-section-heading"><span>浏览器标识</span><small>控制 User-Agent 与指纹刷新策略</small></div>
+                <div class="settings-row"><span>系统平台</span>
+                  <select id="editor-os"><option value="macOS">macOS</option><option value="Windows">Windows</option><option value="Linux">Linux</option></select>
+                </div>
                 <label class="check-row"><input id="editor-refresh-fingerprint" type="checkbox"> 每次打开刷新指纹</label>
                 <label>User-Agent
                   <textarea id="editor-user-agent" rows="2" placeholder="留空 = 按环境 ID 自动生成"></textarea>
@@ -336,7 +338,7 @@
                   <button type="button" class="outline" id="editor-ua-generate">按系统生成 UA</button>
                   <button type="button" class="outline" id="editor-ua-random">随机 UA</button>
                   <button type="button" class="outline" id="editor-ua-clear">跟随自动</button>
-                  <label class="ua-ver">Chrome 主版本 <input class="ua-version-input" id="editor-ua-chrome-major" type="number" min="100" max="200" value="131"></label>
+                  <label class="ua-ver">Chrome 主版本 <input class="ua-version-input" id="editor-ua-chrome-major" type="number" min="100" max="200" value="157"></label>
                 </div>
                 <pre class="ua-meta-preview" id="editor-ua-meta" hidden></pre>
                 <div class="editor-section-heading"><span>区域与显示</span><small>设置语言、时区、地理位置和窗口参数</small></div>
@@ -1431,8 +1433,8 @@
         <div class="form-two">
           <label>操作系统画像
             <select id="batch-add-os">
-              <option value="Windows" selected>Windows</option>
-              <option value="macOS">macOS</option>
+              <option value="macOS" selected>macOS</option>
+              <option value="Windows">Windows</option>
               <option value="Linux">Linux</option>
             </select>
           </label>

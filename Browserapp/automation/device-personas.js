@@ -256,8 +256,116 @@ const PERSONAS_BY_OS = Object.freeze({
   linux: Object.freeze(LINUX_PERSONAS),
 });
 
-function personasForOs(os) {
-  return PERSONAS_BY_OS[String(os || '').toLowerCase()] || WINDOWS_PERSONAS;
+// Versioned pools keep existing profiles tied to the original modulo and ordering.
+// Each added entry is a plausible bundle, not a claim of a measured real device.
+function extraPersona(os, cores, width, height, ratio, depth, vendor, renderer, gpuVendor, architecture) {
+  return { os, cores, memory: 8, colorDepth: depth, devicePixelRatio: ratio,
+    screen: { width, height }, webgl: { vendor, renderer, gpu: { vendor: gpuVendor, architecture } } };
+}
+const EXTRA_PERSONAS = {
+  windows: [],
+  macos: [
+    extraPersona('macos', 8, 1440, 900, 2, 30, 'Google Inc. (Intel)', 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 640, Unspecified Version)', 'intel', 'gen-9'),
+    extraPersona('macos', 8, 1680, 1050, 2, 30, 'Google Inc. (AMD)', 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 560X, Unspecified Version)', 'amd', 'polaris'),
+    extraPersona('macos', 8, 1440, 900, 2, 24, 'Google Inc. (Intel)', 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 645, Unspecified Version)', 'intel', 'gen-9'),
+    extraPersona('macos', 8, 1680, 1050, 2, 30, 'Google Inc. (AMD)', 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5300M, Unspecified Version)', 'amd', 'rdna-1'),
+  ],
+  macos_arm: [
+    extraPersona('macos', 8, 1470, 956, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2, Unspecified Version)', 'apple', 'apple-m2'),
+    extraPersona('macos', 8, 1470, 956, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)', 'apple', 'apple-m3'),
+    extraPersona('macos', 10, 1512, 982, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4, Unspecified Version)', 'apple', 'apple-m4'),
+    extraPersona('macos', 8, 1440, 900, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)', 'apple', 'apple-m1'),
+    extraPersona('macos', 10, 1512, 982, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1 Pro, Unspecified Version)', 'apple', 'apple-m1'),
+    extraPersona('macos', 12, 1728, 1117, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2 Pro, Unspecified Version)', 'apple', 'apple-m2'),
+    extraPersona('macos', 10, 1512, 982, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M3, Unspecified Version)', 'apple', 'apple-m3'),
+    extraPersona('macos', 12, 1728, 1117, 2, 30, 'Google Inc. (Apple)', 'ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)', 'apple', 'apple-m4'),
+  ],
+  linux: [
+    extraPersona('linux', 8, 1920, 1080, 1, 24, 'Google Inc. (Intel)', 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6)', 'intel', 'gen-9'),
+    extraPersona('linux', 12, 1920, 1080, 1, 24, 'Google Inc. (NVIDIA)', 'ANGLE (NVIDIA, NVIDIA GeForce RTX 4060/PCIe/SSE2, OpenGL 4.6)', 'nvidia', 'ada'),
+    extraPersona('linux', 16, 2560, 1440, 1, 24, 'Google Inc. (AMD)', 'ANGLE (AMD, AMD Radeon RX 6600 (radeonsi, navi23), OpenGL 4.6)', 'amd', 'rdna-2'),
+  ],
+};
+const PERSONAS_V2_BY_OS = Object.freeze(Object.fromEntries(Object.entries(PERSONAS_BY_OS)
+  .map(([os, pool]) => [os, Object.freeze([...pool, ...EXTRA_PERSONAS[os]])])));
+
+// Common logical display sizes, including scaled Retina and external displays. These
+// describe machine/display combinations, not independently sampled physical devices.
+const MAC_DISPLAY_SIZES = Object.freeze([
+  [1280, 720], [1280, 800], [1440, 900], [1470, 956], [1512, 982],
+  [1680, 1050], [1728, 1117], [1920, 1080], [1920, 1200], [2560, 1440],
+]);
+function macDisplayVariants(pool) {
+  const result = [];
+  const seen = new Set();
+  for (const persona of pool) {
+    const key = JSON.stringify(persona);
+    if (!seen.has(key)) { seen.add(key); result.push(persona); }
+  }
+  for (const persona of pool) {
+    for (const [width, height] of MAC_DISPLAY_SIZES) {
+      const variant = { ...persona, screen: { width, height } };
+      const key = JSON.stringify(variant);
+      if (!seen.has(key)) { seen.add(key); result.push(variant); }
+    }
+  }
+  return Object.freeze(result);
+}
+const PERSONAS_V3_BY_OS = Object.freeze({
+  ...PERSONAS_V2_BY_OS,
+  macos: macDisplayVariants(PERSONAS_V2_BY_OS.macos),
+  macos_arm: macDisplayVariants(PERSONAS_V2_BY_OS.macos_arm),
+});
+
+// CPU counts and GPU families are kept together; display variants do not imply
+// these are measurements collected from physical devices.
+function applePersona(chip, cores, width, height, family) {
+  return extraPersona('macos', cores, width, height, 2, 30, 'Google Inc. (Apple)',
+    `ANGLE (Apple, ANGLE Metal Renderer: Apple ${chip}, Unspecified Version)`, 'apple', `apple-${family}`);
+}
+const MAC_V4_INTEL = [
+  extraPersona('macos', 4, 1440, 900, 2, 24, 'Google Inc. (Intel)', 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) Iris(TM) Plus Graphics 640, Unspecified Version)', 'intel', 'gen-9'),
+  extraPersona('macos', 8, 1680, 1050, 2, 30, 'Google Inc. (Intel)', 'ANGLE (Intel, ANGLE Metal Renderer: Intel(R) UHD Graphics 630, Unspecified Version)', 'intel', 'gen-9'),
+  extraPersona('macos', 12, 1680, 1050, 2, 30, 'Google Inc. (AMD)', 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5300M, Unspecified Version)', 'amd', 'rdna-1'),
+  extraPersona('macos', 16, 1680, 1050, 2, 30, 'Google Inc. (AMD)', 'ANGLE (AMD, ANGLE Metal Renderer: AMD Radeon Pro 5500M, Unspecified Version)', 'amd', 'rdna-1'),
+];
+const MAC_V4_APPLE = [
+  applePersona('M1 Pro', 8, 1512, 982, 'm1'),
+  applePersona('M1 Max', 10, 1728, 1117, 'm1'),
+  applePersona('M2 Pro', 10, 1512, 982, 'm2'),
+  applePersona('M2 Max', 12, 1728, 1117, 'm2'),
+  applePersona('M3 Pro', 11, 1512, 982, 'm3'),
+  applePersona('M3 Max', 14, 1728, 1117, 'm3'),
+  applePersona('M3 Max', 16, 1728, 1117, 'm3'),
+  applePersona('M4', 10, 1470, 956, 'm4'),
+  applePersona('M4 Pro', 14, 1512, 982, 'm4'),
+  applePersona('M4 Max', 14, 1728, 1117, 'm4'),
+  applePersona('M4 Max', 16, 1728, 1117, 'm4'),
+];
+const PERSONAS_V4_BY_OS = Object.freeze({
+  ...PERSONAS_V3_BY_OS,
+  macos: macDisplayVariants([...PERSONAS_V2_BY_OS.macos, ...MAC_V4_INTEL]),
+  macos_arm: macDisplayVariants([...PERSONAS_V2_BY_OS.macos_arm, ...MAC_V4_APPLE]),
+});
+
+// Apple specifications checked 2026-11-06; see docs/mac-persona-sources.md.
+// Renderer labels follow our existing ANGLE convention and are not field measurements.
+const MAC_V5_APPLE = [
+  applePersona('M5', 10, 1280, 832, 'm5'),
+  applePersona('M5 Pro', 15, 1512, 982, 'm5'),
+  applePersona('M5 Pro', 18, 1512, 982, 'm5'),
+  applePersona('M5 Max', 18, 1728, 1117, 'm5'),
+  applePersona('M6', 10, 2240, 1260, 'm6'),
+  applePersona('M6', 12, 1512, 982, 'm6'),
+];
+const PERSONAS_V5_BY_OS = Object.freeze({
+  ...PERSONAS_V4_BY_OS,
+  macos_arm: macDisplayVariants([...PERSONAS_V4_BY_OS.macos_arm, ...MAC_V5_APPLE]),
+});
+
+function personasForOs(os, version = 1) {
+  const pools = Number(version) === 5 ? PERSONAS_V5_BY_OS : (Number(version) === 4 ? PERSONAS_V4_BY_OS : (Number(version) === 3 ? PERSONAS_V3_BY_OS : (Number(version) === 2 ? PERSONAS_V2_BY_OS : PERSONAS_BY_OS)));
+  return pools[String(os || '').toLowerCase()] || pools.windows;
 }
 
 /**
@@ -265,8 +373,8 @@ function personasForOs(os) {
  * the same profile keeps the same hardware identity on every launch.
  * @returns {DevicePersona}
  */
-function pickPersona(os, index) {
-  const pool = personasForOs(os);
+function pickPersona(os, index, version = 1) {
+  const pool = personasForOs(os, version);
   const n = Number.isFinite(Number(index)) ? Math.abs(Math.trunc(Number(index))) : 0;
   return pool[n % pool.length];
 }
@@ -298,6 +406,10 @@ module.exports = {
   MACOS_APPLE_PERSONAS,
   MACOS_INTEL_PERSONAS,
   PERSONAS_BY_OS,
+  PERSONAS_V2_BY_OS,
+  PERSONAS_V3_BY_OS,
+  PERSONAS_V4_BY_OS,
+  PERSONAS_V5_BY_OS,
   OS_FONTS,
   personasForOs,
   pickPersona,

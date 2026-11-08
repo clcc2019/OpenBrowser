@@ -4,13 +4,14 @@ const { build, isDirect } = require('./environment-audit');
 const local = build({
   id: 'env-001',
   proxy: 'Direct',
-  os: 'Windows',
+  os: 'macOS',
   privacy: { webrtc: 'real', timezoneMode: 'real', geoMode: 'disabled', canvas: 'real', webgl: 'real', webgpu: 'real', media: 'blocked' },
   advanced: { saveCookies: true, saveLocalStorage: true, saveIndexedDB: true, saveHistory: true }
 }, { systemTimezone: 'Asia/Shanghai' });
 
 assert.equal(isDirect('Direct'), true);
 assert.equal(local.checks.find((item) => item.id === 'profile').state, 'pass');
+assert.equal(local.checks.find((item) => item.id === 'os').state, 'pass');
 assert.equal(local.checks.find((item) => item.id === 'fingerprint').state, 'info');
 
 const unverifiedProxy = build({

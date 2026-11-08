@@ -10,6 +10,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { parseCoordinates, resolveGeoposition } = require('./fingerprint');
 
 const SOURCE_OPENBROWSER = 'openbrowser-148';
 
@@ -94,8 +95,8 @@ function batteryFromFp(fp) {
   }
   return {
     charging: v.charging !== false,
-    chargingTime: Number.isFinite(Number(v.chargingTime)) ? Number(v.chargingTime) : 0,
-    dischargingTime: Number.isFinite(Number(v.dischargingTime)) ? Number(v.dischargingTime) : -1,
+    chargingTime: v.chargingTime != null && v.chargingTime !== '' && Number.isFinite(Number(v.chargingTime)) ? Number(v.chargingTime) : -1,
+    dischargingTime: v.dischargingTime != null && v.dischargingTime !== '' && Number.isFinite(Number(v.dischargingTime)) ? Number(v.dischargingTime) : -1,
     level: Number.isFinite(Number(v.level)) ? Math.min(1, Math.max(0, Number(v.level))) : 1,
   };
 }
@@ -164,6 +165,7 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     || fp.fontFingerprinting === true;
 
   const fields = {
+    _clearFields: [],
     platform: String(fp.platform || meta.platform || 'Win32'),
     accept_languages: accept,
     is_webrtc_enable: webrtcMode !== 'disabled',
@@ -193,7 +195,7 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     fields.hardwareConcurrency = Math.min(64, Math.max(1, Math.round(Number(fp.hardwareConcurrency))));
   }
   if (fp.deviceMemory != null && Number(fp.deviceMemory) > 0) {
-    fields.deviceMemory = Math.min(8, Math.max(1, Math.round(Number(fp.deviceMemory))));
+    fields.deviceMemory = Math.min(8, Math.max(0.25, Number(fp.deviceMemory)));
   }
 
   if (webglMode === 'blocked') {
@@ -208,7 +210,8 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
   }
 
   const webgpu = webgpuFromFp(fp);
-  if (webgpu) fields.webgpu_parameter = webgpu;
+  if (fp.webgpu?.mode === 'webgl' && webgpu) fields.webgpu_parameter = webgpu;
+  else fields._clearFields.push('webgpu_parameter');
 
   // Device / host name surface used by native identity fields.
   const deviceName = String(fp.deviceName || fp.staticConfig?.deviceName || '').trim();
@@ -232,12 +235,12 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
     || privacy.webrtcLocalIp
     || ''
   ).trim();
-  if (webrtcMode === 'disabled') {
+  if (webrtcMode === 'disabled' || webrtcMode === 'real') {
     fields.webrtc_fake_ip = '';
     fields.webrtc_local_ip = '';
   } else {
-    if (publicIp) fields.webrtc_fake_ip = publicIp;
-    if (localIp) fields.webrtc_local_ip = localIp;
+    fields.webrtc_fake_ip = publicIp;
+    fields.webrtc_local_ip = localIp;
   }
   const stunServers = Array.isArray(privacy.webrtcStunServers)
     ? privacy.webrtcStunServers
@@ -247,25 +250,11 @@ function mapFingerprintToInitFields(fp = {}, profile = {}) {
   }
 
   // Geo as "lat,lon,accuracy" string accepted by Framework geoposition parser.
-  const geoObj = fp.dynamicConfig?.geoposition || fp.geoposition || null;
-  let geoText = String(fp.dynamicConfig?.geopositionText || '').trim();
-  if (!geoText && geoObj && typeof geoObj === 'object') {
-    const lat = Number(geoObj.latitude);
-    const lon = Number(geoObj.longitude);
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      const accuracy = Number.isFinite(Number(geoObj.accuracy)) ? Number(geoObj.accuracy) : 1000;
-      geoText = `${lat},${lon},${accuracy}`;
-    }
-  }
-  if (!geoText) {
-    const lat = Number(privacy.latitude ?? profile.exitLatitude);
-    const lon = Number(privacy.longitude ?? profile.exitLongitude);
-    if (Number.isFinite(lat) && Number.isFinite(lon) && privacy.geoMode !== 'disabled' && privacy.geoMode !== 'prompt') {
-      const accuracy = Number.isFinite(Number(privacy.accuracy)) ? Number(privacy.accuracy) : 1000;
-      geoText = `${lat},${lon},${accuracy}`;
-    }
-  }
-  if (geoText) fields.geoposition = geoText;
+  const geoObj = fp.dynamicConfig ? fp.dynamicConfig.geoposition : (fp.geoposition || resolveGeoposition(profile));
+  const coords = geoObj && parseCoordinates(geoObj.latitude, geoObj.longitude);
+  const accuracy = Number(geoObj?.accuracy);
+  // Empty explicitly clears a value left in the reused native init file.
+  fields.geoposition = coords ? `${coords.latitude},${coords.longitude},${Number.isFinite(accuracy) && accuracy > 0 ? accuracy : 100}` : '';
 
   // Preserve existing check_url lists when merging; only patch enable/metrics.
   fields._canvasConsistencyPatch = consistencyFromFp(fp, 'canvas');
@@ -356,7 +345,9 @@ function applyFingerprintFields(init, fields) {
     '_cmdLinePatch',
     '_windowName',
     '_browserTitle',
+    '_clearFields',
   ]);
+  for (const key of fields._clearFields || []) delete init[key];
   for (const [k, v] of Object.entries(fields)) {
     if (skip.has(k) || v === undefined) continue;
     init[k] = v;

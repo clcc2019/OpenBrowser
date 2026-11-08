@@ -369,15 +369,15 @@ function withinHammingThreshold(a, b, threshold = 12) {
 /** Deterministic battery snapshot derived from seed. */
 function createBatteryFromSeed(seedInput, override = null) {
   if (override && typeof override === 'object') {
-    const level = Math.min(1, Math.max(0, Number(override.level)));
+    const level = override.level == null || override.level === '' ? NaN : Math.min(1, Math.max(0, Number(override.level)));
     const charging = override.charging !== false && override.charging !== 0 && override.charging !== '0';
     return {
       charging,
       // null means "unknown / Infinity" for JSON-safe transport into injection
-      chargingTime: Number.isFinite(Number(override.chargingTime))
+      chargingTime: override.chargingTime === null ? null : override.chargingTime != null && override.chargingTime !== '' && Number.isFinite(Number(override.chargingTime))
         ? Math.max(0, Number(override.chargingTime))
         : (charging ? 0 : null),
-      dischargingTime: Number.isFinite(Number(override.dischargingTime))
+      dischargingTime: override.dischargingTime === null ? null : override.dischargingTime != null && override.dischargingTime !== '' && Number.isFinite(Number(override.dischargingTime))
         ? Math.max(0, Number(override.dischargingTime))
         : (charging ? null : 7200),
       level: Number.isFinite(level) ? level : 0.87,
@@ -421,11 +421,14 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
       tail += pad[pad.length - 1 - i];
     }
   }
-  const tpl = MEDIA_DEVICE_TEMPLATES[acc % MEDIA_DEVICE_TEMPLATES.length] || MEDIA_DEVICE_TEMPLATES[0];
+  const macDevice = options.os === 'macos' || options.os === 'macos_arm';
+  const tpl = macDevice
+    ? { input: 'Built-in Microphone', output: 'Built-in Output' }
+    : (MEDIA_DEVICE_TEMPLATES[acc % MEDIA_DEVICE_TEMPLATES.length] || MEDIA_DEVICE_TEMPLATES[0]);
   const emptyLabels = options.emptyLabels === true;
   const labelOverride = options.labels && typeof options.labels === 'object' ? options.labels : null;
   const inputLabel = emptyLabels ? '' : String(labelOverride?.audioinput || labelOverride?.input || tpl.input);
-  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || `Integrated Camera (${head}:${tail})`);
+  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || (macDevice ? 'FaceTime HD Camera' : `Integrated Camera (${head}:${tail})`));
   const outputLabel = emptyLabels ? '' : String(labelOverride?.audiooutput || labelOverride?.output || tpl.output);
   const devices = [
     { kind: 'audioinput', label: inputLabel, deviceId: `ob-ai-${head}`, groupId: `ob-g-${tail}` },
@@ -562,6 +565,25 @@ function formatGeopositionValue(geo) {
   return `${lat},${lon},${accuracy}`;
 }
 
+function parseCoordinates(latitude, longitude) {
+  if (!['string', 'number'].includes(typeof latitude) || !['string', 'number'].includes(typeof longitude)) return null;
+  if (latitude == null || longitude == null || String(latitude).trim() === '' || String(longitude).trim() === '') return null;
+  const lat = Number(latitude); const lon = Number(longitude);
+  return Number.isFinite(lat) && lat >= -90 && lat <= 90 && Number.isFinite(lon) && lon >= -180 && lon <= 180
+    ? { latitude: lat, longitude: lon } : null;
+}
+
+function resolveGeoposition(profile = {}) {
+  const privacy = profile.privacy || {};
+  if (privacy.geoMode === 'disabled' || privacy.geoMode === 'prompt') return null;
+  const coords = privacy.geoMode === 'custom'
+    ? parseCoordinates(privacy.latitude, privacy.longitude)
+    : parseCoordinates(profile.exitLatitude, profile.exitLongitude);
+  if (!coords) return null;
+  const accuracy = Number(privacy.accuracy);
+  return { ...coords, accuracy: Number.isFinite(accuracy) && accuracy > 0 ? accuracy : 100 };
+}
+
 /** Audio noise mark: sum(charCode) % 2000 - 1000 */
 function audioMarkFromSeed(seedInput) {
   const s = String(seedInput || '');
@@ -667,8 +689,11 @@ function buildFingerprint(profile = {}) {
   const webglId = (u32(seed, 32) % 20000) - 10000 || 1;
   const audioIdDefault = audioMarkFromSeed(seed.toString('hex'));
   const clientRectsIdDefault = clientRectMarkFromSeed(seed);
-  const audioId = Number.isFinite(Number(fpIn.audioId)) ? Number(fpIn.audioId) : audioIdDefault;
-  const clientRectsId = Number.isFinite(Number(fpIn.clientRectsId)) ? Number(fpIn.clientRectsId) : clientRectsIdDefault;
+  const markOrDefault = (value, fallback) => value !== null && value !== undefined && String(value).trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback;
+  const audioId = markOrDefault(fpIn.audioId, audioIdDefault);
+  const clientRectsId = markOrDefault(fpIn.clientRectsId, clientRectsIdDefault);
+  const canvasMark = markOrDefault(fpIn.canvasId, canvasId);
+  const webglMark = markOrDefault(fpIn.webglId, webglId);
 
   const mode = (name, allowed, fallback) => {
     const value = fpIn[name] ?? privacy[name];
@@ -700,16 +725,61 @@ function buildFingerprint(profile = {}) {
   const clientHintsIn = (fpIn.clientHints && typeof fpIn.clientHints === 'object')
     ? fpIn.clientHints
     : (privacy.clientHints && typeof privacy.clientHints === 'object' ? privacy.clientHints : {});
+  // A profile-level Chrome major is an intentional identity target. It must win over
+  // the bundled kernel version (the integrated OpenBrowser kernel is currently 148),
+  // otherwise a migrated 157 profile is silently changed back during startup.
+  // Keep clientHints.chromeMajor as a fallback only; older profiles still use the
+  // actual kernel when one is available.
+  const configuredChromeMajor = Math.max(0, Math.floor(Number(fpIn.chromeMajor) || 0));
   const kernelMajor = Number(String(profile.kernelVersion || '').match(/^\d+/)?.[0]) || 0;
   const kernelFull = /^\d+\.\d+\.\d+\.\d+$/.test(String(profile.kernelVersion || ''))
     ? String(profile.kernelVersion) : `${kernelMajor}.0.0.0`;
   // Preserve the persona and any custom UA tokens, updating only the Chrome version.
   // Without a known kernel version (or a Chrome token), keep the saved UA intact.
   const uaMajor = Number(uaOverride.match(/Chrome\/(\d+)/i)?.[1]) || 0;
-  const syncUa = Boolean(kernelMajor && uaMajor);
-  if (syncUa && kernelMajor !== uaMajor) {
-    uaOverride = uaOverride.replace(/(Chrome\/)\d+(?:\.\d+)*/i, (_, prefix) => `${prefix}${kernelMajor}.0.0.0`);
+  const syncUa = Boolean(!configuredChromeMajor && kernelMajor && uaMajor);
+  const configuredFullCandidate = fpIn.ua_full_version
+    || fpIn.uaFullVersion
+    || fpIn.fullVersion
+    || clientHintsIn.ua_full_version
+    || clientHintsIn.uaFullVersion
+    || clientHintsIn.fullVersion;
+  const fullVersionForMajor = (major, candidate) => {
+    const full = String(candidate || '').trim();
+    return major && /^\d+\.\d+\.\d+\.\d+$/.test(full) && Number(full.split('.')[0]) === major
+      ? full
+      : `${major}.0.0.0`;
+  };
+  const configuredChromeFull = configuredChromeMajor
+    ? fullVersionForMajor(configuredChromeMajor, configuredFullCandidate)
+    : '';
+  const targetChromeMajor = configuredChromeMajor
+    || (syncUa ? kernelMajor : (kernelMajor && !uaOverride ? kernelMajor : (Number(clientHintsIn.chromeMajor) || 0)));
+  if (uaMajor && targetChromeMajor && targetChromeMajor !== uaMajor) {
+    const targetFull = configuredChromeMajor
+      ? configuredChromeFull
+      : `${targetChromeMajor}.0.0.0`;
+    uaOverride = uaOverride.replace(/(Chrome\/)\d+(?:\.\d+)*/i, (_, prefix) => `${prefix}${targetFull}`);
   }
+  const chromeHintsIn = configuredChromeMajor
+    ? {
+      ...clientHintsIn,
+      chromeMajor: configuredChromeMajor,
+      ua_full_version: configuredChromeFull,
+      uaFullVersion: configuredChromeFull,
+      fullVersion: configuredChromeFull,
+      ...(Array.isArray(clientHintsIn.brands) ? {
+        brands: clientHintsIn.brands.map((item) => /chrome|chromium/i.test(String(item?.brand || ''))
+          ? { ...item, version: String(configuredChromeMajor) }
+          : item),
+      } : {}),
+      ...(Array.isArray(clientHintsIn.fullVersionList) ? {
+        fullVersionList: clientHintsIn.fullVersionList.map((item) => /chrome|chromium/i.test(String(item?.brand || ''))
+          ? { ...item, version: configuredChromeFull }
+          : item),
+      } : {}),
+    }
+    : clientHintsIn;
   const configuredOs = desktopOs(String(fpIn.os || clientHintsIn.os || profile.os || '').toLowerCase());
   let uaProfile;
   if (uaOverride) {
@@ -717,39 +787,50 @@ function buildFingerprint(profile = {}) {
     uaProfile = buildUaProfile({
       userAgent: uaOverride,
       os: fpIn.os || clientHintsIn.os || osFromUa,
-      chromeMajor: syncUa ? kernelMajor : (Number(fpIn.chromeMajor || clientHintsIn.chromeMajor) || undefined),
-      chromeFull: syncUa ? kernelFull : (fpIn.ua_full_version || clientHintsIn.ua_full_version || fpIn.fullVersion),
+      chromeMajor: configuredChromeMajor || (syncUa ? kernelMajor : (Number(clientHintsIn.chromeMajor) || undefined)),
+      chromeFull: configuredChromeMajor
+        ? configuredChromeFull
+        : (syncUa ? kernelFull : (fpIn.ua_full_version || clientHintsIn.ua_full_version || fpIn.fullVersion)),
       platform: fpIn.platform,
-      architecture: clientHintsIn.architecture || fpIn.architecture,
-      platform_version: clientHintsIn.platform_version || fpIn.platformVersion,
-      model: clientHintsIn.model,
-      mobile: clientHintsIn.mobile,
-      wow64: clientHintsIn.wow64,
-      bitness: clientHintsIn.bitness,
-      ua_full_version: syncUa ? kernelFull : (clientHintsIn.ua_full_version || fpIn.ua_full_version),
+      architecture: chromeHintsIn.architecture || fpIn.architecture,
+      platform_version: chromeHintsIn.platform_version || fpIn.platformVersion,
+      model: chromeHintsIn.model,
+      mobile: chromeHintsIn.mobile,
+      wow64: chromeHintsIn.wow64,
+      bitness: chromeHintsIn.bitness,
+      brands: chromeHintsIn.brands,
+      fullVersionList: chromeHintsIn.fullVersionList,
+      ua_full_version: configuredChromeMajor
+        ? configuredChromeFull
+        : (syncUa ? kernelFull : (chromeHintsIn.ua_full_version || fpIn.ua_full_version)),
     });
   } else {
+    const generatedChromeMajor = configuredChromeMajor || kernelMajor;
     uaProfile = randomUaForSeed(u32(seed, 44), {
-      majors: kernelMajor ? [kernelMajor] : undefined,
+      majors: generatedChromeMajor ? [generatedChromeMajor] : undefined,
       // The UA is the source of truth for every OS-facing fingerprint surface.
       osList: configuredOs ? [configuredOs] : ['windows', 'windows', 'macos', 'linux'],
     });
-    if (kernelMajor) {
+    if (generatedChromeMajor) {
       uaProfile = buildUaProfile({
         userAgent: uaProfile.userAgent, os: uaProfile.os,
         architecture: uaProfile.metadata.architecture,
-        chromeMajor: kernelMajor, ua_full_version: kernelFull,
+        chromeMajor: generatedChromeMajor,
+        ua_full_version: configuredChromeMajor ? configuredChromeFull : kernelFull,
       });
     }
     // Apply explicit clientHints overrides on top of seeded UA
-    if (Object.keys(clientHintsIn).length) {
+    if (Object.keys(chromeHintsIn).length) {
       uaProfile = buildUaProfile({
         userAgent: uaProfile.userAgent,
         os: uaProfile.os,
         chromeMajor: uaProfile.chromeMajor,
-        ...clientHintsIn,
-        ...(kernelMajor ? { chromeMajor: kernelMajor } : {}),
-        ua_full_version: kernelMajor ? kernelFull : (clientHintsIn.ua_full_version || uaProfile.chromeFull),
+        ...chromeHintsIn,
+        ...(configuredChromeMajor ? { chromeMajor: configuredChromeMajor } : {}),
+        ...(syncUa ? { chromeMajor: kernelMajor } : {}),
+        ua_full_version: configuredChromeMajor
+          ? configuredChromeFull
+          : (syncUa ? kernelFull : (chromeHintsIn.ua_full_version || uaProfile.chromeFull)),
       });
     }
   }
@@ -773,7 +854,18 @@ function buildFingerprint(profile = {}) {
   const personaRequested = String(fpIn.deviceProfile ?? privacy.deviceProfile ?? '').toLowerCase() === 'persona';
   let devicePersona = null;
   if (personaRequested) {
-    devicePersona = pickPersona(uaOs, u32(seed, 36));
+    devicePersona = pickPersona(uaOs, u32(seed, 36), privacy.personaVersion);
+    // Newer Apple hardware cannot run the legacy macOS 14 default. Respect any
+    // explicit version instead of silently replacing a user-provided override.
+    if (Number(privacy.personaVersion) === 5 && !clientHintsIn.platform_version && !clientHintsIn.platformVersion && !fpIn.platformVersion) {
+      const family = devicePersona.webgl.gpu?.architecture;
+      const osVersion = family === 'apple-m6' ? '27.0.0' : (family === 'apple-m5' ? '26.0.0' : '');
+      if (osVersion) {
+        uaProfile.metadata.platformVersion = osVersion;
+        uaProfile.metadata.platform_version = osVersion;
+        uaProfile.clientHints.platform_version = osVersion;
+      }
+    }
     if (!hasCoresOverride) cores = devicePersona.cores;
     if (!hasMemoryOverride) memory = devicePersona.memory;
     colorDepth = devicePersona.colorDepth;
@@ -790,7 +882,7 @@ function buildFingerprint(profile = {}) {
       vendor: String(fpIn.webgpu?.vendor || fpIn.gpuVendor || webglPreset.gpu?.vendor || ''),
       architecture: String(fpIn.webgpu?.architecture || fpIn.gpuArchitecture || webglPreset.gpu?.architecture || ''),
     }
-    : (webglPreset.gpu || null);
+    : (webglPreset.gpu ? { ...webglPreset.gpu } : null);
 
   // Prefer already-resolved profile.language (engine sets JP→ja-JP when languageMode=ip)
   let languagePrimary = String(profile.language || 'en-US').trim() || 'en-US';
@@ -824,6 +916,7 @@ function buildFingerprint(profile = {}) {
       emptyLabels: mediaDevicesMode === 'empty',
       extra: Array.isArray(fpIn.mediaDevices) ? fpIn.mediaDevices : null,
       labels: mediaLabelTemplates,
+      os: fpIn.osAwareSurfaces === true || (devicePersona && [2, 3, 4, 5].includes(Number(privacy.personaVersion))) ? uaOs : '',
     });
   const battery = batteryMode === 'real'
     ? null
@@ -836,7 +929,7 @@ function buildFingerprint(profile = {}) {
     speechMode,
     // Only narrow the voice table to the claimed OS for persona profiles: it changes the
     // reported voices, and an existing profile's fingerprint must not move on upgrade.
-    { os: devicePersona ? uaOs : '' }
+    { os: devicePersona || fpIn.osAwareSurfaces === true ? uaOs : '' }
   );
   const deviceNameMode = mode('deviceNameMode', ['noise', 'custom', 'real'], privacy.deviceNameMode || 'noise');
   const deviceName = createDeviceNameFromSeed(
@@ -867,20 +960,7 @@ function buildFingerprint(profile = {}) {
         ? ''
         : (profile.exitTimezone || privacy.timezone || '')
   ) || null;
-  let geoposition = null;
-  if (privacy.geoMode === 'custom' && Number.isFinite(Number(privacy.latitude)) && Number.isFinite(Number(privacy.longitude))) {
-    geoposition = {
-      latitude: Number(privacy.latitude),
-      longitude: Number(privacy.longitude),
-      accuracy: Number(privacy.accuracy) || 100,
-    };
-  } else if (privacy.geoMode !== 'disabled' && privacy.geoMode !== 'prompt') {
-    const lat = Number(profile.exitLatitude);
-    const lon = Number(profile.exitLongitude);
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      geoposition = { latitude: lat, longitude: lon, accuracy: Number(privacy.accuracy) || 1000 };
-    }
-  }
+  const geoposition = resolveGeoposition(profile);
 
   const webglVendor = (webglMetaMode === 'real')
     ? null
@@ -890,18 +970,19 @@ function buildFingerprint(profile = {}) {
     : (webglMetaMode === 'blocked' ? '' : (fpIn.webglRenderer || webglPreset.renderer));
   if (webglGpu && webglMetaMode !== 'real') {
     const v = String(webglVendor || webglRenderer || '').toLowerCase();
+    const explicitArchitecture = fpIn.webgpu?.architecture || fpIn.gpuArchitecture;
     if (v.includes('nvidia') && webglGpu.vendor !== 'nvidia') {
       webglGpu.vendor = 'nvidia';
-      if (!webglGpu.architecture) webglGpu.architecture = 'ampere';
+      if (!explicitArchitecture) webglGpu.architecture = '';
     } else if (v.includes('intel') && webglGpu.vendor !== 'intel') {
       webglGpu.vendor = 'intel';
-      if (!webglGpu.architecture) webglGpu.architecture = 'gen12';
+      if (!explicitArchitecture) webglGpu.architecture = '';
     } else if ((v.includes('amd') || v.includes('radeon')) && webglGpu.vendor !== 'amd') {
       webglGpu.vendor = 'amd';
-      if (!webglGpu.architecture) webglGpu.architecture = 'rdna-2';
+      if (!explicitArchitecture) webglGpu.architecture = '';
     } else if (v.includes('apple') && webglGpu.vendor !== 'apple') {
       webglGpu.vendor = 'apple';
-      if (!webglGpu.architecture) webglGpu.architecture = 'common-3';
+      if (!explicitArchitecture) webglGpu.architecture = '';
     }
   }
   const webgl = {
@@ -909,7 +990,7 @@ function buildFingerprint(profile = {}) {
     metaMode: webglMetaMode,
     vendor: webglVendor,
     renderer: webglRenderer,
-    mark: Number.isFinite(Number(fpIn.webglId)) ? Number(fpIn.webglId) : webglId,
+    mark: webglMark,
     gpu: webglMetaMode === 'real' ? null : webglGpu,
     stability,
   };
@@ -942,16 +1023,16 @@ function buildFingerprint(profile = {}) {
     webgl,
     canvas: {
       mode: canvasMode,
-      mark: Number.isFinite(Number(fpIn.canvasId)) ? Number(fpIn.canvasId) : canvasId,
+      mark: canvasMark,
       stability,
     },
     audio: {
       mode: audioMode,
-      mark: Number.isFinite(Number(fpIn.audioId)) ? Number(fpIn.audioId) : audioId,
+      mark: audioId,
     },
     clientRects: {
       mode: clientRectsMode,
-      mark: Number.isFinite(Number(fpIn.clientRectsId)) ? Number(fpIn.clientRectsId) : clientRectsId,
+      mark: clientRectsId,
     },
     webrtc: webrtcMode,
     webrtcPolicy,
@@ -997,10 +1078,10 @@ function buildFingerprint(profile = {}) {
       deviceMemory: useRealMemory ? null : (Number(fpIn.deviceMemory) > 0 ? normalizeDeviceMemory(fpIn.deviceMemory) : memory),
       platform: fpIn.platform || uaProfile.platform || OS_PRESETS[uaOs].platformNav,
       langs: Array.isArray(fpIn.languages) ? fpIn.languages : languages,
-      canvasMark: Number.isFinite(Number(fpIn.canvasId)) ? Number(fpIn.canvasId) : canvasId,
-      webglMark: Number.isFinite(Number(fpIn.webglId)) ? Number(fpIn.webglId) : webglId,
-      audioFp: Number.isFinite(Number(fpIn.audioId)) ? Number(fpIn.audioId) : audioId,
-      clientRectFp: Number.isFinite(Number(fpIn.clientRectsId)) ? Number(fpIn.clientRectsId) : clientRectsId,
+      canvasMark,
+      webglMark,
+      audioFp: audioId,
+      clientRectFp: clientRectsId,
       maxTouchPoints: Number(fpIn.maxTouchPoints) >= 0 ? Number(fpIn.maxTouchPoints) : 0,
       mediaDevices,
       mediaLabels: mediaLabelTemplates,
@@ -1046,14 +1127,26 @@ function fingerprintConsistencyIssues(fp) {
   if (fp?.userAgentMetadata?.platform !== expectedChPlatform) {
     add('client-hints-ua-mismatch', `Client Hints platform (${fp?.userAgentMetadata?.platform || 'empty'}) does not match the ${uaOs} user agent.`);
   }
-  if (uaOs === 'windows' && /Apple M[0-9]|OpenGL 4\.1|Mesa|RADV/i.test(renderer)) {
+  const checkWebglIdentity = fp?.webgl?.mode !== 'blocked' && fp?.webgl?.metaMode !== 'blocked' && fp?.webgl?.metaMode !== 'real';
+  if (checkWebglIdentity && uaOs === 'windows' && /Apple M[0-9]|OpenGL 4\.1|Mesa|RADV/i.test(renderer)) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a Windows renderer.');
   }
-  if ((uaOs === 'macos' || uaOs === 'macos_arm') && (/Direct3D|D3D11|Mesa|RADV/i.test(renderer) || !/Apple|Intel|AMD/i.test(vendor + renderer))) {
+  if (checkWebglIdentity && (uaOs === 'macos' || uaOs === 'macos_arm') && (/Direct3D|D3D11|Mesa|RADV/i.test(renderer) || !/Apple|Intel|AMD/i.test(vendor + renderer))) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a macOS renderer.');
   }
-  if (uaOs === 'linux' && (/Direct3D|D3D11|Apple M[0-9]/i.test(renderer) || !/Mesa|RADV|OpenGL/i.test(renderer))) {
+  if (checkWebglIdentity && uaOs === 'linux' && (/Direct3D|D3D11|Apple M[0-9]/i.test(renderer) || !/Mesa|RADV|OpenGL/i.test(renderer))) {
     add('webgl-ua-mismatch', 'WebGL renderer does not look like a Linux renderer.');
+  }
+  if ((uaOs === 'macos' || uaOs === 'macos_arm') && fp?.mediaDevices?.mode === 'noise'
+      && fp.mediaDevices.devices?.some((device) => /realtek|conexant|synaptics/i.test(String(device.label || '')))) {
+    add('media-label-os-mismatch', 'Simulated audio device labels contain Windows driver names for a macOS profile.');
+  }
+  if ((uaOs === 'macos' || uaOs === 'macos_arm') && fp?.speech?.mode === 'noise'
+      && fp.speech.voices?.some((voice) => /^Microsoft\s/i.test(String(voice.name || '')))) {
+    add('speech-voice-os-mismatch', 'Simulated speech voices contain Windows system voices for a macOS profile.');
+  }
+  if (fp?.mediaDevices?.mode === 'noise' && fp.mediaDevices.devices?.some((device) => /^ob-(?:ai|vi|ao)-/i.test(String(device.deviceId || '')))) {
+    add('synthetic-media-device-id', 'Simulated media device IDs use an application-specific format.');
   }
   const screen = fp?.screen || {};
   if (!(Number(screen.width) > 0 && Number(screen.height) > 0 && Number(screen.availWidth) > 0 && Number(screen.availHeight) > 0)) {
@@ -1074,8 +1167,8 @@ function fingerprintConsistencyIssues(fp) {
   if (fp?.hardwareConcurrency != null && !(Number(fp.hardwareConcurrency) >= 1 && Number(fp.hardwareConcurrency) <= 64)) {
     add('cores-invalid', 'hardwareConcurrency must be between 1 and 64 when overridden.', 'error');
   }
-  if (fp?.deviceMemory != null && !(Number(fp.deviceMemory) >= 1 && Number(fp.deviceMemory) <= 8)) {
-    add('memory-invalid', 'deviceMemory must be between 1 and 8 when overridden.', 'error');
+  if (fp?.deviceMemory != null && ![0.25, 0.5, 1, 2, 4, 8].includes(Number(fp.deviceMemory))) {
+    add('memory-invalid', 'deviceMemory must use a supported Chromium value between 0.25 and 8.', 'error');
   }
   return { ok: !issues.some((issue) => issue.severity === 'error'), issues };
 }
@@ -2061,29 +2154,29 @@ function buildInjectionScript(fp) {
     } catch (_) {}
   }
 
-  // --- WebGPU adapter info when gpu vendor/architecture is configured ---
-  if (CFG.webgl && CFG.webgl.gpu && (CFG.webgl.gpu.vendor || CFG.webgl.gpu.architecture) && navigator.gpu) {
+  // WebGPU has its own policy; real mode must not inherit WebGL spoofing.
+  if (CFG.webgpu && CFG.webgpu.mode !== 'real' && navigator.gpu) {
     try {
+      const gpu = navigator.gpu;
+      const originalRequestAdapter = gpu.requestAdapter;
+      if (typeof originalRequestAdapter !== 'function') throw new Error('WebGPU adapter unavailable');
       const gpuInfo = {
-        vendor: String(CFG.webgl.gpu.vendor || ''),
-        architecture: String(CFG.webgl.gpu.architecture || ''),
+        vendor: String(CFG.webgpu.gpu?.vendor || ''),
+        architecture: String(CFG.webgpu.gpu?.architecture || ''),
         device: '',
         description: '',
       };
-      const originalRequestAdapter = navigator.gpu.requestAdapter?.bind(navigator.gpu);
-      if (originalRequestAdapter) {
-        navigator.gpu.requestAdapter = async function(...args) {
-          const adapter = await originalRequestAdapter(...args);
-          if (!adapter) return adapter;
-          try {
-            Object.defineProperty(adapter, 'info', nativeAccessor('info', { configurable: true, get: () => gpuInfo }));
-            if (typeof adapter.requestAdapterInfo === 'function') {
-              adapter.requestAdapterInfo = async () => gpuInfo;
-            }
-          } catch (_) {}
-          return adapter;
-        };
-      }
+      const patched = nativeLike(async function requestAdapter(...args) {
+        if (CFG.webgpu.mode === 'blocked') return null;
+        const adapter = await originalRequestAdapter.apply(this, args);
+        if (!adapter) return adapter;
+        try {
+          Object.defineProperty(adapter, 'info', nativeAccessor('info', { configurable: true, get: () => gpuInfo }));
+          if (typeof adapter.requestAdapterInfo === 'function') adapter.requestAdapterInfo = async () => gpuInfo;
+        } catch (_) {}
+        return adapter;
+      }, originalRequestAdapter);
+      Object.defineProperty(gpu, 'requestAdapter', { configurable: true, writable: true, value: patched });
     } catch (_) {}
   }
 } catch (e) { try { console.warn('[OpenBrowser] fingerprint inject', e && e.message || e); } catch (_) {} }
@@ -2110,6 +2203,7 @@ function buildWorkerInjectionScript(fp) {
       mark: fp.webgl?.mark,
       gpu: fp.webgl?.gpu || null,
     },
+    webgpu: fp.webgpu || null,
     canvas: fp.canvas,
     seed: fp.seed,
     stability: {
@@ -2389,6 +2483,26 @@ function buildWorkerInjectionScript(fp) {
       }
     }
   } catch (_) {}
+  if (CFG.webgpu && CFG.webgpu.mode !== 'real' && navigator.gpu) {
+    try {
+      const gpu = navigator.gpu;
+      const original = gpu.requestAdapter;
+      if (typeof original === 'function') {
+        const gpuInfo = { vendor: String(CFG.webgpu.gpu?.vendor || ''), architecture: String(CFG.webgpu.gpu?.architecture || ''), device: '', description: '' };
+        const patched = nativeLike(async function requestAdapter(...args) {
+          if (CFG.webgpu.mode === 'blocked') return null;
+          const adapter = await original.apply(this, args);
+          if (!adapter) return adapter;
+          try {
+            Object.defineProperty(adapter, 'info', nativeAccessor('info', { configurable: true, get: () => gpuInfo }));
+            if (typeof adapter.requestAdapterInfo === 'function') adapter.requestAdapterInfo = async () => gpuInfo;
+          } catch (_) {}
+          return adapter;
+        }, original);
+        Object.defineProperty(gpu, 'requestAdapter', { configurable: true, writable: true, value: patched });
+      }
+    } catch (_) {}
+  }
   const canvasMark = Number(CFG.canvas?.mark) || 1;
   if (CFG.canvas?.mode === 'blocked') {
     const deny = () => { throw new DOMException('Canvas reading is disabled by this profile', 'SecurityError'); };
@@ -2522,18 +2636,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
       ? ''
       : (profile.exitTimezone || ''));
   // geoMode: custom coords | disabled/prompt (no override) | ip/allow (from exit IP)
-  let latitude = null;
-  let longitude = null;
-  if (privacy.geoMode === 'custom') {
-    latitude = Number(privacy.latitude);
-    longitude = Number(privacy.longitude);
-  } else if (privacy.geoMode === 'disabled' || privacy.geoMode === 'prompt') {
-    latitude = null;
-    longitude = null;
-  } else {
-    latitude = Number(profile.exitLatitude);
-    longitude = Number(profile.exitLongitude);
-  }
+  const geoposition = resolveGeoposition(profile);
 
   // cdpCall may be:
   //  1) (wsUrl, method, params) — classic page WebSocket path
@@ -2589,12 +2692,8 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
   if (timezone) {
     await softOverride('Emulation.setTimezoneOverride', { timezoneId: timezone });
   }
-  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    await softOverride('Emulation.setGeolocationOverride', {
-      latitude,
-      longitude,
-      accuracy: privacy.accuracy || 100,
-    });
+  if (geoposition) {
+    await softOverride('Emulation.setGeolocationOverride', geoposition);
   }
   if (fp.languages?.[0]) {
     await softOverride('Emulation.setLocaleOverride', { locale: fp.languages[0] });
@@ -2675,6 +2774,8 @@ module.exports = {
   createDeviceNameFromSeed,
   createLocalIpFromSeed,
   formatGeopositionValue,
+  parseCoordinates,
+  resolveGeoposition,
   createBatteryFromSeed,
   buildWebglFpPayload,
   audioMarkFromSeed,

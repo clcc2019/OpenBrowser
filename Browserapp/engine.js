@@ -17,7 +17,7 @@ const { disableVulkanOnWayland } = require('./automation/linux-rendering');
 const { mergeLaunchArgs } = require('./automation/command-line-flags');
 const credentialCrypto = require('./automation/credential-crypto');
 const { ProfileStoreSqlite } = require('./automation/profile-store-sqlite');
-const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab } = require('./automation/fingerprint');
+const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab, parseCoordinates } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
 const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
 const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
@@ -689,7 +689,7 @@ class BrowserEngine {
       ? value.fingerprint
       : (privacyValue.fingerprint && typeof privacyValue.fingerprint === 'object' ? privacyValue.fingerprint : null);
     const allowed = (candidate, values, fallback) => values.includes(String(candidate || '')) ? String(candidate) : fallback;
-    const finite = (candidate) => candidate !== '' && candidate !== null && candidate !== undefined && Number.isFinite(Number(candidate)) ? Number(candidate) : null;
+    const finite = (candidate) => candidate !== null && candidate !== undefined && !(typeof candidate === 'string' && candidate.trim() === '') && Number.isFinite(Number(candidate)) ? Number(candidate) : null;
     const width = Math.min(7680, Math.max(640, Number(value.width) || 1280)); const height = Math.min(4320, Math.max(480, Number(value.height) || 820));
     const number = Number.parseInt(value.number, 10);
     const parseLimitedOption = (candidate, values) => {
@@ -716,7 +716,7 @@ class BrowserEngine {
       id, number: Number.isInteger(number) && number > 0 ? number : null, name: value.name.slice(0, 100),
       title: String(value.title || value.displayName || '').slice(0, 120),
       startUrl: effectiveStartUrl,
-      browser: 'Google Chrome', os: String(value.os || 'Windows').slice(0, 40), location: String(value.location || 'Local').slice(0, 80),
+      browser: 'Google Chrome', os: String(value.os || 'macOS').slice(0, 40), location: String(value.location || 'Local').slice(0, 80),
       networkMode,
       proxy: networkMode === 'direct' ? 'Direct' : rawProxy,
       proxyId,
@@ -780,6 +780,7 @@ class BrowserEngine {
         // sampling each axis on its own. Defaults to 'default' so an existing profile's
         // hardware identity never changes underneath it.
         deviceProfile: allowed(privacyValue.deviceProfile, ['default', 'persona'], 'default'),
+        personaVersion: [2, 3, 4, 5].includes(Number(privacyValue.personaVersion)) ? Number(privacyValue.personaVersion) : 1,
         canvas: allowed(privacyValue.canvas, ['real', 'noise', 'blocked'], privacyValue.canvas === 'blocked' ? 'blocked' : (privacyValue.canvas === 'real' ? 'real' : 'noise')),
         webgl: allowed(privacyValue.webgl, ['real', 'noise', 'blocked'], privacyValue.webgl === 'blocked' ? 'blocked' : (privacyValue.webgl === 'real' ? 'real' : 'noise')),
         webglMeta: allowed(privacyValue.webglMeta, ['noise', 'custom', 'real', 'blocked'], 'noise'),
@@ -795,9 +796,9 @@ class BrowserEngine {
         battery: allowed(privacyValue.battery, ['real', 'noise', 'blocked'], privacyValue.battery === 'blocked' ? 'blocked' : (privacyValue.battery === 'real' ? 'real' : 'noise')),
         batterySnapshot: privacyValue.batterySnapshot && typeof privacyValue.batterySnapshot === 'object' ? {
           charging: privacyValue.batterySnapshot.charging !== false,
-          level: Math.min(1, Math.max(0, Number(privacyValue.batterySnapshot.level) || 0.87)),
-          chargingTime: Number.isFinite(Number(privacyValue.batterySnapshot.chargingTime)) ? Number(privacyValue.batterySnapshot.chargingTime) : null,
-          dischargingTime: Number.isFinite(Number(privacyValue.batterySnapshot.dischargingTime)) ? Number(privacyValue.batterySnapshot.dischargingTime) : null,
+          level: privacyValue.batterySnapshot.level == null || privacyValue.batterySnapshot.level === '' || !Number.isFinite(Number(privacyValue.batterySnapshot.level)) ? 0.87 : Math.min(1, Math.max(0, Number(privacyValue.batterySnapshot.level))),
+          chargingTime: finite(privacyValue.batterySnapshot.chargingTime),
+          dischargingTime: finite(privacyValue.batterySnapshot.dischargingTime),
         } : null,
         // Derived from webrtc mode only; independent numeric override removed to avoid dual controls.
         webrtcPolicy: privacyValue.webrtc === 'disabled' ? 0 : (privacyValue.webrtc === 'real' ? 1 : 3),
@@ -1765,11 +1766,13 @@ class BrowserEngine {
     if ((privacy.timezoneMode === 'ip' || !privacy.timezoneMode) && networkTimezone) {
       next.privacy = { ...next.privacy, timezone: networkTimezone };
     }
-    if ((privacy.geoMode === 'ip' || privacy.geoMode === 'allow' || !privacy.geoMode)
-      && Number.isFinite(Number(network.latitude))
-      && Number.isFinite(Number(network.longitude))) {
-      next.exitLatitude = Number(network.latitude);
-      next.exitLongitude = Number(network.longitude);
+    const networkCoords = parseCoordinates(network.latitude, network.longitude);
+    if ((privacy.geoMode === 'ip' || privacy.geoMode === 'allow' || !privacy.geoMode) && networkCoords) {
+      next.exitLatitude = networkCoords.latitude;
+      next.exitLongitude = networkCoords.longitude;
+    } else if (!networkCoords) {
+      next.exitLatitude = profile.exitLatitude;
+      next.exitLongitude = profile.exitLongitude;
     }
     return next;
   }

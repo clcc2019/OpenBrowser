@@ -2107,6 +2107,12 @@ startupPromise = app.whenReady().then(async () => {
       chromeMajor: defaultMajor,
       chromeFull: payload.chromeFull || payload.fullVersion,
       reduced: payload.reduced !== false,
+      architecture: payload.architecture,
+      platform_version: payload.platform_version,
+      bitness: payload.bitness,
+      mobile: payload.mobile,
+      wow64: payload.wow64,
+      ua_full_version: payload.ua_full_version,
     });
   });
 

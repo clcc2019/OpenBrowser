@@ -83,6 +83,7 @@ async function startAutomation(context = {}) {
     syncBridge,
     appCenter,
     proxyStore,
+    emit,
     getVersion: () => app.getVersion(),
   });
 

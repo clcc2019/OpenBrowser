@@ -3,9 +3,12 @@
 const http = require('http');
 const crypto = require('crypto');
 const { URL } = require('url');
+const { parseCoordinates } = require('./fingerprint');
+const { normalizeOsKey } = require('./user-agent');
 const { cleanApiKey, isApiKeyPlaceholder, resolveApiKey } = require('./api-key');
 
 const MAX_BODY_BYTES = 1024 * 1024;
+const DEFAULT_CHROME_MAJOR = 157;
 
 function responseHeaders(origin = '', extra = {}) {
   const headers = {
@@ -186,10 +189,12 @@ function parseResolution(value) {
 
 function parseGeolocation(value) {
   if (value && typeof value === 'object') {
-    return [Number(value.latitude ?? value.lat), Number(value.longitude ?? value.lon ?? value.lng)];
+    const coords = parseCoordinates(value.latitude ?? value.lat, value.longitude ?? value.lon ?? value.lng);
+    return coords ? [coords.latitude, coords.longitude] : [NaN, NaN];
   }
-  const parts = String(value || '').split(/[,;:\s]+/).map(Number);
-  if (parts.length >= 2 && parts.every(Number.isFinite)) return [parts[0], parts[1]];
+  const parts = String(value ?? '').trim().split(/[,;:\s]+/);
+  const coords = parts.length === 2 ? parseCoordinates(parts[0], parts[1]) : null;
+  if (coords) return [coords.latitude, coords.longitude];
   return [NaN, NaN];
 }
 
@@ -420,6 +425,7 @@ class LocalApiServer {
     }
     this.allowedOrigins = new Set(options.allowedOrigins || []);
     this.engine = options.engine;
+    this.emit = typeof options.emit === 'function' ? options.emit : () => {};
     this.rpaEngine = options.rpaEngine;
     this.rpaStore = options.rpaStore;
     this.syncBridge = options.syncBridge;
@@ -653,16 +659,30 @@ class LocalApiServer {
       const proxyUser = String(userProxy.proxy_user || '');
       const proxyPassword = String(userProxy.proxy_password || '');
       const proxy = rawProxy || (proxyHost && proxyPort ? (proxyType === 'socks' ? 'socks5' : proxyType) + '://' + (proxyUser ? encodeURIComponent(proxyUser) + ':' + encodeURIComponent(proxyPassword) + '@' : '') + proxyHost + ':' + proxyPort : 'Direct');
+      const requestedFingerprint = body.fingerprint && typeof body.fingerprint === 'object'
+        ? body.fingerprint
+        : (body.privacy?.fingerprint && typeof body.privacy.fingerprint === 'object' ? body.privacy.fingerprint : {});
+      const requestedUa = String(requestedFingerprint.userAgent || body.userAgent || '').trim();
+      const requestedMajor = Number(requestedFingerprint.chromeMajor);
+      const profileFingerprint = { ...requestedFingerprint };
+      if (!(requestedMajor > 0) && !/Chrome\/\d+/i.test(requestedUa)) {
+        profileFingerprint.chromeMajor = DEFAULT_CHROME_MAJOR;
+      }
       const profile = {
         ...body,
         id, number,
         name: String(body.name || body.title || ('Environment ' + number)),
         title: String(body.title || body.name || ('Environment ' + number)),
+        os: String(body.os || 'macOS'),
         language: String(body.language || 'en-US'),
         networkMode: body.networkMode || (/^(direct|offline|none)$/i.test(proxy) ? 'direct' : 'proxy'),
         proxy,
+        fingerprint: profileFingerprint,
         privacy: {
+          deviceProfile: 'persona',
+          personaVersion: 5,
           ...(body.privacy && typeof body.privacy === 'object' ? body.privacy : {}),
+          fingerprint: profileFingerprint,
         },
       };
       // The engine's sanitizer may still reject structurally odd profiles (e.g. a
@@ -749,6 +769,21 @@ class LocalApiServer {
         else if (key === 'fingerprint' && value && typeof value === 'object') patch.fingerprint = { ...value };
         else if (key !== 'profile_id' && key !== 'user_id' && key !== 'id') patch[key] = value;
       }
+      const osChanged = patch.os != null && normalizeOsKey(patch.os) !== normalizeOsKey(current.os);
+      const uaChanged = Object.prototype.hasOwnProperty.call(body, 'userAgent');
+      const explicitFingerprint = Object.prototype.hasOwnProperty.call(input, 'fingerprint')
+        || Object.prototype.hasOwnProperty.call(input.privacy || {}, 'fingerprint');
+      if ((osChanged || uaChanged) && !explicitFingerprint && !clearFingerprint) {
+        const privacy = { ...(patch.privacy || current.privacy || {}) };
+        const fp = { ...(privacy.fingerprint || {}) };
+        delete fp.userAgent;
+        if (osChanged) {
+          for (const key of ['os', 'platform', 'architecture', 'platformVersion', 'clientHints']) delete fp[key];
+        }
+        privacy.fingerprint = fp;
+        patch.privacy = privacy;
+        if (osChanged && !uaChanged) patch.userAgent = '';
+      }
       if (clearFingerprint) {
         delete patch.fingerprint;
         if (!Object.prototype.hasOwnProperty.call(patch, 'privacy')) {
@@ -757,7 +792,7 @@ class LocalApiServer {
           patch.privacy = nextPrivacy;
         }
       }
-      const mergedProfile = { ...current, ...patch, id };
+      const mergedProfile = { ...current, ...patch, id, updatedAt: new Date().toISOString() };
       if (clearFingerprint) {
         // Older callers/tests may still carry a duplicated top-level
         // fingerprint alongside privacy.fingerprint. Remove both copies so a
@@ -774,6 +809,7 @@ class LocalApiServer {
       this.engine.profiles.set(id, next);
       if (typeof this.engine.persist === 'function') await this.engine.persist();
       const profile = this.engine.profiles.get(id);
+      this.emit({ type: 'profiles', action: 'update', profile });
       return ok({
         profile_id: id,
         ...proxySummary(profile, this.proxyStore, association.present ? association.value : undefined),

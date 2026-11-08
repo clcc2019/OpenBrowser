@@ -44,8 +44,8 @@ async function main() {
     fpSrc.slice(fpSrc.indexOf('async function applyFingerprintToTab'))
   ), 'Runtime.evaluate must not swallow inject errors');
 
-  // Auto screen mode must use Chromium's real content area instead of fixing the
-  // page viewport to the monitor dimensions. Custom mode keeps fixed metrics.
+  // All desktop modes retain a live viewport on resize; the screen fingerprint
+  // is applied separately without a fixed CDP device-metrics override.
   const viewportFp = buildFingerprint({ id: 'viewport-env', width: 1600, height: 900 });
   const autoCalls = [];
   await applyFingerprintToTab(async (method, params) => autoCalls.push({ method, params }), null, viewportFp, { screenMode: 'auto' });
@@ -53,7 +53,8 @@ async function main() {
   assert.ok(!autoCalls.some(({ method }) => method === 'Emulation.setDeviceMetricsOverride'), 'auto mode does not fix the page viewport');
   const customCalls = [];
   await applyFingerprintToTab(async (method, params) => customCalls.push({ method, params }), null, viewportFp, { screenMode: 'custom' });
-  assert.ok(customCalls.some(({ method }) => method === 'Emulation.setDeviceMetricsOverride'), 'custom mode keeps fixed viewport metrics');
+  assert.ok(customCalls.some(({ method }) => method === 'Emulation.clearDeviceMetricsOverride'), 'custom mode clears fixed viewport metrics');
+  assert.ok(!customCalls.some(({ method }) => method === 'Emulation.setDeviceMetricsOverride'), 'custom mode does not fix the page viewport');
 
   // --- start-page re-samples fingerprint after inject settle ---
   const tpl = fs.readFileSync(path.join(__dirname, 'automation/start-page-template.js'), 'utf8');

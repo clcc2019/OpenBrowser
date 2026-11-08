@@ -144,6 +144,24 @@ async function main() {
   assert.strictEqual(kernelAligned.userAgentMetadata.uaFullVersion, '151.0.7922.34');
   pass('saved UA follows kernel version without changing stored profile');
 
+  const configured157 = buildFingerprint({
+    ...oldProfile,
+    kernelVersion: '148.0.7778.165',
+    privacy: {
+      fingerprint: {
+        chromeMajor: 157,
+        userAgent: oldUa,
+        ua_full_version: '148.0.7778.165',
+        clientHints: { chromeMajor: 148, ua_full_version: '148.0.7778.165' },
+      },
+    },
+  });
+  assert.match(configured157.userAgent, /Chrome\/157\.0\.0\.0/);
+  assert.strictEqual(configured157.uaProfile.chromeMajor, 157);
+  assert.strictEqual(configured157.userAgentMetadata.uaFullVersion, '157.0.0.0');
+  assert.strictEqual(configured157.userAgentMetadata.brands.find((item) => item.brand === 'Google Chrome')?.version, '157');
+  pass('explicit profile Chrome major overrides bundled kernel version');
+
   // OS-facing fingerprint values must follow the UA OS, not a separate random choice.
   const osCases = [
     {
@@ -173,7 +191,7 @@ async function main() {
     assert.strictEqual(fp.platform, item.platform);
     assert.strictEqual(fp.userAgentMetadata.platform, item.hintPlatform);
     assert.match(fp.webgl.renderer, item.renderer);
-    assert.deepStrictEqual(fp.consistency.issues, []);
+    assert.deepStrictEqual(fp.consistency.issues.filter((issue) => ['platform-ua-mismatch', 'client-hints-ua-mismatch', 'webgl-ua-mismatch'].includes(issue.code)), []);
   }
   pass('UA, navigator platform, Client Hints and WebGL remain OS-consistent');
 

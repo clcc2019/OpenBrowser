@@ -26,7 +26,8 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   // Do not auto-bootstrap a real kernel in this offline test.
   engine.kernelBootstrapPromise = null;
 
-  const api = new LocalApiServer({ engine, apiKey: 'test-key-123', allowedOrigins: [] });
+  const events = [];
+  const api = new LocalApiServer({ engine, apiKey: 'test-key-123', allowedOrigins: [], emit: (event) => events.push(event) });
   // route() reads this._req/_res internally? No — route(method, pathname, input, req). Drive directly.
   const route = (method, pathname, input) => api.route(method, pathname, input, { headers: {} });
 
@@ -36,9 +37,33 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   ok('create assigns ob- id', /^ob-[A-Za-z0-9_-]{1,64}$/.test(r.data.user_id));
   const id1 = r.data.user_id;
   ok('engine has profile', engine.profiles.has(id1));
+  r = await route('POST', '/api/v2/browser-profile/update', { profile_id: id1, timezone: 'Asia/Tokyo' });
+  ok('profile update notifies UI with persisted timezone', events.some((event) => event.type === 'profiles' && event.action === 'update' && event.profile?.id === id1 && event.profile?.privacy?.timezone === 'Asia/Tokyo'));
   ok('name preserved', engine.profiles.get(id1).name === 'Env One');
   ok('proxy Direct', engine.profiles.get(id1).proxy === 'Direct');
   ok('number starts at 1', engine.profiles.get(id1).number === 1);
+  ok('new profile defaults to macOS persona v5', engine.profiles.get(id1).os === 'macOS' && engine.profiles.get(id1).privacy.deviceProfile === 'persona' && engine.profiles.get(id1).privacy.personaVersion === 5);
+  ok('generated fingerprint uses macOS', engine.fingerprintFor(id1).uaProfile.metadata.platform === 'macOS');
+  ok('generated fingerprint uses Chrome 157', engine.profiles.get(id1).privacy.fingerprint.chromeMajor === 157 && engine.fingerprintFor(id1).uaProfile.chromeMajor === 157 && engine.fingerprintFor(id1).userAgent.includes('Chrome/157'));
+  r = await route('POST', '/api/profiles/update', { id: id1, geolocation: { latitude: '', longitude: '' } });
+  ok('empty coordinates do not become zero', r.code === 0 && engine.profiles.get(id1).privacy.geoMode !== 'custom');
+  r = await route('POST', '/api/profiles/update', { id: id1, geolocation: '0,0' });
+  ok('explicit zero coordinates are accepted', r.code === 0 && engine.profiles.get(id1).privacy.latitude === 0 && engine.profiles.get(id1).privacy.longitude === 0);
+  r = await route('POST', '/api/profiles/update', { id: id1, geolocation: '91,181' });
+  ok('out of range coordinates do not replace valid coordinates', r.code === 0 && engine.profiles.get(id1).privacy.latitude === 0 && engine.profiles.get(id1).privacy.longitude === 0);
+  const winUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36';
+  r = await route('POST', '/api/profiles/create', { id: 'ua-switch', os: 'Windows', userAgent: winUA, privacy: { deviceProfile: 'persona', fingerprint: { userAgent: winUA, os: 'windows', clientHints: { platform: 'Windows' }, canvas: 'noise' } } });
+  ok('Windows UA fixture created', r.code === 0 && engine.fingerprintFor('ua-switch').userAgent.includes('Windows NT'));
+  r = await route('POST', '/api/profiles/update', { id: 'ua-switch', os: 'macOS' });
+  const switched = engine.profiles.get('ua-switch');
+  ok('changing platform clears stale UA', r.code === 0 && !switched.userAgent && !switched.privacy.fingerprint.userAgent);
+  ok('changing platform retains unrelated fingerprint settings', switched.privacy.fingerprint.canvas === 'noise');
+  ok('changing platform generates matching UA and hints', engine.fingerprintFor('ua-switch').userAgent.includes('Macintosh') && engine.fingerprintFor('ua-switch').userAgentMetadata.platform === 'macOS');
+  r = await route('POST', '/api/profiles/update', { id: 'ua-switch', os: 'Linux' });
+  ok('Linux platform generates Linux UA', r.code === 0 && engine.fingerprintFor('ua-switch').userAgent.includes('Linux'));
+  r = await route('POST', '/api/profiles/update', { id: 'ua-switch', os: 'Windows', userAgent: winUA });
+  ok('explicit UA survives platform change', r.code === 0 && engine.fingerprintFor('ua-switch').userAgent === winUA);
+  await route('POST', '/api/v1/user/delete', { user_id: 'ua-switch', delete_data: false });
 
   // ---- create 2: AdsPower proxy_config + privacy ----
   r = await route('POST', '/api/profiles/create', {
