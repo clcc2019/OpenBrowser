@@ -305,8 +305,8 @@ function normalizeProfileSettings(profile) {
     tag: String(value.tag || ''),
     groupId: value.groupId == null || value.groupId === undefined ? UNGROUPED_ID : String(value.groupId || ''),
     screenMode,
-    width: Number(value.width) >= 640 ? Number(value.width) : 1280,
-    height: Number(value.height) >= 480 ? Number(value.height) : 820,
+    width: Number(value.width) >= 640 ? Number(value.width) : 1920,
+    height: Number(value.height) >= 480 ? Number(value.height) : 1080,
     platform: {
       type: String(platform.type || 'other'),
       startUrl: String(platform.startUrl || value.startUrl || ''),
@@ -1817,7 +1817,7 @@ function serializeEditorProxy(strict = true) {
 
 function editorResolution() {
   const selected = $('#editor-resolution').value;
-  if (selected === 'auto') return { screenMode: 'auto', width: Math.max(640, screen.availWidth || 1280), height: Math.max(480, screen.availHeight || 820) };
+  if (selected === 'auto') return { screenMode: 'auto', width: Math.max(640, screen.availWidth || 1920), height: Math.max(480, screen.availHeight || 1080) };
   if (selected !== 'custom') { const [width, height] = selected.split('x').map(Number); return { screenMode: 'custom', width, height }; }
   const width = Number($('#editor-width').value); const height = Number($('#editor-height').value);
   if (!Number.isInteger(width) || width < 640 || width > 7680 || !Number.isInteger(height) || height < 480 || height > 4320) throw new Error(tx('请填写有效的窗口宽度和高度'));
@@ -1843,10 +1843,10 @@ function editorFingerprintForDraft(current) {
 
 function editorDraft(strict = true) {
   const current = ui.profiles.find((item) => item.id === editingProfileId) || {};
-  let resolution = { screenMode: current.screenMode || 'auto', width: Number($('#editor-width')?.value) || current.width || 1280, height: Number($('#editor-height')?.value) || current.height || 820 };
+  let resolution = { screenMode: current.screenMode || 'auto', width: Number($('#editor-width')?.value) || current.width || 1920, height: Number($('#editor-height')?.value) || current.height || 1080 };
   if (strict) resolution = editorResolution();
   else if ($('#editor-resolution')?.value === 'auto') {
-    resolution = { screenMode: 'auto', width: current.width || 1280, height: current.height || 820 };
+    resolution = { screenMode: 'auto', width: current.width || 1920, height: current.height || 1080 };
   } else if ($('#editor-resolution')?.value && $('#editor-resolution').value !== 'custom') {
     const values = $('#editor-resolution').value.split('x').map(Number);
     resolution = { screenMode: 'custom', width: values[0], height: values[1] };
@@ -2480,7 +2480,7 @@ function useSystemEditorDefaults() {
   editorGeneratedUaMetadata = null;
   editorSet('#editor-ua-chrome-major', DEFAULT_CHROME_MAJOR);
   editorSet('#editor-user-agent', ''); editorSet('#editor-timezone-mode', 'real'); editorSet('#editor-timezone', Intl.DateTimeFormat().resolvedOptions().timeZone || ''); editorSet('#editor-geo-mode', 'disabled'); editorSet('#editor-ui-language', 'system');
-  editorSet('#editor-resolution', 'auto'); editorSet('#editor-width', Math.max(640, screen.availWidth || 1280)); editorSet('#editor-height', Math.max(480, screen.availHeight || 820));
+  editorSet('#editor-resolution', 'auto'); editorSet('#editor-width', Math.max(640, screen.availWidth || 1920)); editorSet('#editor-height', Math.max(480, screen.availHeight || 1080));
   editorSet('#editor-webrtc', 'real'); editorSet('#editor-canvas', 'real'); editorSet('#editor-webgl', 'real'); editorSet('#editor-webgpu', 'real'); editorSet('#editor-audio', 'real'); editorSet('#editor-media', 'real'); editorSet('#editor-speech', 'real');
   markEditorDirty(); updateEditorVisibility(); renderEditorSummary(); toast(tx('已读取本机安全默认值'));
   refreshUaMetaPreview().catch(() => {});
@@ -5012,18 +5012,27 @@ $('#reset-profile-storage').addEventListener('click', resetProfileStorage);
 $('#open-profile-storage').addEventListener('click', async () => { try { await window.ops.openProfileStorage(); } catch (error) { toast(error.message); log('Error', error.message); } });
 
 window.ops.onEvent(async (value) => {
-  if (value?.type === 'profiles' && value.action === 'update' && value.profile?.id) {
-    const index = ui.profiles.findIndex((profile) => profile.id === value.profile.id);
+  if (value?.type === 'profiles' && (value.action === 'create' || value.action === 'update') && value.profile?.id) {
+    const incoming = normalizeProfileSettings(value.profile);
+    const index = ui.profiles.findIndex((profile) => profile.id === incoming.id);
+    let added = false;
     if (index >= 0) {
       ui.profiles[index] = normalizeProfileSettings({ ...ui.profiles[index], ...value.profile });
-      save();
-      if (editingProfileId === value.profile.id) {
+      if (value.action === 'update' && editingProfileId === value.profile.id) {
         editorExternallyUpdated = true;
         setEditorSaveState('error', tx('环境已在外部更新，请返回后重新打开以避免覆盖新设置'));
         toast(tx('环境已在外部更新，请返回后重新打开以避免覆盖新设置'));
       }
-      scheduleRenderProfiles();
+    } else {
+      // Profiles created through the Local API / MCP live in the engine first; mirror them
+      // into the renderer's persisted list so the table updates without an app restart.
+      ui.profiles.push(incoming);
+      added = true;
     }
+    ui.nextProfileNumber = Math.max(positiveProfileNumber(ui.nextProfileNumber), positiveProfileNumber(incoming.number) + 1);
+    save();
+    scheduleRenderProfiles();
+    if (added) { scheduleStatusRefresh(); scheduleSessionRefresh(); }
   }
   if (value?.type === 'app-update-progress') {
     appUpdateState.progress = value;

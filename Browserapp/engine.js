@@ -17,7 +17,7 @@ const { disableVulkanOnWayland } = require('./automation/linux-rendering');
 const { mergeLaunchArgs } = require('./automation/command-line-flags');
 const credentialCrypto = require('./automation/credential-crypto');
 const { ProfileStoreSqlite } = require('./automation/profile-store-sqlite');
-const { buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab, parseCoordinates } = require('./automation/fingerprint');
+const { LAUNCH_WINDOW_SIZE, buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab, parseCoordinates } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
 const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
 const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
@@ -690,7 +690,7 @@ class BrowserEngine {
       : (privacyValue.fingerprint && typeof privacyValue.fingerprint === 'object' ? privacyValue.fingerprint : null);
     const allowed = (candidate, values, fallback) => values.includes(String(candidate || '')) ? String(candidate) : fallback;
     const finite = (candidate) => candidate !== null && candidate !== undefined && !(typeof candidate === 'string' && candidate.trim() === '') && Number.isFinite(Number(candidate)) ? Number(candidate) : null;
-    const width = Math.min(7680, Math.max(640, Number(value.width) || 1280)); const height = Math.min(4320, Math.max(480, Number(value.height) || 820));
+    const width = Math.min(7680, Math.max(640, Number(value.width) || 1920)); const height = Math.min(4320, Math.max(480, Number(value.height) || 1080));
     const number = Number.parseInt(value.number, 10);
     const parseLimitedOption = (candidate, values) => {
       if (candidate === '' || candidate === null || candidate === undefined) return null;
@@ -1775,6 +1775,37 @@ class BrowserEngine {
       next.exitLongitude = profile.exitLongitude;
     }
     return next;
+  }
+
+  /**
+   * Re-assert the unified environment window geometry through CDP. --window-size
+   * sets the size of a fresh window, but kernel builds that restore the previous
+   * session's window placement can come back larger (or maximized) before the
+   * page loads. Only the size is normalized; the current screen position stays.
+   */
+  async applyLaunchWindowBounds(port) {
+    if (!port) return null;
+    // The DevTools endpoint answers slightly before Chromium exposes its first page
+    // target; retry briefly so the geometry pass is not skipped during that gap.
+    let current = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        current = await cdp.windowForPort(port);
+        break;
+      } catch (error) {
+        if (attempt === 2) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    }
+    const bounds = current?.bounds || {};
+    const state = String(bounds.windowState || '').toLowerCase();
+    const unified = Math.round(Number(bounds.width)) === LAUNCH_WINDOW_SIZE.width
+      && Math.round(Number(bounds.height)) === LAUNCH_WINDOW_SIZE.height;
+    if (unified && (!state || state === 'normal')) return current;
+    const next = { width: LAUNCH_WINDOW_SIZE.width, height: LAUNCH_WINDOW_SIZE.height };
+    if (Number.isFinite(Number(bounds.left))) next.left = Math.round(Number(bounds.left));
+    if (Number.isFinite(Number(bounds.top))) next.top = Math.round(Number(bounds.top));
+    return cdp.setWindowBounds(port, next);
   }
 
   async applyEnvWindowTitle(port, profile) {
@@ -3259,6 +3290,13 @@ class BrowserEngine {
     try {
       item.startUrl = startUrl;
       item.fpAppliedTargets = new Set();
+      // Enforce the launch geometry before the first navigation: restored window
+      // placement must not leave an environment at its old size.
+      try {
+        await this.applyLaunchWindowBounds(item.port);
+      } catch (boundsError) {
+        await fpLog('start.window-bounds-fail', { profileId: profile.id, error: String(boundsError.message || boundsError) });
+      }
       // Fingerprint inject BEFORE keepDefaultTab/start-page navigation so the welcome
       // page's collectFingerprint() sees spoofed navigator/WebGL (not the host GPU).
       // openbrowser-148: pixel noise may be native; JS still spoofs WebGL meta strings.

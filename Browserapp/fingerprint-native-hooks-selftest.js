@@ -21,15 +21,14 @@ const ok = (n, c) => { assert.ok(c, n); console.log('  PASS  ' + n); passed += 1
 const NATIVE = /^function get [A-Za-z_$][\w$]*\(\) \{\s*\[native code\]\s*\}$/;
 
 /** Minimal DOM surface: enough for the injection script to install its hooks. */
-function makeDomContext() {
+function makeDomContext(metrics = {}) {
   function Navigator() {}
   function Screen() {}
   const navigator = Object.create(Navigator.prototype);
   const screen = Object.create(Screen.prototype);
   const win = {
     Navigator, Screen, navigator, screen,
-    devicePixelRatio: 1, screenX: 0, screenY: 0, innerWidth: 1280, innerHeight: 800,
-    outerWidth: 1280, outerHeight: 800,
+    devicePixelRatio: 1, screenX: 0, screenY: 0,
     document: { createElement: () => ({ getContext: () => null }), getOwnPropertyNames: [] },
     location: { href: 'https://example.com/', hostname: 'example.com' },
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
@@ -39,6 +38,16 @@ function makeDomContext() {
     DOMException: function DOMException(m) { this.message = m; },
 augment: null,
   };
+  // Real Chrome exposes the viewport metrics as accessors rather than data
+  // properties, so the stub must do the same for the raw-getter capture to run.
+  for (const [key, value] of Object.entries({
+    innerWidth: metrics.innerWidth ?? 1280,
+    innerHeight: metrics.innerHeight ?? 800,
+    outerWidth: metrics.outerWidth ?? 1280,
+    outerHeight: metrics.outerHeight ?? 800,
+  })) {
+    Object.defineProperty(win, key, { configurable: true, get: () => value });
+  }
   win.window = win;
   win.globalThis = win;
   win.self = win;
@@ -89,6 +98,29 @@ const fp = buildFingerprint({
     ok('navigator proxy descriptor getter stringifies as native', NATIVE.test(viaProxy.src));
     ok('navigator proxy descriptor leaks no internals', !/navPatch|CFG/.test(viaProxy.src));
   }
+}
+
+// --- window geometry: outer metrics must describe the launched 740×600 window ---
+{
+  // Kernels may pin outerWidth/outerHeight to the fingerprint screen size. Inside a
+  // compact environment that must not leak a 1920×1080 outer window; the injected
+  // launch geometry keeps outer metrics consistent with --window-size.
+  const ctx = vm.createContext(makeDomContext({ innerWidth: 740, innerHeight: 520, outerWidth: 1920, outerHeight: 1080 }));
+  let ran = true;
+  try { vm.runInContext(buildInjectionScript(fp), ctx, { timeout: 10000 }); }
+  catch (error) { ran = false; console.log('     (injection threw in the window stub: ' + error.message + ')'); }
+  ok('page injection executes with compact window metrics', ran);
+
+  const size = vm.runInContext('({ innerWidth, innerHeight, outerWidth, outerHeight })', ctx);
+  ok('outerWidth reports the 740px launch window, not the fingerprint screen', size.outerWidth === 740);
+  ok('outerHeight reports the 600px launch window, not the fingerprint screen', size.outerHeight === 600);
+  ok('outer window contains the live viewport', size.outerWidth >= size.innerWidth && size.outerHeight >= size.innerHeight);
+
+  // A window the user resized must keep reporting its real outer size.
+  const resizedCtx = vm.createContext(makeDomContext({ innerWidth: 1300, innerHeight: 813, outerWidth: 1320, outerHeight: 900 }));
+  vm.runInContext(buildInjectionScript(fp), resizedCtx, { timeout: 10000 });
+  const resized = vm.runInContext('({ innerWidth, innerHeight, outerWidth, outerHeight })', resizedCtx);
+  ok('outer metrics track a resized window', resized.outerWidth === 1320 && resized.outerHeight === 900);
 }
 
 // --- worker injection: WorkerNavigator accessors ---

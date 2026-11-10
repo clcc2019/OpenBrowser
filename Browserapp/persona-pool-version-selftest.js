@@ -67,7 +67,7 @@ for (let i = 0; i < 1000; i++) {
   assert(!fp.mediaDevices.devices.some((device) => /realtek|conexant|synaptics/i.test(device.label)));
   v3Displays.add(`${fp.screen.width}x${fp.screen.height}`);
 }
-assert(v3Displays.size >= 9, 'v3 display variants must be selectable');
+assert.deepStrictEqual([...v3Displays], ['1920x1080'], 'screen resolution is unified at 1920x1080');
 const v4Renderers = new Set();
 for (let i = 0; i < 3000; i++) {
   const fp = buildFingerprint({ ...profile, id: `mac-v4-${i}`, os: 'macOS', privacy: { deviceProfile: 'persona', personaVersion: 4 } });

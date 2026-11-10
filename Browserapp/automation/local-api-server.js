@@ -700,6 +700,9 @@ class LocalApiServer {
       }
       if (typeof this.engine.persist === 'function') await this.engine.persist();
       created = this.engine.profiles.get(id) || created;
+      // The renderer keeps its own persisted list (ui.profiles). Without this event a
+      // profile created via the Local API/MCP only shows up after an app restart.
+      this.emit({ type: 'profiles', action: 'create', profile: created });
       return ok({ user_id: id, profile_id: id, id, ...proxySummary(created, this.proxyStore), profile: created });
     }
 
@@ -871,7 +874,9 @@ class LocalApiServer {
       });
       await this.engine.syncProfiles([next]);
       if (typeof this.engine.persist === 'function') await this.engine.persist();
-      return ok({ profile_id: id, profile: this.engine.profiles.get(id) || next });
+      const created = this.engine.profiles.get(id) || next;
+      this.emit({ type: 'profiles', action: 'create', profile: created });
+      return ok({ profile_id: id, profile: created });
     }
 
     if (pathname === '/api/v1/user/delete' || pathname === '/api/v2/browser-profile/delete' || pathname === '/api/profiles/delete') {

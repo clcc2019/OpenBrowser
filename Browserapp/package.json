@@ -26,6 +26,7 @@
     "selftest:sqlitestore": "node automation/profile-store-sqlite-selftest.js",
     "selftest:credentials": "node automation/credential-crypto-selftest.js",
     "selftest:viewport": "node viewport-resize-selftest.js",
+    "selftest:window": "node window-geometry-selftest.js",
     "log:startup": "node scripts/read-startup-log.js",
     "log:fingerprint": "node scripts/read-fp-log.js",
     "log:rpa": "node scripts/read-rpa-log.js",

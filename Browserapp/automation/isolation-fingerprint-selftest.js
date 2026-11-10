@@ -298,7 +298,8 @@ async function main() {
 
   const args = chromeArgsForFingerprint(a1, { privacy: { dnt: true } });
   assert.ok(args.some((a) => a.startsWith('--user-agent=')));
-  assert.ok(args.some((a) => a.startsWith('--window-size=')));
+  assert.ok(args.includes('--window-size=740,600'), 'every environment launches with the unified 740×600 window');
+  assert.ok(scriptA.includes('"windowSize":{"width":740,"height":600}'), 'injection pairs outer window metrics with the 740×600 launch size');
   assert.ok(args.some((a) => a.includes('webrtc') || a.includes('WebRTC') || a.includes('webrtc-ip')));
   assert.ok(!args.some((arg) => arg.startsWith('--disable-blink-features')));
   assert.ok(!args.some((a) => a.includes('enable-automation')));
@@ -334,6 +335,8 @@ async function main() {
   persistent.close();
   pass('persistent CDP connection routes flattened worker sessions and events');
 
+  assert.strictEqual(a1.screen.width, 1920, 'fingerprint screen width is unified at 1920');
+  assert.strictEqual(a1.screen.height, 1080, 'fingerprint screen height is unified at 1080');
   assert.ok(a1.screen.availLeft >= 0 && a1.screen.availTop >= 0);
   assert.ok(a1.screen.availWidth <= a1.screen.width);
   assert.ok(a1.screen.availHeight <= a1.screen.height);

@@ -40,6 +40,12 @@ async function main() {
     const tab = await cdp.firstTab(session.port);
     assert.ok(tab?.webSocketDebuggerUrl, 'browser tab with CDP socket required');
 
+    // Environments open at the compact unified size instead of the fingerprint
+    // screen resolution (1920×1080), which used to be passed as --window-size.
+    const launchBounds = (await cdp.windowForPort(session.port)).bounds;
+    assert.ok(launchBounds.width <= 740 && launchBounds.height <= 600,
+      `environment must launch at the unified 740×600 window: ${JSON.stringify(launchBounds)}`);
+
     // Keep the baseline below the smallest Windows logical work area used by
     // the test machine (1280px at 150% scaling reports roughly 836px to
     // Chromium). The second request still exercises the real enlargement path

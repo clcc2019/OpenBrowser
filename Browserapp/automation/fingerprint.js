@@ -31,6 +31,12 @@ const {
   OS_PRESETS,
 } = require('./user-agent');
 
+// Unified launch geometry for every environment window: the outer window stays
+// compact (740×600) while the fingerprint reports a standard desktop screen
+// (1920×1080), so sites keep their desktop layout instead of a mobile one.
+const LAUNCH_WINDOW_SIZE = Object.freeze({ width: 740, height: 600 });
+const FINGERPRINT_SCREEN_SIZE = Object.freeze({ width: 1920, height: 1080 });
+
 function hashSeed(input) {
   return crypto.createHash('sha256').update(String(input || '')).digest();
 }
@@ -679,8 +685,6 @@ function buildFingerprint(profile = {}) {
   let memory = hasMemoryOverride
     ? normalizeDeviceMemory(memoryOverride)
     : memoryPool[u32(seed, 16) % memoryPool.length];
-  const width = Number(profile.width) || 1280;
-  const height = Number(profile.height) || 820;
   let colorDepth = [24, 24, 30][u32(seed, 20) % 3];
   let devicePixelRatio = [1, 1, 1.25, 1.5, 2][u32(seed, 24) % 5];
 
@@ -895,10 +899,10 @@ function buildFingerprint(profile = {}) {
   const languages = String(languagePrimary).split(',').map((s) => s.trim()).filter(Boolean);
   if (!languages.length) languages.push('en-US');
 
-  // A persona carries its own panel size; without it the reported screen follows the window,
-  // which is what makes "screen smaller than the viewport" style inconsistencies show up.
-  const screenWidth = Math.max(640, Math.round(Number(fpIn.screenWidth) || devicePersona?.screen?.width || width));
-  const screenHeight = Math.max(480, Math.round(Number(fpIn.screenHeight) || devicePersona?.screen?.height || height));
+  // Every environment reports the same desktop screen resolution regardless of its
+  // window size or per-profile setting, keeping small windows desktop-classified.
+  const screenWidth = FINGERPRINT_SCREEN_SIZE.width;
+  const screenHeight = FINGERPRINT_SCREEN_SIZE.height;
   const taskbarHeight = Math.max(0, Math.round(Number(fpIn.taskbarHeight) || (uaOs === 'macos' || uaOs === 'macos_arm' ? 25 : 40)));
   const availLeft = Math.round(Number(fpIn.availLeft) || 0);
   const availTop = Math.round(Number(fpIn.availTop) || 0);
@@ -1185,6 +1189,9 @@ function buildInjectionScript(fp) {
     hardwareConcurrency: fp.hardwareConcurrency,
     deviceMemory: fp.deviceMemory == null ? null : Math.min(8, Math.max(0.25, Number(fp.deviceMemory) || 8)),
     screen: fp.screen,
+    // Outer-window geometry stays paired with the --window-size launch flag, so the
+    // page never claims a 1920×1080 outer window from inside a 740×600 one.
+    windowSize: LAUNCH_WINDOW_SIZE,
     webgl: {
       mode: fp.webgl?.mode,
       metaMode: fp.webgl?.metaMode || 'noise',
@@ -1595,6 +1602,10 @@ function buildInjectionScript(fp) {
     const rawInnerWidthGet = rawWinWidthDesc?.get ? () => rawWinWidthDesc.get.call(window) : null;
     const rawWinHeightDesc = Object.getOwnPropertyDescriptor(window, 'innerHeight') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'innerHeight');
     const rawInnerHeightGet = rawWinHeightDesc?.get ? () => rawWinHeightDesc.get.call(window) : null;
+    const rawWinOuterWidthDesc = Object.getOwnPropertyDescriptor(window, 'outerWidth') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'outerWidth');
+    const rawOuterWidthGet = rawWinOuterWidthDesc?.get ? () => rawWinOuterWidthDesc.get.call(window) : null;
+    const rawWinOuterHeightDesc = Object.getOwnPropertyDescriptor(window, 'outerHeight') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(window), 'outerHeight');
+    const rawOuterHeightGet = rawWinOuterHeightDesc?.get ? () => rawWinOuterHeightDesc.get.call(window) : null;
 
     const rawVisualViewport = window.visualViewport;
     const rawVisualWidthDesc = rawVisualViewport ? (Object.getOwnPropertyDescriptor(rawVisualViewport, 'width') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(rawVisualViewport), 'width')) : null;
@@ -1633,6 +1644,29 @@ function buildInjectionScript(fp) {
       return fallback;
     };
 
+    const launchWindowWidth = Number(CFG.windowSize?.width) || 0;
+    const launchWindowHeight = Number(CFG.windowSize?.height) || 0;
+    // outerWidth/outerHeight describe the browser window, not the page viewport.
+    // Kernels that pin them to the fingerprint screen are rejected: a real outer
+    // size never exceeds the screen and stays within browser-chrome distance of the
+    // viewport (borders for width, toolbar for height). The launch geometry
+    // (740×600) is the floor, so a compact window never advertises a full-screen
+    // outer size and outer always contains inner.
+    const outerWindowSize = (axis, fallback) => {
+      const inner = liveViewportSize(axis, fallback);
+      const launch = axis === 'width' ? launchWindowWidth : launchWindowHeight;
+      const screenSize = axis === 'width' ? baseScreenWidth : baseScreenHeight;
+      const maxChrome = axis === 'width' ? 80 : 400;
+      try {
+        const getter = axis === 'width' ? rawOuterWidthGet : rawOuterHeightGet;
+        const raw = getter ? Number(getter()) : 0;
+        if (Number.isFinite(raw) && raw >= inner && (!screenSize || raw <= screenSize) && raw - inner <= maxChrome) {
+          return Math.max(Math.round(raw), launch, inner);
+        }
+      } catch (_) {}
+      return Math.max(launch, inner);
+    };
+
     const dynamicScreen = {
       width: () => (baseScreenWidth ? Math.max(baseScreenWidth, liveViewportSize('width', baseScreenWidth)) : liveViewportSize('width', 1920)),
       height: () => (baseScreenHeight ? Math.max(baseScreenHeight, liveViewportSize('height', baseScreenHeight)) : liveViewportSize('height', 1080)),
@@ -1656,8 +1690,8 @@ function buildInjectionScript(fp) {
     const initialInnerHeight = Number(window.innerHeight) || Number(s.availHeight) || Number(s.height) || 1;
     try { Object.defineProperty(window, 'innerWidth', nativeAccessor('innerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
     try { Object.defineProperty(window, 'innerHeight', nativeAccessor('innerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
-    try { Object.defineProperty(window, 'outerWidth', nativeAccessor('outerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
-    try { Object.defineProperty(window, 'outerHeight', nativeAccessor('outerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
+    try { Object.defineProperty(window, 'outerWidth', nativeAccessor('outerWidth', { configurable: true, get: () => outerWindowSize('width', initialInnerWidth) })); } catch (_) {}
+    try { Object.defineProperty(window, 'outerHeight', nativeAccessor('outerHeight', { configurable: true, get: () => outerWindowSize('height', initialInnerHeight) })); } catch (_) {}
     try {
       const viewport = window.visualViewport;
       if (viewport) {
@@ -2596,9 +2630,7 @@ function chromeArgsForFingerprint(fp, profile = {}) {
       }
     }
   }
-  if (fp.screen?.width && fp.screen?.height) {
-    args.push(`--window-size=${fp.screen.width},${fp.screen.height}`);
-  }
+  args.push(`--window-size=${LAUNCH_WINDOW_SIZE.width},${LAUNCH_WINDOW_SIZE.height}`);
   if (fp.webrtc === 'disabled' || fp.webrtc === 'proxy') {
     args.push(
       '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
@@ -2762,6 +2794,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
 }
 
 module.exports = {
+  LAUNCH_WINDOW_SIZE,
   buildFingerprint,
   buildInjectionScript,
   buildWorkerInjectionScript,

@@ -37,6 +37,7 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   ok('create assigns ob- id', /^ob-[A-Za-z0-9_-]{1,64}$/.test(r.data.user_id));
   const id1 = r.data.user_id;
   ok('engine has profile', engine.profiles.has(id1));
+  ok('profile create notifies UI', events.some((event) => event.type === 'profiles' && event.action === 'create' && event.profile?.id === id1));
   r = await route('POST', '/api/v2/browser-profile/update', { profile_id: id1, timezone: 'Asia/Tokyo' });
   ok('profile update notifies UI with persisted timezone', events.some((event) => event.type === 'profiles' && event.action === 'update' && event.profile?.id === id1 && event.profile?.privacy?.timezone === 'Asia/Tokyo'));
   ok('name preserved', engine.profiles.get(id1).name === 'Env One');
@@ -81,6 +82,13 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   ok('privacy.timezoneMode ip preserved', p2.privacy.timezoneMode === 'ip');
   ok('privacy.webrtc disabled preserved', p2.privacy.webrtc === 'disabled');
   ok('privacy.geoMode disabled preserved', p2.privacy.geoMode === 'disabled');
+
+  // ---- duplicate: creates a new profile and notifies the UI ----
+  r = await route('POST', '/api/v2/browser-profile/duplicate', { profile_id: id2, name: 'Env Two Copy' });
+  const duplicateId = r.data?.profile_id;
+  ok('duplicate creates new profile', r && r.code === 0 && duplicateId && duplicateId !== id2 && engine.profiles.has(duplicateId));
+  ok('duplicate notifies UI', events.some((event) => event.type === 'profiles' && event.action === 'create' && event.profile?.id === duplicateId));
+  await route('POST', '/api/v1/user/delete', { user_id: duplicateId, delete_data: false });
 
   // ---- create 3: duplicate id rejected ----
   r = await route('POST', '/api/v2/browser-profile/create', { user_id: id1, name: 'Dup' });
