@@ -1,10 +1,16 @@
 const UI_KEY = 'openbrowser-ui-state';
 const GROUP_COLORS = ['#245cff', '#22d3ee', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb7185', '#94a3b8', '#f97316', '#2dd4bf'];
 const UNGROUPED_ID = '';
-const DEFAULT_PROFILE_OS = 'macOS';
+const HOST_PROFILE_OS = (() => {
+  const value = String(globalThis.navigator?.userAgentData?.platform || globalThis.navigator?.platform || globalThis.navigator?.userAgent || '');
+  if (/windows|win32|win64/i.test(value)) return 'Windows';
+  if (/macintosh|mac os|macintel|macos/i.test(value)) return 'macOS';
+  return 'Linux';
+})();
+const DEFAULT_PROFILE_OS = HOST_PROFILE_OS;
 const DEFAULT_CHROME_MAJOR = 157;
 const DEFAULT_CHROME_FULL_VERSION = `${DEFAULT_CHROME_MAJOR}.0.0.0`;
-const PROFILE_OS_MIGRATION_KEY = 'openbrowser-profile-os-migration-v1';
+const PROFILE_OS_MIGRATION_KEY = 'openbrowser-profile-os-migration-v2';
 const PROFILE_CHROME_MIGRATION_KEY = 'openbrowser-profile-chrome-major-v1';
 const PROFILE_PLATFORM_FINGERPRINT_FIELDS = [
   'userAgent', 'os', 'platform', 'architecture', 'platformVersion', 'platform_version',
@@ -264,7 +270,7 @@ function defaultGroups() {
 }
 
 const defaultProfiles = () => [
-  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PROFILE_OS, location: 'Local', userAgent: `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${DEFAULT_CHROME_FULL_VERSION} Safari/537.36`, privacy: { deviceProfile: 'persona', personaVersion: 5, fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } },
+  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PROFILE_OS, location: 'Local', userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: true, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } },
 ];
 
 function positiveProfileNumber(value) {
@@ -341,6 +347,7 @@ function normalizeProfileSettings(profile) {
       webrtc: String(privacy.webrtc || 'proxy'),
       timezoneMode: String(privacy.timezoneMode || 'ip'),
       timezone: String(privacy.timezone || ''),
+      matchHostOs: privacy.matchHostOs !== false,
       geoMode: String(privacy.geoMode || 'ip'),
       latitude: privacy.latitude ?? '',
       longitude: privacy.longitude ?? '',
@@ -587,22 +594,39 @@ function migrateProfileNumbers(profiles, savedNextNumber) {
   return { profiles: migrated, nextProfileNumber: Math.max(positiveProfileNumber(savedNextNumber), maximum + 1, 1) };
 }
 
-function profileOsIsMac(value) {
-  return /^(?:mac(?:os)?(?:[_ -]?arm(?:64)?)?|os\s*x|darwin)(?:\s|$)/i.test(String(value || '').trim());
+function profileOsIsHost(value) {
+  const os = String(value || '').trim();
+  if (HOST_PROFILE_OS === 'Windows') return /^windows(?:\s|$)|^win(?:32|64)?$/i.test(os);
+  if (HOST_PROFILE_OS === 'macOS') return /^(?:mac(?:os)?(?:[_ -]?arm(?:64)?)?|os\s*x|darwin)(?:\s|$)/i.test(os);
+  return /^(?:linux|x11)(?:\s|$)/i.test(os);
 }
 
-function migrateProfileToMacOS(profile) {
+function migrateProfileToHostOS(profile) {
   const normalized = normalizeProfileSettings(profile);
   const sourceOs = String(profile?.os || '').trim();
-  const next = { ...normalized, os: DEFAULT_PROFILE_OS };
-  // Existing macOS profiles already have a coherent platform; only normalize the
-  // display label and leave their deliberate UA/fingerprint overrides intact.
-  if (profileOsIsMac(sourceOs)) return next;
+  const next = { ...normalized };
+  // Stock Chromium exposes the real GPU, WebGPU, fonts and media stack. A
+  // cross-platform JS persona creates contradictions, so migrate unless the
+  // profile explicitly opted out (for a fingerprint-capable custom kernel).
+  if (profile?.privacy?.matchHostOs === false) return next;
+  next.os = DEFAULT_PROFILE_OS;
+  if (profileOsIsHost(sourceOs)) return next;
 
   const privacy = { ...(normalized.privacy || {}) };
+  privacy.matchHostOs = true;
+  privacy.webglMeta = 'real';
+  privacy.webgpu = 'real';
   if (privacy.fingerprint && typeof privacy.fingerprint === 'object') {
     const fingerprint = { ...privacy.fingerprint };
     for (const field of PROFILE_PLATFORM_FINGERPRINT_FIELDS) delete fingerprint[field];
+    delete fingerprint.webglVendor;
+    delete fingerprint.webglRenderer;
+    delete fingerprint.webgl;
+    delete fingerprint.webgpu;
+    delete fingerprint.gpuVendor;
+    delete fingerprint.gpuArchitecture;
+    fingerprint.webglMeta = 'real';
+    fingerprint.webgpu = 'real';
     privacy.fingerprint = fingerprint;
   }
   return { ...next, userAgent: '', privacy };
@@ -612,8 +636,8 @@ function profileOsMigrationPending() {
   try { return localStorage.getItem(PROFILE_OS_MIGRATION_KEY) !== '1'; } catch (_) { return true; }
 }
 
-function migrateProfilesToMacOS(profiles) {
-  return Array.isArray(profiles) ? profiles.map(migrateProfileToMacOS) : [];
+function migrateProfilesToHostOS(profiles) {
+  return Array.isArray(profiles) ? profiles.map(migrateProfileToHostOS) : [];
 }
 
 function markProfileOsMigrationComplete() {
@@ -1831,8 +1855,16 @@ function editorCookies() {
   return JSON.stringify(values);
 }
 
-function editorFingerprintForDraft(current) {
+function editorFingerprintForDraft(current, matchHostOs = false) {
   const fingerprint = { ...(current.privacy?.fingerprint || {}) };
+  if (matchHostOs) {
+    for (const key of [
+      ...PROFILE_PLATFORM_FINGERPRINT_FIELDS,
+      'webglVendor', 'webglRenderer', 'webgl', 'webgpu', 'gpuVendor', 'gpuArchitecture', 'vendor', 'chromeMajor',
+    ]) delete fingerprint[key];
+    fingerprint.webglMeta = 'real';
+    fingerprint.webgpu = 'real';
+  }
   if (editorUaEdited) delete fingerprint.userAgent;
   if (editorUaResetPlatform) {
     for (const key of ['os', 'platform', 'architecture', 'platformVersion', 'clientHints']) delete fingerprint[key];
@@ -1853,10 +1885,12 @@ function editorDraft(strict = true) {
   }
   const tabMode = document.querySelector('input[name="editor-tab-mode"]:checked')?.value || 'fixed';
   const dntMode = $('#editor-dnt-mode')?.value || 'default';
+  const matchHostOs = $('#editor-match-host-os')?.checked !== false;
   const privacy = {
     webrtc: $('#editor-webrtc')?.value || 'proxy',
     timezoneMode: $('#editor-timezone-mode')?.value || 'ip',
     timezone: ($('#editor-timezone')?.value || '').trim(),
+    matchHostOs,
     geoMode: $('#editor-geo-mode')?.value || 'ip',
     latitude: $('#editor-latitude')?.value,
     longitude: $('#editor-longitude')?.value,
@@ -1906,30 +1940,34 @@ function editorDraft(strict = true) {
     stabilityHosts: ($('#editor-stability-hosts')?.value || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 800),
     stabilitySkipHosts: ($('#editor-stability-skip-hosts')?.value || '').split(/[\r\n,;\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 200),
     cores: (() => {
+      if (matchHostOs) return 0;
       const v = $('#editor-cores')?.value;
       if (v === '' || v == null) return '';
       const n = Number(v);
       return Number.isFinite(n) ? n : '';
     })(),
     memory: (() => {
+      if (matchHostOs) return 0;
       const v = $('#editor-memory')?.value;
       if (v === '' || v == null) return '';
       const n = Number(v);
       return Number.isFinite(n) ? n : '';
     })(),
     fingerprint: {
-      ...editorFingerprintForDraft(current),
+      ...editorFingerprintForDraft(current, matchHostOs),
       chromeMajor: parseEditorChromeMajor($('#editor-user-agent')?.value || '')
         || Number($('#editor-ua-chrome-major')?.value)
         || Number(current.privacy?.fingerprint?.chromeMajor)
         || DEFAULT_CHROME_MAJOR,
       cores: (() => {
+        if (matchHostOs) return 0;
         const v = $('#editor-cores')?.value;
         if (v === '' || v == null) return undefined;
         const n = Number(v);
         return Number.isFinite(n) ? n : undefined;
       })(),
       memory: (() => {
+        if (matchHostOs) return 0;
         const v = $('#editor-memory')?.value;
         if (v === '' || v == null) return undefined;
         const n = Number(v);
@@ -1963,8 +2001,8 @@ function editorDraft(strict = true) {
     name: displayProfileNumber(current),
     title: ($('#editor-title')?.value || '').trim(),
     browser: 'Google Chrome',
-    os: $('#editor-os')?.value || current.os || DEFAULT_PROFILE_OS,
-    userAgent: ($('#editor-user-agent')?.value || '').trim(),
+    os: matchHostOs ? HOST_PROFILE_OS : ($('#editor-os')?.value || current.os || HOST_PROFILE_OS),
+    userAgent: matchHostOs ? '' : ($('#editor-user-agent')?.value || '').trim(),
     cookies: strict ? editorCookies() : ($('#editor-cookies')?.value || '').trim(),
     language: (() => {
       const mode = $('#editor-language-mode')?.value || 'ip';
@@ -2200,6 +2238,30 @@ function setEditorTab(tab, { focus = false } = {}) {
   if (focus) activeButton?.focus();
 }
 
+function syncHostOsEditorState() {
+  const matchHost = $('#editor-match-host-os')?.checked !== false;
+  const osSelect = $('#editor-os');
+  if (osSelect) {
+    osSelect.disabled = matchHost;
+    if (matchHost) editorSet('#editor-os', HOST_PROFILE_OS);
+    syncThemedSelect(osSelect);
+  }
+  for (const [selector, value] of [
+    ['#editor-cores', '0'],
+    ['#editor-memory', '0'],
+    ['#editor-webgl-meta', 'real'],
+    ['#editor-webgpu', 'real'],
+  ]) {
+    const field = $(selector);
+    if (!field) continue;
+    field.disabled = matchHost;
+    if (matchHost) editorSet(selector, value);
+    if (field instanceof HTMLSelectElement) syncThemedSelect(field);
+  }
+  const userAgent = $('#editor-user-agent');
+  if (userAgent) userAgent.disabled = matchHost;
+}
+
 function openProfileEditor(id) {
   const profile = normalizeProfileSettings(ui.profiles.find((item) => item.id === id)); if (!profile?.id) return;
   editorExternallyUpdated = false;
@@ -2215,8 +2277,10 @@ function openProfileEditor(id) {
   editorSet('#editor-name', displayProfileNumber(profile));
   editorSet('#editor-title', profile.title || '');
   editorSet('#editor-browser', 'Google Chrome');
-  editorSet('#editor-os', profile.os);
-  const effectiveStoredUa = profile.privacy?.fingerprint?.userAgent || profile.userAgent;
+  const matchHost = profile.privacy?.matchHostOs !== false;
+  editorCheck('#editor-match-host-os', matchHost);
+  editorSet('#editor-os', matchHost ? HOST_PROFILE_OS : profile.os);
+  const effectiveStoredUa = matchHost ? '' : (profile.privacy?.fingerprint?.userAgent || profile.userAgent);
   editorSet('#editor-user-agent', effectiveStoredUa);
   editorSet('#editor-ua-chrome-major', parseEditorChromeMajor(effectiveStoredUa) || profile.privacy?.fingerprint?.chromeMajor || DEFAULT_CHROME_MAJOR);
   editorSet('#editor-cookies', (() => {
@@ -2325,6 +2389,7 @@ function openProfileEditor(id) {
   editorSet('#editor-stability-square', privacy.stabilitySquare || 8);
   editorSet('#editor-stability-hosts', Array.isArray(privacy.stabilityHosts) ? privacy.stabilityHosts.join('\n') : (privacy.stabilityHosts || ''));
   editorSet('#editor-stability-skip-hosts', Array.isArray(privacy.stabilitySkipHosts) ? privacy.stabilitySkipHosts.join('\n') : (privacy.stabilitySkipHosts || ''));
+  syncHostOsEditorState();
   const advanced = profile.advanced;
   for (const [sel, value] of [
     ['#editor-save-cookies', advanced.saveCookies],
@@ -2641,6 +2706,19 @@ document.getElementById('editor-os')?.addEventListener('change', () => {
   editorSet('#editor-ua-chrome-major', DEFAULT_CHROME_MAJOR);
   markEditorDirty();
   refreshUaMetaPreview().catch(() => {});
+  renderEditorSummary();
+});
+document.getElementById('editor-match-host-os')?.addEventListener('change', () => {
+  const matchHost = $('#editor-match-host-os')?.checked !== false;
+  if (matchHost) {
+    editorUaEdited = true;
+    editorUaResetPlatform = true;
+    editorGeneratedUaMetadata = null;
+    editorSet('#editor-user-agent', '');
+    refreshUaMetaPreview().catch(() => {});
+  }
+  syncHostOsEditorState();
+  markEditorDirty();
   renderEditorSummary();
 });
 
@@ -4504,7 +4582,7 @@ $('#profile-form').addEventListener('submit', async (event) => {
     platform: { type: 'other', startUrl },
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
     // New profiles get a coherent device persona; existing ones are left as they were.
-    privacy: { languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona', personaVersion: 5, fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } },
+    privacy: { matchHostOs: true, languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } },
   };
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
   try {
@@ -4687,7 +4765,7 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
-    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : { userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { deviceProfile: 'persona', personaVersion: 5, fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } }), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PROFILE_OS, location: 'Local', cookies: '' });
+    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : { userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: true, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } }), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PROFILE_OS, location: 'Local', cookies: '' });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];
@@ -5214,7 +5292,7 @@ function updateEngineBadge(info) {
 async function initialize() {
   const migrateExistingProfiles = profileOsMigrationPending();
   const migrateExistingChromeVersions = profileChromeMigrationPending();
-  if (migrateExistingProfiles) ui.profiles = migrateProfilesToMacOS(ui.profiles);
+  if (migrateExistingProfiles) ui.profiles = migrateProfilesToHostOS(ui.profiles);
   if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToChrome157(ui.profiles);
   refreshLocaleChrome();
   const info = await window.ops.getInfo();
@@ -5275,7 +5353,7 @@ async function initialize() {
       }
     }
   } catch (_) {}
-  if (migrateExistingProfiles) ui.profiles = migrateProfilesToMacOS(ui.profiles);
+  if (migrateExistingProfiles) ui.profiles = migrateProfilesToHostOS(ui.profiles);
   if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToChrome157(ui.profiles);
   save();
   engineProfiles = await window.ops.syncProfiles(ui.profiles);

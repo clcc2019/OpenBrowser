@@ -17,10 +17,10 @@ const { disableVulkanOnWayland } = require('./automation/linux-rendering');
 const { mergeLaunchArgs } = require('./automation/command-line-flags');
 const credentialCrypto = require('./automation/credential-crypto');
 const { ProfileStoreSqlite } = require('./automation/profile-store-sqlite');
-const { LAUNCH_WINDOW_SIZE, buildFingerprint, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab, parseCoordinates } = require('./automation/fingerprint');
+const { LAUNCH_WINDOW_SIZE, buildFingerprint, hostConsistentProfile, fingerprintChromiumArgs, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab, parseCoordinates } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
 const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
-const { BrowserKernelManager, ensureKernelReadyForLaunch } = require('./automation/browser-kernel');
+const { BrowserKernelManager, ensureKernelReadyForLaunch, SOURCE_CHROME_STABLE, SOURCE_CFT, SOURCE_CUSTOM } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
   isOpenBrowser148,
@@ -46,6 +46,23 @@ function isChildExited(child) {
   if (child.signalCode !== null && child.signalCode !== undefined) return true;
   if (child.pid && !isPidAlive(child.pid)) return true;
   return false;
+}
+
+function browserUsesHostConsistency(browser = {}) {
+  return Boolean(browser) && (browser.nativeFingerprint === true || [SOURCE_CHROME_STABLE, SOURCE_CFT].includes(String(browser.source || '')));
+}
+
+function hostProfileOsLabel() {
+  if (process.platform === 'darwin') return 'macOS';
+  if (process.platform === 'win32') return 'Windows';
+  return 'Linux';
+}
+
+function resolveExitTimezone(profile = {}, network = {}) {
+  const mode = profile.privacy?.timezoneMode || 'ip';
+  if (mode === 'real') return '';
+  if (mode === 'custom') return normalizeTimezoneValue(profile.privacy?.timezone);
+  return normalizeTimezoneValue(network?.timezone || profile.exitTimezone);
 }
 
 const SINGLETON_FILES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile', 'DevToolsActivePort'];
@@ -426,7 +443,7 @@ class BrowserEngine {
     const list = [];
     // 1) Independent kernel (integrated / custom) — first priority
     const independent = this.kernelManager.resolveInstalled();
-    if (independent) list.push({ name: independent.name, path: independent.path, independent: true, version: independent.version, source: independent.source });
+    if (independent) list.push({ name: independent.name, path: independent.path, independent: true, version: independent.version, source: independent.source, nativeFingerprint: independent.nativeFingerprint === true });
 
     // 2) System browsers are exposed for explicit manual selection only.
     for (const item of this.systemBrowserCandidates()) list.push({ ...item, independent: false });
@@ -716,7 +733,7 @@ class BrowserEngine {
       id, number: Number.isInteger(number) && number > 0 ? number : null, name: value.name.slice(0, 100),
       title: String(value.title || value.displayName || '').slice(0, 120),
       startUrl: effectiveStartUrl,
-      browser: 'Google Chrome', os: String(value.os || 'macOS').slice(0, 40), location: String(value.location || 'Local').slice(0, 80),
+      browser: 'Google Chrome', os: String(value.os || hostProfileOsLabel()).slice(0, 40), location: String(value.location || 'Local').slice(0, 80),
       networkMode,
       proxy: networkMode === 'direct' ? 'Direct' : rawProxy,
       proxyId,
@@ -765,6 +782,7 @@ class BrowserEngine {
         webrtc: allowed(privacyValue.webrtc, ['proxy', 'disabled', 'real'], 'proxy'),
         timezoneMode: allowed(privacyValue.timezoneMode, ['ip', 'real', 'custom'], 'ip'),
         timezone: String(privacyValue.timezone || '').slice(0, 100),
+        matchHostOs: privacyValue.matchHostOs !== false,
         geoMode: allowed(privacyValue.geoMode, ['ip', 'disabled', 'custom', 'prompt', 'allow'], privacyValue.geoMode === 'prompt' ? 'prompt' : (privacyValue.geoMode === 'allow' ? 'ip' : 'ip')),
         latitude: finite(privacyValue.latitude),
         longitude: finite(privacyValue.longitude),
@@ -1283,7 +1301,7 @@ class BrowserEngine {
     // merge IP-detected geo/tz into profile for fingerprint apply
     const enriched = {
       ...profile,
-      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || network.timezone),
+      exitTimezone: resolveExitTimezone(profile, network),
       exitLatitude: profile.exitLatitude ?? network.latitude,
       exitLongitude: profile.exitLongitude ?? network.longitude,
     };
@@ -1471,7 +1489,7 @@ class BrowserEngine {
     const network = this.networkInfo.get(profile.id) || {};
     const enriched = {
       ...profile,
-      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || network.timezone),
+      exitTimezone: resolveExitTimezone(profile, network),
       exitLatitude: profile.exitLatitude ?? network.latitude,
       exitLongitude: profile.exitLongitude ?? network.longitude,
     };
@@ -1972,7 +1990,7 @@ class BrowserEngine {
    * OpenBrowser 原生启动页 URL：http://127.0.0.1:50326/?pid=...&id=...&name=...
    * 会话与网络信息由本引擎写入启动页服务，不依赖其它指纹浏览器。
    */
-  async buildStartPageUrl(profile, root, browserName, extensionCount) {
+  async buildStartPageUrl(profile, root, browserName, extensionCount, browser = null) {
     let pageNetwork = this.networkInfo.get(profile.id) || null;
     // 代理出口信息只使用缓存；用户可在启动页手动刷新。
     const hasProxy = profile.proxy && !/^(direct|offline|none)$/i.test(String(profile.proxy));
@@ -1987,15 +2005,15 @@ class BrowserEngine {
         pageNetwork = this.networkInfo.get(profile.id) || null;
       }
     }
-    const timezone = normalizeTimezoneValue(
-      profile.privacy?.timezoneMode === 'custom'
-        ? profile.privacy.timezone
-        : profile.exitTimezone || pageNetwork?.timezone || ''
-    );
+    const timezone = resolveExitTimezone(profile, pageNetwork || {});
+    const profileForFingerprint = browserUsesHostConsistency(browser)
+      && profile.privacy?.matchHostOs !== false
+      ? hostConsistentProfile(profile)
+      : profile;
     const fpForStart = (() => {
       try {
         return buildFingerprint({
-          ...profile,
+          ...profileForFingerprint,
           kernelVersion: profile.kernelVersion || this.browserSelection()?.browser?.version,
           exitTimezone: timezone,
           exitLatitude: pageNetwork?.latitude ?? profile.exitLatitude,
@@ -2891,11 +2909,15 @@ class BrowserEngine {
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
     const pageNetwork = this.networkInfo.get(profile.id) || {};
     const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
+    const profileForFingerprint = browserUsesHostConsistency(browser)
+      && profile.privacy?.matchHostOs !== false
+      ? hostConsistentProfile(profile)
+      : profile;
     const fingerprint = buildFingerprint({
-      ...profile,
+      ...profileForFingerprint,
       fingerprintLaunchSeed: allowSeedRefresh ? crypto.randomBytes(16).toString('hex') : '',
       kernelVersion: browser.version,
-      exitTimezone: normalizeTimezoneValue(profile.exitTimezone || pageNetwork.timezone),
+      exitTimezone: resolveExitTimezone(profile, pageNetwork),
       exitLatitude: profile.exitLatitude ?? pageNetwork.latitude,
       exitLongitude: profile.exitLongitude ?? pageNetwork.longitude,
     });
@@ -2908,7 +2930,8 @@ class BrowserEngine {
         { ...profile, kernelVersion: browser.version, exitIp: pageNetwork.ip || profile.exitIp || '', title: profile.title || profile.name },
         root,
         browser.name,
-        extensions.length
+        extensions.length,
+        browser
       )
       : null;
     const startUrl = customStartUrls[0] || infoStartUrl;
@@ -2956,7 +2979,14 @@ class BrowserEngine {
     ];
     if (disableVulkanOnWayland()) args.push('--disable-vulkan');
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
-    args = mergeLaunchArgs(args, chromeArgsForFingerprint(fingerprint, profile));
+    args = mergeLaunchArgs(args, chromeArgsForFingerprint(fingerprint, profileForFingerprint));
+    if (browser.source === SOURCE_CUSTOM && browser.nativeFingerprint === true) {
+      args = mergeLaunchArgs(args, fingerprintChromiumArgs(fingerprint, profileForFingerprint, {
+        kernelVersion: browser.version,
+        timezone: resolveExitTimezone(profile, pageNetwork),
+      }));
+      this.emit({ type: 'kernel-native-fingerprint', id: profile.id, browser: browser.path });
+    }
     // openbrowser-148: write profile/init.json so Framework native FP matches buildFingerprint
     let runtimeFingerprint = fingerprint;
     kernelWindowName = null;
@@ -3235,6 +3265,7 @@ class BrowserEngine {
       fingerprint,
       kernelWindowName: kernelWindowName || null,
       nativeKernelFingerprint: isOpenBrowser148(browser),
+      nativeFingerprintKernel: browser.source === SOURCE_CUSTOM && browser.nativeFingerprint === true,
       childExitState: childExitState || { exited: isChildExited(child), code: child.exitCode, signal: child.signalCode, error: null },
       lifecycleGeneration,
       cleanupState: 'active',
@@ -3309,6 +3340,7 @@ class BrowserEngine {
         launchBinary: item.launchBinary || launchBinary || browser.path,
         startUrl: startUrl || null,
         nativeKernel: Boolean(item.nativeKernelFingerprint),
+        nativeFingerprintKernel: Boolean(item.nativeFingerprintKernel),
         fullFp: summarizeFp(fingerprint),
         injectFp: summarizeFp(injectFp),
         logFile: fingerprintLogPath(),

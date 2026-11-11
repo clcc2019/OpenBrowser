@@ -32,6 +32,8 @@ ok('renderer reads the select into the draft', /deviceProfile: \$\('#editor-devi
 ok('renderer populates the select from the profile', /editorSet\('#editor-device-profile', privacy\.deviceProfile \|\| 'default'\)/.test(renderer));
 ok('normalizing keeps an existing profile off by default', /deviceProfile: String\(privacy\.deviceProfile \|\| 'default'\)/.test(renderer));
 ok('newly created profiles opt in', /privacy: \{[^}]*deviceProfile: 'persona'[^}]*\}/.test(renderer));
+ok('new profiles default to the host platform', /const DEFAULT_PROFILE_OS = HOST_PROFILE_OS;/.test(renderer));
+ok('host consistency is exposed and defaults on', /id="editor-match-host-os"/.test(html) && /matchHostOs: privacy\.matchHostOs !== false/.test(renderer));
 
 // --- engine whitelist accepts exactly those values ---
 {
@@ -42,6 +44,9 @@ ok('newly created profiles opt in', /privacy: \{[^}]*deviceProfile: 'persona'[^}
   ok('engine keeps "default"', of('default') === 'default');
   ok('engine defaults a missing value to "default"', of(undefined) === 'default');
   ok('engine rejects anything else', of('nonsense') === 'default' && of('') === 'default');
+  const hostOf = (value) => sanitize.call(ctx, { id: 'w', name: 'w', privacy: value === undefined ? {} : { matchHostOs: value } }).privacy.matchHostOs;
+  ok('engine defaults host consistency on', hostOf(undefined) === true);
+  ok('engine preserves explicit cross-platform opt-out', hostOf(false) === false);
 }
 
 // --- the setting actually changes the fingerprint it is supposed to ---

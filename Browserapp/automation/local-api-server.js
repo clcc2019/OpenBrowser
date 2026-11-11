@@ -668,17 +668,19 @@ class LocalApiServer {
       if (!(requestedMajor > 0) && !/Chrome\/\d+/i.test(requestedUa)) {
         profileFingerprint.chromeMajor = DEFAULT_CHROME_MAJOR;
       }
+      const hostOs = process.platform === 'darwin' ? 'macOS' : (process.platform === 'win32' ? 'Windows' : 'Linux');
       const profile = {
         ...body,
         id, number,
         name: String(body.name || body.title || ('Environment ' + number)),
         title: String(body.title || body.name || ('Environment ' + number)),
-        os: String(body.os || 'macOS'),
+        os: String(body.os || hostOs),
         language: String(body.language || 'en-US'),
         networkMode: body.networkMode || (/^(direct|offline|none)$/i.test(proxy) ? 'direct' : 'proxy'),
         proxy,
         fingerprint: profileFingerprint,
         privacy: {
+          matchHostOs: true,
           deviceProfile: 'persona',
           personaVersion: 5,
           ...(body.privacy && typeof body.privacy === 'object' ? body.privacy : {}),

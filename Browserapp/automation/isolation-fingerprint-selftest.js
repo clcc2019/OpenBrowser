@@ -16,6 +16,8 @@ const { PersistentConnection } = require('../cdp');
 
 const {
   buildFingerprint,
+  hostConsistentProfile,
+  fingerprintChromiumArgs,
   buildInjectionScript,
   buildWorkerInjectionScript,
   chromeArgsForFingerprint,
@@ -248,6 +250,7 @@ async function main() {
   assert.ok(md1.some((d) => d.kind === 'audioinput'));
   assert.ok(md1.some((d) => d.kind === 'videoinput' && /Integrated Camera/.test(d.label)));
   assert.ok(Array.isArray(a1.mediaDevices.devices) && a1.mediaDevices.devices.length >= 3);
+  assert.ok(a1.mediaDevices.devices.every((device) => /^[a-f0-9]{64}$/.test(device.deviceId) && /^[a-f0-9]{64}$/.test(device.groupId)), 'synthetic media IDs must look like origin-bound Chromium IDs');
   assert.ok(a1.webgl.fpPayload.UNMASKED_VENDOR_WEBGL);
   assert.ok(a1.webgl.fpPayload.UNMASKED_RENDERER_WEBGL);
   assert.ok(a1.webgl.gpu && a1.webgl.gpu.vendor);
@@ -303,12 +306,56 @@ async function main() {
   assert.ok(args.some((a) => a.includes('webrtc') || a.includes('WebRTC') || a.includes('webrtc-ip')));
   assert.ok(!args.some((arg) => arg.startsWith('--disable-blink-features')));
   assert.ok(!args.some((a) => a.includes('enable-automation')));
+  assert.ok(!args.some((arg) => /swiftshader|disable-gpu-compositing/i.test(arg)), 'stock Chromium must keep the real GPU backend');
   assert.ok(scriptA.includes('webdriver') && scriptA.includes('false'));
   assert.ok(scriptA.includes('OffscreenCanvas'));
   assert.ok(scriptA.includes('OffscreenCanvasRenderingContext2D'));
   assert.ok(scriptA.includes('convertToBlob'));
   assert.ok(scriptA.includes('nativeSource') && scriptA.includes('Function.prototype.toString'));
   pass('chrome launch args for fingerprint');
+
+  const hostProfile = hostConsistentProfile({
+    id: 'env-host-consistency',
+    os: 'macOS',
+    userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    privacy: {
+      matchHostOs: true,
+      media: 'noise',
+      mediaDevices: 'noise',
+      speech: 'noise',
+      webglMeta: 'noise',
+      webgpu: 'webgl',
+      clientHints: { platform: 'macOS', platform_version: '14.5.0', architecture: 'arm' },
+      fingerprint: {
+        os: 'macos',
+        platform: 'MacIntel',
+        chromeMajor: 131,
+        clientHints: { platform: 'macOS', model: 'MacBookPro18,3' },
+        webglVendor: 'Google Inc. (Apple)',
+        webglRenderer: 'ANGLE (Apple, Apple M3 Pro, Unspecified Version)',
+      },
+    },
+  });
+  const hostFp = buildFingerprint({ ...hostProfile, kernelVersion: '157.0.7151.119' });
+  const expectedHostOs = process.platform === 'darwin' ? 'macOS' : (process.platform === 'win32' ? 'Windows' : 'Linux');
+  assert.strictEqual(hostFp.consistencyMode, 'native-host');
+  assert.strictEqual(hostFp.userAgentMetadata.platform, expectedHostOs);
+  assert.strictEqual(hostFp.webgl.metaMode, 'real');
+  assert.strictEqual(hostFp.webgpu.mode, 'real');
+  assert.strictEqual(hostFp.webgl.vendor, null);
+  assert.strictEqual(hostFp.webgl.renderer, null);
+  assert.strictEqual(hostFp.hardwareConcurrency, null);
+  assert.strictEqual(hostFp.deviceMemory, null);
+  assert.ok(hostFp.speech.voices.every((voice) => !String(voice.voiceURI || '').startsWith('ob-voice://')));
+  assert.strictEqual(hostFp.uaProfile.chromeMajor, 157);
+  const nativeArgs = fingerprintChromiumArgs(hostFp, hostProfile, { kernelVersion: '150.0.7871.186', timezone: 'Asia/Singapore' });
+  assert.ok(nativeArgs.includes('--fingerprint-brand=Chrome'));
+  assert.ok(nativeArgs.includes('--fingerprint-brand-version=150.0.7871.186'));
+  assert.ok(nativeArgs.includes(`--fingerprint-platform=${process.platform === 'darwin' ? 'macos' : (process.platform === 'win32' ? 'windows' : 'linux')}`));
+  assert.ok(nativeArgs.includes('--fingerprint-hardware-concurrency=' + require('os').cpus().length));
+  assert.ok(nativeArgs.includes('--timezone=Asia/Singapore'));
+  assert.ok(nativeArgs.includes('--disable-spoofing=font,audio,canvas,clientrects,gpu'));
+  pass('stock Chromium host consistency keeps UA, Client Hints and graphics surfaces aligned');
 
   const workerScript = buildWorkerInjectionScript(a1);
   assert.doesNotThrow(() => new Function(workerScript));

@@ -385,6 +385,7 @@ async function main() {
       ['direct-with-stale-proxy', { id: 'direct-with-stale-proxy', name: 'Direct with stale proxy', number: 3, networkMode: 'direct', proxy: 'http://127.0.0.1:18080' }],
       ['proxy', { id: 'proxy', name: 'Proxy', number: 2, proxy: 'http://127.0.0.1:18080' }],
       ['empty-proxy', { id: 'empty-proxy', name: 'Empty proxy', networkMode: 'proxy', proxy: '' }],
+      ['real-timezone', { id: 'real-timezone', name: 'Real timezone', number: 4, proxy: 'direct', exitTimezone: 'Asia/Tokyo', privacy: { timezoneMode: 'real' } }],
     ]),
     networkInfo: new Map(),
     async checkProxy(profile) {
@@ -405,7 +406,9 @@ async function main() {
   startPage.registerSession(startPageEngine.profiles.get('direct-with-stale-proxy'));
   startPage.registerSession(startPageEngine.profiles.get('proxy'));
   startPage.registerSession(startPageEngine.profiles.get('empty-proxy'));
+  startPage.registerSession(startPageEngine.profiles.get('real-timezone'), { timezone: 'Etc/UTC' });
   assert.strictEqual(startPage.getSession('empty-proxy').networkMode, 'proxy');
+  assert.strictEqual(startPage.getSession('real-timezone').timezone, '', 'real timezone mode must not claim an exit timezone as an override');
   const directToken = startPage.getSession('direct').token;
   const staleProxyToken = startPage.getSession('direct-with-stale-proxy').token;
   const proxyToken = startPage.getSession('proxy').token;

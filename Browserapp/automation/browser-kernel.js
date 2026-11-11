@@ -19,6 +19,7 @@ const { createWriteStream } = require('fs');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { isSystemBrowserExecutable } = require('./isolation');
+const cdp = require('../cdp');
 
 /** Optional remote kernel feed URL (unused when integrated seeds are present). */
 const WAYFERN_META = 'https://donutbrowser.com/wayfern.json';
@@ -1046,6 +1047,7 @@ class BrowserKernelManager {
           version: this.meta.version || 'stable',
           independent: true,
           source: SOURCE_CHROME_STABLE,
+          nativeFingerprint: false,
         };
       }
     }
@@ -1128,6 +1130,7 @@ class BrowserKernelManager {
               version: this.meta.version || 'unknown',
               independent: true,
               source: src,
+              nativeFingerprint: src === SOURCE_CUSTOM && this.meta.nativeFingerprint === true,
             };
           }
         }
@@ -1209,6 +1212,7 @@ class BrowserKernelManager {
         version: this.meta.version || 'custom',
         independent: true,
         source: SOURCE_CUSTOM,
+        nativeFingerprint: false,
       };
     }
     return null;
@@ -1281,7 +1285,9 @@ class BrowserKernelManager {
             : stableIntegrated
               ? '使用 Google Chrome Stable 正式包，已解压到 OpenBrowser 独立内核目录。'
             : installed?.source === SOURCE_CUSTOM
-              ? '正在使用自定义 Chromium。点击下载可切换到 Google Chrome Stable 正式包。'
+              ? (installed.nativeFingerprint
+                ? '正在使用原生指纹 Chromium；已识别 --fingerprint 参数，UA、平台、Client Hints 与硬件由内核直接生成。'
+                : '正在使用自定义 Chromium，但未识别原生指纹参数，将继续使用 JS 指纹注入。')
               : '未发现内置独立内核。点击下载将获取 Google Chrome Stable 正式包。',
     };
   }
@@ -1547,6 +1553,7 @@ class BrowserKernelManager {
     this.meta.platform = donutPlatformKey();
     this.meta.updatedAt = new Date().toISOString();
     this.meta.source = SOURCE_CHROME_STABLE;
+    this.meta.nativeFingerprint = false;
     this.meta.downloadUrl = url;
     this.meta.remoteVersion = version;
     await this.saveMeta();
@@ -1593,6 +1600,7 @@ class BrowserKernelManager {
     this.meta.platform = plat;
     this.meta.updatedAt = new Date().toISOString();
     this.meta.source = SOURCE_CFT;
+    this.meta.nativeFingerprint = false;
     this.meta.downloadUrl = url;
     this.meta.remoteVersion = version;
     await this.saveMeta();
@@ -1602,7 +1610,7 @@ class BrowserKernelManager {
     return this.resolveInstalled();
   }
 
-  async probeBrowserBinary(binaryPath) {
+  async probeBrowserBinary(binaryPath, options = {}) {
     const resolved = path.resolve(String(binaryPath || ''));
     if (isSystemBrowserExecutable(resolved)) throw new Error('不能选择本机已安装的 Chrome、Edge 或 Chromium 作为指纹浏览器内核');
     let stat;
@@ -1629,6 +1637,15 @@ class BrowserKernelManager {
     try {
       this.onProgress({ phase: 'validate', message: '验证自定义 Chromium 内核兼容性…', binary: resolved });
       await ensureKernelReadyForLaunch({ path: resolved }, versionOutput);
+      const probePlatform = process.platform === 'darwin' ? 'windows' : (process.platform === 'win32' ? 'linux' : 'windows');
+      const fingerprintProbeArgs = options.fingerprintProbe ? [
+        '--fingerprint=424242',
+        `--fingerprint-platform=${probePlatform}`,
+        '--fingerprint-platform-version=15.0.0',
+        '--fingerprint-brand=Chrome',
+        '--fingerprint-brand-version=150.0.0.0',
+        '--fingerprint-hardware-concurrency=7',
+      ] : [];
       child = spawn(resolved, [
         `--user-data-dir=${probeRoot}`,
         `--disk-cache-dir=${path.join(probeRoot, 'OpenBrowserCache')}`,
@@ -1637,6 +1654,7 @@ class BrowserKernelManager {
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-background-mode',
+        ...fingerprintProbeArgs,
         'about:blank',
       ], { detached: process.platform !== 'win32', windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] });
       child.stdout?.setEncoding('utf8');
@@ -1651,7 +1669,28 @@ class BrowserKernelManager {
         throw new Error('CDP 返回的浏览器不是 Chromium 兼容内核');
       }
       const version = String(details.Browser || versionOutput).match(/(\d+(?:\.\d+){1,3})/)?.[1] || 'custom';
-      return { path: resolved, version, browser: String(details.Browser), protocolVersion: String(details['Protocol-Version'] || '') };
+      let fingerprintSupport = false;
+      if (options.fingerprintProbe) {
+        const targets = await requestJson(`http://127.0.0.1:${port}/json/list`);
+        const page = Array.isArray(targets) ? targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl) : null;
+        if (page) {
+          const evaluated = await cdp.call(page.webSocketDebuggerUrl, 'Runtime.evaluate', {
+            expression: `({ platform: navigator.platform, cores: navigator.hardwareConcurrency, ua: navigator.userAgent })`,
+            returnByValue: true,
+          }, 8000);
+          const live = evaluated?.result?.value || {};
+          const expectedPlatform = probePlatform === 'windows' ? /^Win32$/i : (/^linux$/i.test(probePlatform) ? /Linux/i : /MacIntel/i);
+          fingerprintSupport = expectedPlatform.test(String(live.platform || ''))
+            && Number(live.cores) === 7;
+        }
+      }
+      return {
+        path: resolved,
+        version,
+        browser: String(details.Browser),
+        protocolVersion: String(details['Protocol-Version'] || ''),
+        fingerprintSupport,
+      };
     } catch (error) {
       const output = startupOutput(child);
       const status = child && child.exitCode !== null && child.exitCode !== undefined
@@ -1665,12 +1704,13 @@ class BrowserKernelManager {
   }
 
   async setCustomBinary(binaryPath) {
-    const probe = await this.probeBrowserBinary(binaryPath);
+    const probe = await this.probeBrowserBinary(binaryPath, { fingerprintProbe: true });
     const isOpenBrowser = /[/\\]openbrowser[/\\]chrome_148[/\\]/i.test(probe.path)
       || path.basename(path.dirname(probe.path)) === 'MacOS' && /OpenBrowser$/i.test(path.basename(probe.path));
     this.meta.binary = probe.path;
     this.meta.version = probe.version || (isOpenBrowser ? OPENBROWSER_KERNEL_VERSION : probe.version);
     this.meta.source = isOpenBrowser ? SOURCE_OPENBROWSER : SOURCE_CUSTOM;
+    this.meta.nativeFingerprint = !isOpenBrowser && Boolean(probe.fingerprintSupport);
     this.meta.updatedAt = new Date().toISOString();
     this.meta.platform = donutPlatformKey();
     this.meta.downloadUrl = null;

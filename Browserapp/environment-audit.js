@@ -47,8 +47,10 @@
       ? '已设置自定义 UA（启动时同步 Client Hints / sec-ch-ua / userAgentData）'
       : '留空则按环境 ID 自动生成 UA + Client Hints'));
     const profileOs = text(value.os);
-    const isMacProfile = !profileOs || /^(?:mac(?:os)?(?:[_ -]?arm(?:64)?)?|os\s*x|darwin)(?:\s|$)/i.test(profileOs);
-    checks.push(item('os', '操作系统', isMacProfile ? 'pass' : 'warn', isMacProfile ? 'macOS 真实主机' : `${profileOs} 仅是测试标签，不会把 macOS 变成真实设备`));
+    const matchHostOs = privacy.matchHostOs !== false;
+    checks.push(item('os', '操作系统', matchHostOs ? 'pass' : 'warn', matchHostOs
+      ? '跟随本机平台；UA、Client Hints、GPU、WebGPU 与字体保持一致'
+      : `${profileOs || '自定义平台'} 仅适合具备原生指纹能力的内核；标准 Chromium 可能与真实 GPU、字体和媒体栈冲突`));
     checks.push(item('graphics', '图形接口', 'info', `Canvas ${privacy.canvas === 'blocked' ? '禁止读取' : '真实'}；WebGL ${privacy.webgl === 'blocked' ? '禁用' : '真实'}；WebGPU ${privacy.webgpu === 'blocked' ? '禁用' : '真实'}`));
     checks.push(item('media', '媒体设备', privacy.media === 'blocked' ? 'pass' : 'info', privacy.media === 'blocked' ? '摄像头和麦克风权限已禁止' : '由网站按标准权限流程询问'));
     checks.push(item('fingerprint', '指纹覆盖边界', 'info', 'Canvas、WebGL、Audio 和 ClientRects 仅提供 JS 层可选噪声或禁用；WebGPU、字体、真实 GPU、Worker、TLS 与网络指纹未被完整伪造，本报告不承诺规避高级平台关联检测'));

@@ -52,6 +52,7 @@ function logPath() {
 function summarizeFp(fp = {}) {
   if (!fp || typeof fp !== 'object') return null;
   return {
+    consistencyMode: fp.consistencyMode || null,
     userAgent: fp.userAgent || null,
     platform: fp.platform || null,
     hardwareConcurrency: fp.hardwareConcurrency ?? null,
@@ -60,6 +61,7 @@ function summarizeFp(fp = {}) {
     webglMetaMode: fp.webgl?.metaMode || null,
     webglVendor: fp.webgl?.vendor || null,
     webglRenderer: fp.webgl?.renderer || null,
+    webgpuMode: fp.webgpu?.mode || null,
     canvasMode: fp.canvas?.mode || null,
     languages: Array.isArray(fp.languages) ? fp.languages.slice(0, 4) : null,
   };

@@ -43,8 +43,9 @@ const ok = (name, cond) => { assert.ok(cond, name); console.log('  PASS  ' + nam
   ok('name preserved', engine.profiles.get(id1).name === 'Env One');
   ok('proxy Direct', engine.profiles.get(id1).proxy === 'Direct');
   ok('number starts at 1', engine.profiles.get(id1).number === 1);
-  ok('new profile defaults to macOS persona v5', engine.profiles.get(id1).os === 'macOS' && engine.profiles.get(id1).privacy.deviceProfile === 'persona' && engine.profiles.get(id1).privacy.personaVersion === 5);
-  ok('generated fingerprint uses macOS', engine.fingerprintFor(id1).uaProfile.metadata.platform === 'macOS');
+  const hostPlatform = process.platform === 'darwin' ? 'macOS' : (process.platform === 'win32' ? 'Windows' : 'Linux');
+  ok('new profile defaults to the host persona', engine.profiles.get(id1).os === hostPlatform && engine.profiles.get(id1).privacy.matchHostOs === true && engine.profiles.get(id1).privacy.deviceProfile === 'persona' && engine.profiles.get(id1).privacy.personaVersion === 5);
+  ok('generated fingerprint uses the host platform', engine.fingerprintFor(id1).uaProfile.metadata.platform === hostPlatform);
   ok('generated fingerprint uses Chrome 157', engine.profiles.get(id1).privacy.fingerprint.chromeMajor === 157 && engine.fingerprintFor(id1).uaProfile.chromeMajor === 157 && engine.fingerprintFor(id1).userAgent.includes('Chrome/157'));
   r = await route('POST', '/api/profiles/update', { id: id1, geolocation: { latitude: '', longitude: '' } });
   ok('empty coordinates do not become zero', r.code === 0 && engine.profiles.get(id1).privacy.geoMode !== 'custom');

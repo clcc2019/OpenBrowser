@@ -13,7 +13,7 @@
 
 const vm = require('vm');
 const assert = require('assert');
-const { buildFingerprint, buildInjectionScript, buildWorkerInjectionScript } = require('./automation/fingerprint');
+const { buildFingerprint, hostConsistentProfile, buildInjectionScript, buildWorkerInjectionScript } = require('./automation/fingerprint');
 
 let passed = 0;
 const ok = (n, c) => { assert.ok(c, n); console.log('  PASS  ' + n); passed += 1; };
@@ -24,6 +24,9 @@ const NATIVE = /^function get [A-Za-z_$][\w$]*\(\) \{\s*\[native code\]\s*\}$/;
 function makeDomContext(metrics = {}) {
   function Navigator() {}
   function Screen() {}
+  for (const [key, value] of Object.entries({ width: 1920, height: 1080, availWidth: 1920, availHeight: 1040, colorDepth: 24, pixelDepth: 24 })) {
+    Object.defineProperty(Screen.prototype, key, { configurable: true, get: () => value });
+  }
   const navigator = Object.create(Navigator.prototype);
   const screen = Object.create(Screen.prototype);
   const win = {
@@ -85,6 +88,8 @@ const fp = buildFingerprint({
     ok(`navigator.${key} getter stringifies as native`, NATIVE.test(got.src));
     ok(`navigator.${key} getter is named "get ${key}"`, got.name === 'get ' + key);
   }
+  ok('navigator has no own webdriver property', !vm.runInContext("Object.prototype.hasOwnProperty.call(navigator, 'webdriver')", ctx));
+  ok('inherited webdriver remains false', vm.runInContext('navigator.webdriver === false', ctx));
 
   for (const key of ['width', 'height', 'colorDepth']) {
     const got = probe('Screen.prototype', key);
@@ -98,6 +103,15 @@ const fp = buildFingerprint({
     ok('navigator proxy descriptor getter stringifies as native', NATIVE.test(viaProxy.src));
     ok('navigator proxy descriptor leaks no internals', !/navPatch|CFG/.test(viaProxy.src));
   }
+}
+
+// --- host consistency must keep native screen metrics untouched ---
+{
+  const hostFp = buildFingerprint(hostConsistentProfile({ id: 'host-hooks', privacy: { matchHostOs: true } }));
+  const ctx = vm.createContext(makeDomContext());
+  vm.runInContext(buildInjectionScript(hostFp), ctx, { timeout: 10000 });
+  const screen = vm.runInContext('({ width: screen.width, colorDepth: screen.colorDepth })', ctx);
+  ok('native-host mode keeps the real screen dimensions', screen.width === 1920 && screen.colorDepth === 24);
 }
 
 // --- window geometry: outer metrics must describe the launched 740×600 window ---

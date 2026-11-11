@@ -31,6 +31,7 @@ The app supports multiple UI languages, currently including English and Chinese.
 - [Key features](#key-features)
 - [Supported platforms](#supported-platforms)
 - [Quick start](#quick-start)
+- [Custom kernel](#custom-kernel)
 - [Packaging](#packaging)
 - [Self-tests](#self-tests)
 - [Project layout](#project-layout)
@@ -90,6 +91,17 @@ Or use the launcher scripts from the repository root:
 | macOS | [`start-test.command`](./start-test.command) |
 | Windows | [`start-test.cmd`](./start-test.cmd) |
 | Ubuntu | [`start-test.sh`](./start-test.sh) |
+
+## Custom kernel
+
+Choose an independent Chromium executable under **Local settings**. OpenBrowser runs an isolated capability probe and detects whether the kernel supports native `--fingerprint*` arguments.
+
+- Native fingerprint kernels receive UA, platform, Client Hints, CPU count, language, and timezone directly from the launcher.
+- Generic Chromium binaries remain supported through the CDP/JavaScript fingerprint layer.
+- Use a trusted self-built Chromium or a verified build from the community [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) project.
+- Installed system Chrome, Edge, and Chromium paths are rejected as independent kernels.
+
+Keep the custom kernel version aligned with the runtime. Mixing an older native kernel with a newer Chrome Stable version creates avoidable feature and Client Hints inconsistencies.
 
 ## Packaging
 

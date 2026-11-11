@@ -1359,6 +1359,7 @@
     "加密密码（可选）": "Passphrase (optional)",
     "批量更新网络模式": "Batch update network",
     "每次打开刷新指纹": "Refresh fingerprint on each open",
+    "跟随本机系统（推荐，保持 GPU、字体与平台一致）": "Match host OS (recommended; keeps GPU, fonts and platform aligned)",
     "按系统生成 UA": "Generate UA by OS",
     "密码/Token": "Password / token",
     "已随机生成 UA": "Random UA",

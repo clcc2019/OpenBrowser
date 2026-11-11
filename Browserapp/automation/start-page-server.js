@@ -698,10 +698,12 @@ class StartPageServer {
     const profileId = String(profile.id || '');
     const serial = String(profile.number || profile.serial || extras.serial || profileId);
     const network = decorateNetwork(extras.network || profile.network || null);
-    const timezone = normalizeTimezoneValue(extras.timezone
-      || profile.exitTimezone
-      || network?.timezone
-      || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : ''));
+    const timezone = profile.privacy?.timezoneMode === 'real'
+      ? ''
+      : normalizeTimezoneValue(extras.timezone
+        || profile.exitTimezone
+        || network?.timezone
+        || (profile.privacy?.timezoneMode === 'custom' ? profile.privacy.timezone : ''));
 
     const session = {
       pid: profileId,

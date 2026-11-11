@@ -31,6 +31,7 @@ OpenBrowser 是一款本地桌面指纹浏览器，用于管理多套互相隔�
 - [核心功能](#核心功能)
 - [支持平台](#支持平台)
 - [快速开始](#快速开始)
+- [自定义内核](#自定义内核)
 - [打包](#打包)
 - [自测](#自测)
 - [项目结构](#项目结构)
@@ -90,6 +91,17 @@ npm start
 | macOS | [`start-test.command`](./start-test.command) |
 | Windows | [`start-test.cmd`](./start-test.cmd) |
 | Ubuntu | [`start-test.sh`](./start-test.sh) |
+
+## 自定义内核
+
+在应用「本地设置」中可以选择独立的 Chromium 可执行文件。OpenBrowser 会在选择时启动隔离探针，自动判断该内核是否支持原生 `--fingerprint*` 参数。
+
+- 支持原生指纹参数的构建会把 UA、平台、Client Hints、CPU 核数、语言和时区直接传给内核，减少 JS 注入层。
+- 普通 Chromium 仍可使用，但会继续依赖 CDP/JavaScript 指纹注入。
+- 可使用自编译 Chromium，或社区项目 [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) 的受信任构建。
+- 不要选择系统已安装的 Chrome/Edge 作为独立内核；应用会拒绝这些路径。
+
+自定义内核的版本需要与实际二进制一致。较高版本的 Google Chrome Stable 与较旧原生内核混用会产生版本、特性或 Client Hints 差异。
 
 ## 打包
 

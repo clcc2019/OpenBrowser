@@ -26,6 +26,7 @@ const {
   SOURCE_WAYFERN,
   SOURCE_CFT,
   SOURCE_CHROME_STABLE,
+  SOURCE_CUSTOM,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
 
@@ -172,6 +173,22 @@ async function main() {
       assert.strictEqual(safeInstalledBinary(link, path.join(root, 'kernels')), null);
       console.log('  PASS  linked kernel binary rejected');
     }
+
+    const nativeRoot = path.join(root, 'native-fingerprint-user-data');
+    const nativeBinary = path.join(nativeRoot, 'custom-fingerprint-chromium');
+    await fsp.mkdir(path.join(nativeRoot, 'kernels'), { recursive: true });
+    await fsp.writeFile(nativeBinary, '', 'utf8');
+    await fsp.writeFile(path.join(nativeRoot, 'kernels', 'kernel-meta.json'), JSON.stringify({
+      binary: nativeBinary,
+      source: SOURCE_CUSTOM,
+      version: '150.0.7871.186',
+      nativeFingerprint: true,
+    }), 'utf8');
+    const nativeManager = new BrowserKernelManager(nativeRoot);
+    await nativeManager.loadMeta();
+    assert.strictEqual(nativeManager.status().kernel.source, SOURCE_CUSTOM);
+    assert.strictEqual(nativeManager.status().kernel.nativeFingerprint, true);
+    console.log('  PASS  custom kernel native fingerprint capability survives discovery');
 
     // Platform gate: openbrowser-148 is macOS x86_64 only
     assert.strictEqual(isOpenBrowser148SupportedHost('darwin', 'x64'), true);

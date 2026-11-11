@@ -18,6 +18,7 @@
  */
 
 const crypto = require('crypto');
+const os = require('os');
 const { normalizeTimezoneValue } = require('../proxy-forwarder');
 const { pickPersona, fontsForOs, exclusiveFontsForOtherOs } = require('./device-personas');
 const {
@@ -412,21 +413,12 @@ function createBatteryFromSeed(seedInput, override = null) {
 /** Seed-stable mic/camera/speaker labels for mediaDevices spoof. */
 function createMediaDevicesFromSeed(seedInput, options = {}) {
   const raw = String(seedInput || 'default');
-  let acc = 0;
-  let hex = '';
-  for (let i = 0; i < raw.length; i += 1) {
-    acc += raw.charCodeAt(i);
-    hex += acc.toString(16);
-  }
-  let head = hex.slice(0, 4);
-  let tail = hex.slice(-4);
-  const pad = ['c', 'd', 'e', 'f'];
-  if (head.length < 4) {
-    for (let i = 0; i < 4 - head.length; i += 1) {
-      head += pad[i];
-      tail += pad[pad.length - 1 - i];
-    }
-  }
+  const digest = hashSeed(`${raw}:media-devices`).toString('hex');
+  const deviceId = (kind) => hashSeed(`${raw}:${kind}`).toString('hex').slice(0, 64);
+  const audioGroup = hashSeed(`${raw}:audio-group`).toString('hex').slice(0, 64);
+  const videoGroup = hashSeed(`${raw}:video-group`).toString('hex').slice(0, 64);
+  const shortHash = digest.slice(0, 8);
+  const acc = Number.parseInt(shortHash.slice(0, 6), 16) || 0;
   const macDevice = options.os === 'macos' || options.os === 'macos_arm';
   const tpl = macDevice
     ? { input: 'Built-in Microphone', output: 'Built-in Output' }
@@ -434,20 +426,20 @@ function createMediaDevicesFromSeed(seedInput, options = {}) {
   const emptyLabels = options.emptyLabels === true;
   const labelOverride = options.labels && typeof options.labels === 'object' ? options.labels : null;
   const inputLabel = emptyLabels ? '' : String(labelOverride?.audioinput || labelOverride?.input || tpl.input);
-  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || (macDevice ? 'FaceTime HD Camera' : `Integrated Camera (${head}:${tail})`));
+  const videoLabel = emptyLabels ? '' : String(labelOverride?.videoinput || labelOverride?.video || (macDevice ? 'FaceTime HD Camera' : `Integrated Camera (${shortHash.slice(0, 4)}:${shortHash.slice(4, 8)})`));
   const outputLabel = emptyLabels ? '' : String(labelOverride?.audiooutput || labelOverride?.output || tpl.output);
   const devices = [
-    { kind: 'audioinput', label: inputLabel, deviceId: `ob-ai-${head}`, groupId: `ob-g-${tail}` },
-    { kind: 'videoinput', label: videoLabel, deviceId: `ob-vi-${tail}`, groupId: `ob-g-${tail}` },
-    { kind: 'audiooutput', label: outputLabel, deviceId: `ob-ao-${head}${tail.slice(0, 2)}`, groupId: `ob-g-${tail}` },
+    { kind: 'audioinput', label: inputLabel, deviceId: deviceId('audioinput'), groupId: audioGroup },
+    { kind: 'videoinput', label: videoLabel, deviceId: deviceId('videoinput'), groupId: videoGroup },
+    { kind: 'audiooutput', label: outputLabel, deviceId: deviceId('audiooutput'), groupId: audioGroup },
   ];
   if (Array.isArray(options.extra) && options.extra.length) {
     for (const item of options.extra.slice(0, 8)) {
       if (item && item.kind) devices.push({
         kind: String(item.kind),
         label: String(item.label || ''),
-        deviceId: String(item.deviceId || `ob-x-${devices.length}`),
-        groupId: String(item.groupId || `ob-g-${tail}`),
+        deviceId: String(item.deviceId || deviceId(`extra-${devices.length}`)),
+        groupId: String(item.groupId || audioGroup),
       });
     }
   }
@@ -630,6 +622,96 @@ function buildWebglFpPayload(webgl = {}) {
 function desktopOs(os) {
   const normalized = normalizeOsKey(os);
   return ['windows', 'macos', 'macos_arm', 'linux'].includes(normalized) ? normalized : null;
+}
+
+function hostProfileOs() {
+  if (process.platform === 'darwin') return 'macos';
+  if (process.platform === 'win32') return 'windows';
+  return 'linux';
+}
+
+function hostPlatformVersion() {
+  const release = String(os.release() || '').trim();
+  if (process.platform === 'linux') {
+    const match = release.match(/^(\d+\.\d+(?:\.\d+)?)/);
+    return match ? match[1] : '6.5.0';
+  }
+  if (process.platform === 'darwin') {
+    const major = Number(release.split('.')[0]);
+    // UA-CH reports the macOS product version rather than the Darwin kernel.
+    if (Number.isFinite(major) && major >= 20) return `${major - 9}.0.0`;
+  }
+  return '15.0.0';
+}
+
+/**
+ * Stock Chromium cannot safely emulate another operating system. JS can rewrite
+ * navigator/CH strings, but the real GPU, WebGPU backend, fonts, media stack and
+ * platform behaviour stay on the host. Keep those surfaces aligned and reserve
+ * cross-platform personas for fingerprint-capable kernels.
+ */
+function hostConsistentProfile(profile = {}) {
+  const privacy = profile.privacy && typeof profile.privacy === 'object' ? profile.privacy : {};
+  const privacyWithoutHints = { ...privacy };
+  delete privacyWithoutHints.clientHints;
+  const input = privacy.fingerprint && typeof privacy.fingerprint === 'object' ? { ...privacy.fingerprint } : {};
+  const platformFields = [
+    'userAgent', 'os', 'platform', 'architecture', 'platformVersion', 'platform_version',
+    'clientHints', 'uaFullVersion', 'ua_full_version', 'fullVersion', 'bitness', 'mobile', 'wow64', 'model',
+    'webglVendor', 'webglRenderer', 'webgl', 'webgpu', 'gpuVendor', 'gpuArchitecture', 'vendor', 'chromeMajor',
+  ];
+  for (const field of platformFields) delete input[field];
+  input.webglMeta = 'real';
+  input.webgpu = 'real';
+  input.osAwareSurfaces = true;
+  input.platformVersion = hostPlatformVersion();
+  input.clientHints = {
+    platform_version: input.platformVersion,
+    architecture: process.arch === 'arm64' ? 'arm' : 'x86',
+    bitness: '64',
+  };
+  input.cores = 0;
+  input.memory = 0;
+  return {
+    ...profile,
+    os: hostProfileOs(),
+    userAgent: '',
+    hostConsistency: true,
+    privacy: {
+      ...privacyWithoutHints,
+      matchHostOs: true,
+      webglMeta: 'real',
+      webgpu: 'real',
+      cores: 0,
+      memory: 0,
+      fingerprint: input,
+    },
+  };
+}
+
+function fingerprintChromiumArgs(fp, profile = {}, options = {}) {
+  const seed = Number.parseInt(String(fp.seed || '').slice(0, 8), 16) || 1;
+  const platform = hostProfileOs();
+  const version = String(options.kernelVersion || fp.uaProfile?.chromeFull || '150.0.0.0');
+  const language = String((fp.languages && fp.languages[0]) || profile.language || 'en-US');
+  const timezone = String(options.timezone || '').trim();
+  const cores = Math.max(1, Number(os.cpus().length) || 1);
+  const args = [
+    `--fingerprint=${seed}`,
+    `--fingerprint-platform=${platform}`,
+    `--fingerprint-platform-version=${hostPlatformVersion()}`,
+    '--fingerprint-brand=Chrome',
+    `--fingerprint-brand-version=${version}`,
+    `--fingerprint-hardware-concurrency=${cores}`,
+    `--lang=${language}`,
+    `--accept-lang=${language},${language.split('-')[0] || 'en'}`,
+    // OpenBrowser owns canvas/audio/client-rect/GPU noise at the JS layer. Keep
+    // the native kernel focused on UA, platform, Client Hints and hardware.
+    '--disable-spoofing=font,audio,canvas,clientrects,gpu',
+  ];
+  if (timezone) args.push(`--timezone=${timezone}`);
+  if (fp.webrtc === 'proxy' || fp.webrtc === 'disabled') args.push('--disable-non-proxied-udp');
+  return args;
 }
 
 function webglPresetsForOs(os) {
@@ -1003,6 +1085,7 @@ function buildFingerprint(profile = {}) {
   const fingerprint = {
     seed: seed.toString('hex').slice(0, 16),
     profileId: profile.id,
+    consistencyMode: profile.hostConsistency ? 'native-host' : 'profile',
     platform: fpIn.platform || uaProfile.platform || OS_PRESETS[uaOs].platformNav,
     userAgent: uaProfile.userAgent,
     uaProfile,
@@ -1183,6 +1266,7 @@ function fingerprintConsistencyIssues(fp) {
 function buildInjectionScript(fp) {
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
+    consistencyMode: fp.consistencyMode || 'profile',
     platform: fp.platform,
     userAgent: fp.userAgent,
     languages: fp.languages,
@@ -1384,13 +1468,10 @@ function buildInjectionScript(fp) {
   try {
     const hideWd = nativeAccessor('webdriver', { configurable: true, enumerable: true, get: () => false });
     try { Object.defineProperty(Navigator.prototype, 'webdriver', hideWd); } catch (_) {}
-    try { Object.defineProperty(navigator, 'webdriver', hideWd); } catch (_) {}
-    try {
-      if (navigator.webdriver === true) {
-        delete navigator.webdriver;
-        Object.defineProperty(navigator, 'webdriver', hideWd);
-      }
-    } catch (_) {}
+    // Keep the inherited value false, but remove the instance property. Several
+    // detectors pass when the value is false yet still flag an own webdriver key.
+    try { delete navigator.webdriver; } catch (_) {}
+    if (navigator.webdriver === true) Object.defineProperty(navigator, 'webdriver', hideWd);
   } catch (_) {}
   // cdc_ / $cdc_ selenium leftovers if present
   try {
@@ -1410,7 +1491,6 @@ function buildInjectionScript(fp) {
     vendor: { get: () => CFG.vendor },
     languages: { get: () => Object.freeze([...CFG.languages]) },
     language: { get: () => CFG.languages[0] || 'en-US' },
-    webdriver: { get: () => false },
   };
   if (CFG.hardwareConcurrency != null) navPatch.hardwareConcurrency = { get: () => CFG.hardwareConcurrency };
   if (CFG.deviceMemory != null && !isIosPersona) {
@@ -1667,40 +1747,42 @@ function buildInjectionScript(fp) {
       return Math.max(launch, inner);
     };
 
-    const dynamicScreen = {
-      width: () => (baseScreenWidth ? Math.max(baseScreenWidth, liveViewportSize('width', baseScreenWidth)) : liveViewportSize('width', 1920)),
-      height: () => (baseScreenHeight ? Math.max(baseScreenHeight, liveViewportSize('height', baseScreenHeight)) : liveViewportSize('height', 1080)),
-      availWidth: () => (baseAvailWidth ? Math.max(baseAvailWidth, liveViewportSize('width', baseAvailWidth)) : liveViewportSize('width', 1920)),
-      availHeight: () => (baseAvailHeight ? Math.max(baseAvailHeight, liveViewportSize('height', baseAvailHeight)) : liveViewportSize('height', 1040)),
-      availLeft: () => s.availLeft ?? 0,
-      availTop: () => s.availTop ?? 0,
-      colorDepth: () => s.colorDepth ?? 24,
-      pixelDepth: () => s.pixelDepth ?? 24,
-    };
+    if (CFG.consistencyMode !== 'native-host') {
+      const dynamicScreen = {
+        width: () => (baseScreenWidth ? Math.max(baseScreenWidth, liveViewportSize('width', baseScreenWidth)) : liveViewportSize('width', 1920)),
+        height: () => (baseScreenHeight ? Math.max(baseScreenHeight, liveViewportSize('height', baseScreenHeight)) : liveViewportSize('height', 1080)),
+        availWidth: () => (baseAvailWidth ? Math.max(baseAvailWidth, liveViewportSize('width', baseAvailWidth)) : liveViewportSize('width', 1920)),
+        availHeight: () => (baseAvailHeight ? Math.max(baseAvailHeight, liveViewportSize('height', baseAvailHeight)) : liveViewportSize('height', 1040)),
+        availLeft: () => s.availLeft ?? 0,
+        availTop: () => s.availTop ?? 0,
+        colorDepth: () => s.colorDepth ?? 24,
+        pixelDepth: () => s.pixelDepth ?? 24,
+      };
 
-    for (const [key, getter] of Object.entries(dynamicScreen)) {
-      try { Object.defineProperty(Screen.prototype, key, nativeAccessor(key, { configurable: true, get: getter })); } catch (_) {}
-    }
-    try { Object.defineProperty(window, 'devicePixelRatio', nativeAccessor('devicePixelRatio', { configurable: true, get: () => s.devicePixelRatio || 1 })); } catch (_) {}
-    for (const [key, value] of Object.entries({ screenX: s.screenX, screenY: s.screenY, screenLeft: s.screenX, screenTop: s.screenY })) {
-      try { Object.defineProperty(window, key, nativeAccessor(key, { configurable: true, get: () => value || 0 })); } catch (_) {}
-    }
-
-    const initialInnerWidth = Number(window.innerWidth) || Number(s.availWidth) || Number(s.width) || 1;
-    const initialInnerHeight = Number(window.innerHeight) || Number(s.availHeight) || Number(s.height) || 1;
-    try { Object.defineProperty(window, 'innerWidth', nativeAccessor('innerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
-    try { Object.defineProperty(window, 'innerHeight', nativeAccessor('innerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
-    try { Object.defineProperty(window, 'outerWidth', nativeAccessor('outerWidth', { configurable: true, get: () => outerWindowSize('width', initialInnerWidth) })); } catch (_) {}
-    try { Object.defineProperty(window, 'outerHeight', nativeAccessor('outerHeight', { configurable: true, get: () => outerWindowSize('height', initialInnerHeight) })); } catch (_) {}
-    try {
-      const viewport = window.visualViewport;
-      if (viewport) {
-        const initialVisualWidth = Number(viewport.width) || initialInnerWidth;
-        const initialVisualHeight = Number(viewport.height) || initialInnerHeight;
-        Object.defineProperty(viewport, 'width', nativeAccessor('width', { configurable: true, get: () => liveViewportSize('width', initialVisualWidth) }));
-        Object.defineProperty(viewport, 'height', nativeAccessor('height', { configurable: true, get: () => liveViewportSize('height', initialVisualHeight) }));
+      for (const [key, getter] of Object.entries(dynamicScreen)) {
+        try { Object.defineProperty(Screen.prototype, key, nativeAccessor(key, { configurable: true, get: getter })); } catch (_) {}
       }
-    } catch (_) {}
+      try { Object.defineProperty(window, 'devicePixelRatio', nativeAccessor('devicePixelRatio', { configurable: true, get: () => s.devicePixelRatio || 1 })); } catch (_) {}
+      for (const [key, value] of Object.entries({ screenX: s.screenX, screenY: s.screenY, screenLeft: s.screenX, screenTop: s.screenY })) {
+        try { Object.defineProperty(window, key, nativeAccessor(key, { configurable: true, get: () => value || 0 })); } catch (_) {}
+      }
+
+      const initialInnerWidth = Number(window.innerWidth) || Number(s.availWidth) || Number(s.width) || 1;
+      const initialInnerHeight = Number(window.innerHeight) || Number(s.availHeight) || Number(s.height) || 1;
+      try { Object.defineProperty(window, 'innerWidth', nativeAccessor('innerWidth', { configurable: true, get: () => liveViewportSize('width', initialInnerWidth) })); } catch (_) {}
+      try { Object.defineProperty(window, 'innerHeight', nativeAccessor('innerHeight', { configurable: true, get: () => liveViewportSize('height', initialInnerHeight) })); } catch (_) {}
+      try { Object.defineProperty(window, 'outerWidth', nativeAccessor('outerWidth', { configurable: true, get: () => outerWindowSize('width', initialInnerWidth) })); } catch (_) {}
+      try { Object.defineProperty(window, 'outerHeight', nativeAccessor('outerHeight', { configurable: true, get: () => outerWindowSize('height', initialInnerHeight) })); } catch (_) {}
+      try {
+        const viewport = window.visualViewport;
+        if (viewport) {
+          const initialVisualWidth = Number(viewport.width) || initialInnerWidth;
+          const initialVisualHeight = Number(viewport.height) || initialInnerHeight;
+          Object.defineProperty(viewport, 'width', nativeAccessor('width', { configurable: true, get: () => liveViewportSize('width', initialVisualWidth) }));
+          Object.defineProperty(viewport, 'height', nativeAccessor('height', { configurable: true, get: () => liveViewportSize('height', initialVisualHeight) }));
+        }
+      } catch (_) {}
+    }
     try {
       Object.defineProperty(document, 'fullscreenEnabled', nativeAccessor('fullscreenEnabled', { configurable: true, get: () => true }));
       Object.defineProperty(document, 'webkitFullscreenEnabled', nativeAccessor('webkitFullscreenEnabled', { configurable: true, get: () => true }));
@@ -2606,7 +2688,7 @@ function buildWorkerInjectionScript(fp) {
 function chromeArgsForFingerprint(fp, profile = {}) {
   const args = [];
   // Avoid Chromium's unsupported Blink feature switches. The document-start
-  // injection handles the exposed navigator.webdriver value.
+  // injection removes the exposed navigator.webdriver property.
   if (fp.userAgent) args.push(`--user-agent=${fp.userAgent}`);
   // TLS extension permutation by Chrome major from UA
   if (fp.uaProfile) {
@@ -2639,8 +2721,6 @@ function chromeArgsForFingerprint(fp, profile = {}) {
   }
   if (fp.webgl?.mode === 'blocked') {
     args.push('--disable-webgl', '--disable-webgl2', '--disable-3d-apis');
-  } else {
-    args.push('--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--disable-gpu-compositing');
   }
   if (fp.audio?.mode === 'muted' || profile.privacy?.audio === 'muted') args.push('--mute-audio');
   // Use full BCP47 when present (ja-JP / zh-CN); Chrome accepts --lang=ja-JP
@@ -2796,6 +2876,8 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
 module.exports = {
   LAUNCH_WINDOW_SIZE,
   buildFingerprint,
+  hostConsistentProfile,
+  fingerprintChromiumArgs,
   buildInjectionScript,
   buildWorkerInjectionScript,
   chromeArgsForFingerprint,
