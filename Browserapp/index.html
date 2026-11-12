@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>OpenBrowser</title>
-  <script src="i18n.js?v=20261028-settings-layout"></script>
+  <script src="i18n.js?v=20261112-profiles-polish"></script>
   <link rel="icon" type="image/png" href="assets/logo-pixel.png?v=20260720-pixel">
   <link rel="stylesheet" href="assets/fonts/pixelify-sans.css?v=20260720-ark">
   <link rel="stylesheet" href="styles.css?v=20260915-editor-workbench">
@@ -19,6 +19,8 @@
   <link rel="stylesheet" href="xai-console.css?v=20260824-interaction-perf">
   <link rel="stylesheet" href="ui-polish.css?v=20261023-profile-perf">
   <link rel="stylesheet" href="workspace-console.css?v=20261028-settings-layout">
+  <link rel="stylesheet" href="sidebar-collapse.css?v=20261112-collapsible-menu">
+  <link rel="stylesheet" href="ui-refinement.css?v=20261112-profiles-polish">
 </head>
 <body>
   <div class="app-shell">
@@ -59,7 +61,13 @@
 
     <div class="content">
       <header>
-        <div><h1 id="page-title" data-i18n="view.profiles">环境管理</h1><p id="page-subtitle"></p></div>
+        <div class="header-heading">
+          <button class="sidebar-collapse-toggle" id="sidebar-collapse-toggle" type="button" aria-label="折叠菜单栏" data-i18n-aria="nav.collapseMenu" aria-expanded="true" aria-controls="primary-navigation" title="折叠菜单栏" data-i18n-title="nav.collapseMenu">
+            <i class="sidebar-collapse-icon" data-lucide="panel-left-close" aria-hidden="true"></i>
+            <i class="sidebar-expand-icon" data-lucide="panel-left-open" aria-hidden="true"></i>
+          </button>
+          <div class="header-heading-copy"><h1 id="page-title" data-i18n="view.profiles">环境管理</h1><p id="page-subtitle"></p></div>
+        </div>
         <div class="header-right" style="display: flex; align-items: center; gap: 12px; z-index: 100;">
           <span class="engine-badge engine-badge-checking" id="engine-badge" title="正在检测浏览器…">
             <i class="engine-badge-dot" aria-hidden="true"></i>
@@ -91,11 +99,33 @@
 
       <main>
         <section class="view active" id="view-profiles">
+          <dl class="profile-overview" id="profile-overview" aria-label="环境概览" data-i18n-aria="profiles.overview">
+            <div class="profile-overview-item">
+              <dt data-i18n="profiles.overview.total">全部环境</dt>
+              <dd id="profile-overview-total">0</dd>
+            </div>
+            <div class="profile-overview-item" data-tone="success">
+              <dt data-i18n="profiles.overview.running">运行中</dt>
+              <dd id="profile-overview-running">0</dd>
+            </div>
+            <div class="profile-overview-item">
+              <dt data-i18n="profiles.overview.proxy">代理环境</dt>
+              <dd id="profile-overview-proxy">0</dd>
+            </div>
+            <div class="profile-overview-item">
+              <dt data-i18n="profiles.overview.groups">分组</dt>
+              <dd id="profile-overview-groups">0</dd>
+            </div>
+          </dl>
           <div class="profile-controls">
-            <div class="group-chip-row" id="profile-group-chips"></div>
             <div class="toolbar profile-primary-toolbar">
-              <div class="toolbar-left"><button class="primary" id="create-profile"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden><button class="outline" id="renumber-profiles" type="button" title="将所有环境按列表顺序重新编号为 1..N"><i data-lucide="hash"></i><span data-i18n="profiles.renumber">重排编号</span></button></div>
-              <label class="search"><i data-lucide="search"></i><input id="profile-search" placeholder="搜索环境 / 分组 / 标签" data-i18n-placeholder="profiles.search"></label>
+              <div class="toolbar-left"><button class="primary" id="create-profile" title="新建环境" data-i18n-title="profiles.create" aria-label="新建环境" data-i18n-aria="profiles.create"><i data-lucide="plus"></i><span data-i18n="profiles.create">新建环境</span></button><button class="outline" id="batch-add" title="批量新增" data-i18n-title="profiles.batchAdd" aria-label="批量新增" data-i18n-aria="profiles.batchAdd"><i data-lucide="copy-plus"></i><span data-i18n="profiles.batchAdd">批量新增</span></button><button class="outline" id="batch-import" title="批量导入" data-i18n-title="profiles.batchImport" aria-label="批量导入" data-i18n-aria="profiles.batchImport"><i data-lucide="file-down"></i><span data-i18n="profiles.batchImport">批量导入</span></button><input id="batch-import-file" type="file" accept=".csv,.json" hidden><button class="outline" id="renumber-profiles" type="button" title="将所有环境按列表顺序重新编号为 1..N" data-i18n-title="profiles.renumber" aria-label="重排编号" data-i18n-aria="profiles.renumber"><i data-lucide="hash"></i><span data-i18n="profiles.renumber">重排编号</span></button></div>
+              <div class="group-chip-row" id="profile-group-chips"></div>
+              <div class="search profile-search-field" role="search" aria-label="搜索环境 / 分组 / 标签" data-i18n-aria="profiles.search">
+                <i data-lucide="search" aria-hidden="true"></i>
+                <input id="profile-search" aria-label="搜索环境 / 分组 / 标签" data-i18n-aria="profiles.search" placeholder="搜索环境 / 分组 / 标签" data-i18n-placeholder="profiles.search">
+                <button class="profile-search-clear" id="profile-search-clear" type="button" hidden aria-label="清空搜索" data-i18n-aria="profiles.clearSearch" title="清空搜索" data-i18n-title="profiles.clearSearch"><i data-lucide="x" aria-hidden="true"></i></button>
+              </div>
             </div>
           </div>
           <div class="profile-selection-bar" id="profile-selection-bar" hidden>
@@ -116,7 +146,7 @@
               <button class="primary" id="profile-empty-create" type="button" data-i18n="profiles.create" hidden>新建环境</button>
             </div>
           </div>
-          <div class="profile-pagination toolbar-pagination" id="profile-pagination"><span class="profile-total"><span data-i18n="profiles.totalLabel">总数：</span><strong id="profile-total">0</strong></span><div class="profile-page-nav"><button type="button" id="profile-prev" aria-label="&#19978;&#19968;&#39029;">&#8249;</button><label><input id="profile-page" type="number" min="1" value="1" aria-label="&#24403;&#21069;&#39029;"> / <span id="profile-pages">1</span></label><button type="button" id="profile-next" aria-label="&#19979;&#19968;&#39029;">&#8250;</button></div><label class="profile-page-size"><select id="profile-page-size" aria-label="&#27599;&#39029;&#25968;&#37327;"><option value="10">10&#26465;/&#39029;</option><option value="20">20&#26465;/&#39029;</option><option value="50">50&#26465;/&#39029;</option><option value="100">100&#26465;/&#39029;</option></select></label></div>
+          <div class="profile-pagination toolbar-pagination" id="profile-pagination"><span class="profile-total"><span data-i18n="profiles.totalLabel">总数：</span><strong id="profile-total">0</strong></span><div class="profile-page-nav"><button type="button" id="profile-prev" aria-label="&#19978;&#19968;&#39029;">&#8249;</button><label><input id="profile-page" type="number" min="1" value="1" aria-label="&#24403;&#21069;&#39029;"> / <span id="profile-pages">1</span></label><button type="button" id="profile-next" aria-label="&#19979;&#19968;&#39029;">&#8250;</button></div><label class="profile-page-size" hidden><select id="profile-page-size" aria-label="&#27599;&#39029;&#25968;&#37327;"><option value="10">10&#26465;/&#39029;</option></select></label></div>
 
         </section>
 
@@ -589,7 +619,7 @@
           <div class="sync-layout">
             <div class="sync-main">
               <div class="sync-toolbar"><select id="sync-group"><option>&#20840;&#37096;&#36816;&#34892;&#29615;&#22659;</option></select><div class="sync-toolbar-actions"><button class="primary sync-command" id="start-sync"><i data-lucide="play"></i><span>&#21551;&#21160;&#21516;&#27493; (Ctrl+Alt+A)</span></button><button class="danger-sync sync-command" id="stop-sync" hidden><i data-lucide="square"></i><span>&#20572;&#27490;&#21516;&#27493; (Ctrl+Alt+D)</span></button><button class="outline sync-command" id="restart-sync" disabled><i data-lucide="refresh-cw"></i><span>&#37325;&#21551;&#21516;&#27493; (Ctrl+Alt+R)</span></button><button class="outline sync-command" id="refresh-sessions"><i data-lucide="rotate-cw"></i><span>刷新会话</span></button><button class="outline sync-command sync-settings-button" id="sync-settings-button" type="button" title="&#21516;&#27493;&#35774;&#32622;"><i data-lucide="settings-2"></i><span>&#35774;&#32622;</span></button></div><div class="sync-toolbar-status"><span class="sync-selected" id="sync-selected">&#24050;&#36873;&#25321; 0 &#21015;</span><span class="sync-health idle" id="sync-health">&#21516;&#27493;&#26410;&#21551;&#21160;</span></div></div>
-              <div class="table-card sync-table"><table><thead><tr><th><input type="checkbox" id="select-all-sessions"></th><th>&#29615;&#22659;&#32534;&#21495;</th><th>&#29615;&#22659;&#21517;&#31216;</th><th>&#20869;&#26680;</th><th>&#26631;&#31614;&#39029;</th><th>&#29366;&#24577;</th><th>&#25805;&#20316;</th></tr></thead><tbody id="session-table"></tbody></table><div class="sync-empty" id="session-empty"><div><i data-lucide="browser"></i></div><strong>暂无已打开的浏览器环境</strong><span>请先在“环境管理”启动至少两个 profile</span></div></div>
+              <div class="table-card sync-table"><table><thead><tr><th><input type="checkbox" id="select-all-sessions"></th><th>&#29615;&#22659;&#32534;&#21495;</th><th>&#29615;&#22659;&#21517;&#31216;</th><th>&#20869;&#26680;</th><th>&#26631;&#31614;&#39029;</th><th>&#29366;&#24577;</th><th>&#25805;&#20316;</th></tr></thead><tbody id="session-table"></tbody></table><div class="sync-empty" id="session-empty"><div><i data-lucide="monitor"></i></div><strong>暂无已打开的浏览器环境</strong><span>请先在“环境管理”启动至少两个 profile</span></div></div>
             </div>
             <aside class="console">
               <div class="console-head"><h2>操作台</h2><span id="selected-count">已选 0</span></div>
@@ -1523,6 +1553,6 @@
   <script src="environment-audit.js?v=20260719-environment-audit"></script>
   <script src="assets/vendor/lucide.min.js"></script>
   <script src="automation/locale-from-country.js?v=20261016-shared-locale"></script>
-  <script src="renderer.js?v=20261028-settings-layout"></script>
+  <script src="renderer.js?v=20261112-profiles-polish"></script>
 </body>
 </html>

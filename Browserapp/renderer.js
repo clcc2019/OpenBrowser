@@ -1,4 +1,5 @@
 const UI_KEY = 'openbrowser-ui-state';
+const SIDEBAR_COLLAPSED_KEY = 'openbrowser-sidebar-collapsed-v1';
 const GROUP_COLORS = ['#245cff', '#22d3ee', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb7185', '#94a3b8', '#f97316', '#2dd4bf'];
 const UNGROUPED_ID = '';
 const HOST_PROFILE_OS = (() => {
@@ -1130,7 +1131,7 @@ let editorUaResetPlatform = false;
 let editorUaPreviewRequest = 0;
 let editorGeneratedUaMetadata = null;
 let toastTimer = null;
-const PROFILE_PAGE_SIZES = [10, 20, 50, 100];
+const PROFILE_PAGE_SIZES = [10];
 const PROFILE_PAGE_SIZE_KEY = 'openbrowser-profile-page-size-v1';
 let profilePage = 1;
 let profilePageSize = 10;
@@ -1696,6 +1697,7 @@ try {
   window.OpenBrowserI18n?.onChange?.((resolved) => {
     refreshLocaleChrome();
     applyUiTheme(document.documentElement.dataset.uiTheme || 'merge-gateway', false);
+    setSidebarCollapsed(sidebarCollapsed, { persist: false });
     const activeView = document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles';
     if (typeof switchView === 'function') switchView(activeView);
     if (typeof renderProfiles === 'function') renderProfiles();
@@ -2758,6 +2760,56 @@ function setMobileNavOpen(open, { returnFocus = false } = {}) {
   if (!next && returnFocus) toggle.focus({ preventScroll: true });
 }
 
+let sidebarCollapsed = false;
+
+function syncSidebarControlLabel(control, collapsed) {
+  const label = control.querySelector(':scope > span[data-i18n]')?.textContent?.trim();
+  if (!label) return;
+  if (collapsed) {
+    if (control.dataset.sidebarOriginalTitle === undefined) {
+      control.dataset.sidebarOriginalTitle = control.getAttribute('title') || '';
+    }
+    if (control.dataset.sidebarOriginalAriaLabel === undefined) {
+      control.dataset.sidebarOriginalAriaLabel = control.getAttribute('aria-label') || '';
+    }
+    control.title = label;
+    control.setAttribute('aria-label', label);
+    return;
+  }
+  if (control.dataset.sidebarOriginalTitle !== undefined) {
+    if (control.dataset.sidebarOriginalTitle) control.title = control.dataset.sidebarOriginalTitle;
+    else control.removeAttribute('title');
+    delete control.dataset.sidebarOriginalTitle;
+  }
+  if (control.dataset.sidebarOriginalAriaLabel !== undefined) {
+    if (control.dataset.sidebarOriginalAriaLabel) control.setAttribute('aria-label', control.dataset.sidebarOriginalAriaLabel);
+    else control.removeAttribute('aria-label');
+    delete control.dataset.sidebarOriginalAriaLabel;
+  }
+}
+
+function setSidebarCollapsed(collapsed, { persist = true } = {}) {
+  const next = Boolean(collapsed);
+  sidebarCollapsed = next;
+  document.documentElement.dataset.sidebarCollapsed = String(next);
+  const toggle = document.getElementById('sidebar-collapse-toggle');
+  if (toggle) {
+    const labelKey = next ? 'nav.expandMenu' : 'nav.collapseMenu';
+    const label = t(labelKey);
+    toggle.dataset.i18nTitle = labelKey;
+    toggle.dataset.i18nAria = labelKey;
+    toggle.title = label;
+    toggle.setAttribute('aria-label', label);
+    toggle.setAttribute('aria-expanded', String(!next));
+  }
+  document.querySelectorAll('.sidebar .nav, .sidebar .new-browser').forEach((control) => {
+    syncSidebarControlLabel(control, next);
+  });
+  if (next) setMobileNavOpen(false);
+  if (!persist) return;
+  try { localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next)); } catch (_) {}
+}
+
 let proxyLibrary = [];
 const selectedProxies = new Set();
 const loadedViews = new Set(['profiles']);
@@ -3362,18 +3414,22 @@ function buildProfileRow(profile, info, { groupName, groupColor, network, starti
   }
   const groupCell = document.createElement('td');
   groupCell.className = 'col-group';
+  groupCell.dataset.label = t('profiles.col.group');
   const badge = element('span', 'group-badge group-badge-compact', groupName);
   badge.style.setProperty('--chip-color', groupColor);
   badge.title = groupName;
   groupCell.append(badge);
   const browserCell = document.createElement('td');
   browserCell.className = 'col-browser';
+  browserCell.dataset.label = t('profiles.col.browser');
   browserCell.append(buildEnvBrowserCell(profile));
   const proxyCell = document.createElement('td');
   proxyCell.className = 'col-network';
+  proxyCell.dataset.label = t('profiles.col.network');
   proxyCell.append(networkModeBadge(profile.proxy));
   const networkCell = document.createElement('td');
   networkCell.className = 'col-exit';
+  networkCell.dataset.label = t('profiles.col.exit');
   const networkInfo = element('div', 'network-info network-info-compact');
   if (network?.ip) {
     const code = String(network.countryCode || '').toUpperCase();
@@ -3392,11 +3448,13 @@ function buildProfileRow(profile, info, { groupName, groupColor, network, starti
   networkCell.append(networkInfo);
   const extensionCount = info.assignedExtensions?.length || 0;
   const extensionCell = element('td', 'col-ext');
+  extensionCell.dataset.label = t('profiles.col.ext');
   const extensionBadge = element('span', `extension-count-badge${extensionCount ? ' has-extensions' : ''}`, String(extensionCount));
   extensionBadge.title = `${t('profiles.col.ext')} · ${extensionCount}`;
   extensionCell.append(extensionBadge);
   const statusCell = document.createElement('td');
   statusCell.className = 'col-status';
+  statusCell.dataset.label = t('profiles.col.status');
   if (starting) {
     statusCell.append(buildStartProgressCell(profile.id, progress));
     row.classList.add('is-starting');
@@ -3435,7 +3493,34 @@ function buildProfileRow(profile, info, { groupName, groupColor, network, starti
   return row;
 }
 
+function renderProfileOverview() {
+  const total = document.getElementById('profile-overview-total');
+  if (!total) return;
+  const statuses = Array.isArray(engineProfiles) ? engineProfiles : [];
+  const running = statuses.filter((item) => item?.running).length;
+  const proxyProfiles = ui.profiles.filter((profile) => (
+    profile.networkMode === 'proxy' || !isDirectProxy(profile.proxy)
+  )).length;
+  const groups = listGroups().length;
+  total.textContent = String(ui.profiles.length);
+  const runningEl = document.getElementById('profile-overview-running');
+  const proxyEl = document.getElementById('profile-overview-proxy');
+  const groupsEl = document.getElementById('profile-overview-groups');
+  if (runningEl) runningEl.textContent = String(running);
+  if (proxyEl) proxyEl.textContent = String(proxyProfiles);
+  if (groupsEl) groupsEl.textContent = String(groups);
+  runningEl?.closest('.profile-overview-item')?.classList.toggle('is-active', running > 0);
+}
+
+function syncProfileSearchClear() {
+  const input = $('#profile-search');
+  const clear = $('#profile-search-clear');
+  if (input && clear) clear.hidden = !input.value;
+}
+
 function renderProfiles() {
+  renderProfileOverview();
+  syncProfileSearchClear();
   renderGroupFilterChips();
   const table = $('#profile-table'); table.replaceChildren();
   const filtered = filteredProfilesForView();
@@ -4291,6 +4376,17 @@ try {
   window.visualViewport?.addEventListener('scroll', positionThemePopoverOnFrame);
 } catch (_) {}
 
+try {
+  setSidebarCollapsed(localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === 'true', { persist: false });
+} catch (_) {
+  setSidebarCollapsed(false, { persist: false });
+}
+
+document.getElementById('sidebar-collapse-toggle')?.addEventListener('click', (event) => {
+  event.preventDefault();
+  setSidebarCollapsed(!sidebarCollapsed);
+});
+
 document.getElementById('mobile-nav-toggle')?.addEventListener('click', (event) => {
   event.preventDefault();
   event.stopPropagation();
@@ -4455,18 +4551,28 @@ document.addEventListener('change', async (event) => {
 $('#select-all-profiles').addEventListener('change', (event) => { for (const id of visibleProfilePageIds()) selectedProfiles[event.target.checked ? 'add' : 'delete'](id); scheduleRenderProfiles(); });
 $('#select-all-sessions').addEventListener('change', (event) => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const visible = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); for (const item of visible) event.target.checked ? selectedSessions.add(item.id) : selectedSessions.delete(item.id); if (!selectedSessions.has(preferredMasterId)) preferredMasterId = [...selectedSessions][0] || null; pushSyncSelection(); renderSessions(); });
 $('#sync-group').addEventListener('change', () => { if (syncState.active) return; const group = $('#sync-group').value || 'all'; const values = group === 'all' ? sessions : sessions.filter((item) => String(item.profile?.tag || '未分组') === group); selectedSessions = new Set(values.map((item) => item.id)); preferredMasterId = values[0]?.id || null; pushSyncSelection(); renderSessions(); });
-$('#profile-search').addEventListener('input', () => { profilePage = 1; scheduleProfileSearchRender(); });
+$('#profile-search').addEventListener('input', () => { profilePage = 1; syncProfileSearchClear(); scheduleProfileSearchRender(); });
 $('#profile-search').addEventListener('keydown', (event) => {
   if (event.key !== 'Escape' || !event.target.value) return;
   event.preventDefault();
   event.target.value = '';
   profilePage = 1;
+  syncProfileSearchClear();
   flushProfileSearchRender();
+});
+$('#profile-search-clear').addEventListener('click', () => {
+  const input = $('#profile-search');
+  input.value = '';
+  profilePage = 1;
+  syncProfileSearchClear();
+  flushProfileSearchRender();
+  input.focus();
 });
 $('#profile-clear-filters').addEventListener('click', () => {
   $('#profile-search').value = '';
   activeGroupFilter = 'all';
   profilePage = 1;
+  syncProfileSearchClear();
   renderProfiles();
   $('#profile-search').focus();
 });
@@ -6179,6 +6285,7 @@ document.addEventListener('click', (event) => {
 document.getElementById('rpa-menu-toggle')?.addEventListener('click', (event) => {
   event.preventDefault();
   event.stopPropagation();
+  if (sidebarCollapsed) setSidebarCollapsed(false);
   const menu = document.getElementById('nav-rpa-plus');
   const toggle = document.getElementById('rpa-menu-toggle');
   if (!menu || !toggle) return;
