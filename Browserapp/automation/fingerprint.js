@@ -680,8 +680,24 @@ function hostConsistentProfile(profile = {}) {
     privacy: {
       ...privacyWithoutHints,
       matchHostOs: true,
+      fontMode: 'default',
+      canvas: 'real',
+      webgl: 'real',
       webglMeta: 'real',
       webgpu: 'real',
+      audio: 'real',
+      clientRects: 'real',
+      // Labels, permission exposure and battery events are browser-managed
+      // surfaces. Synthetic values here are observable even when the UAs and
+      // graphics strings otherwise match the host.
+      mediaDevices: 'real',
+      battery: 'real',
+      speech: 'real',
+      deviceNameMode: 'real',
+      // Stock Chromium can only keep non-proxied UDP disabled through a flag.
+      // Leaving the JS constructor native avoids a detectable wrapper while
+      // retaining the leak-prevention policy.
+      webrtc: 'proxy',
       cores: 0,
       memory: 0,
       fingerprint: input,
@@ -1264,6 +1280,12 @@ function fingerprintConsistencyIssues(fp) {
  * Document-start injection implementing noise/block modes.
  */
 function buildInjectionScript(fp) {
+  // Stock Chromium cannot spoof deep browser surfaces without replacing native
+  // JavaScript objects. Descriptor and Function.prototype.toString probes expose
+  // that replacement. Native-host mode therefore uses CDP for UA/locale/timezone
+  // and leaves every other fingerprint surface untouched. Per-profile
+  // canvas/audio/GPU identities require a native fingerprint kernel.
+  if (fp.consistencyMode === 'native-host') return '';
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     consistencyMode: fp.consistencyMode || 'profile',
@@ -1464,14 +1486,19 @@ function buildInjectionScript(fp) {
   };
 
   // --- hide automation (navigator.webdriver / AutomationControlled) ---
-  // Real Chrome without automation reports webdriver === false
+  // Real Chrome already reports false. Redefining that native accessor makes
+  // lie detectors flag the environment even though the visible value is right.
   try {
-    const hideWd = nativeAccessor('webdriver', { configurable: true, enumerable: true, get: () => false });
-    try { Object.defineProperty(Navigator.prototype, 'webdriver', hideWd); } catch (_) {}
-    // Keep the inherited value false, but remove the instance property. Several
-    // detectors pass when the value is false yet still flag an own webdriver key.
-    try { delete navigator.webdriver; } catch (_) {}
-    if (navigator.webdriver === true) Object.defineProperty(navigator, 'webdriver', hideWd);
+    const ownWd = Object.getOwnPropertyDescriptor(navigator, 'webdriver');
+    if (ownWd) {
+      // Keep the inherited value, but remove automation's own key.
+      try { delete navigator.webdriver; } catch (_) {}
+    }
+    if (navigator.webdriver !== false) {
+      const hideWd = nativeAccessor('webdriver', { configurable: true, enumerable: true, get: () => false });
+      try { Object.defineProperty(Navigator.prototype, 'webdriver', hideWd); } catch (_) {}
+      if (navigator.webdriver === true) Object.defineProperty(navigator, 'webdriver', hideWd);
+    }
   } catch (_) {}
   // cdc_ / $cdc_ selenium leftovers if present
   try {
@@ -2180,21 +2207,72 @@ function buildInjectionScript(fp) {
   // --- mediaDevices ---
   if (CFG.mediaDevices && CFG.mediaDevices.mode && CFG.mediaDevices.mode !== 'real' && Array.isArray(CFG.mediaDevices.devices)) {
     try {
-      const devices = CFG.mediaDevices.devices.map((d) => ({
+      const spoofedDevices = CFG.mediaDevices.devices.map((d) => ({
         deviceId: String(d.deviceId || ''),
         kind: String(d.kind || ''),
         label: String(d.label || ''),
         groupId: String(d.groupId || ''),
         toJSON() { return { deviceId: this.deviceId, kind: this.kind, label: this.label, groupId: this.groupId }; },
       }));
-      const enumerate = async function enumerateDevices() { return devices.slice(); };
-      if (navigator.mediaDevices) {
+      const mediaDevices = navigator.mediaDevices;
+      const nativeEnumerate = mediaDevices && mediaDevices.enumerateDevices;
+      const nativeList = async () => {
+        if (typeof nativeEnumerate !== 'function') return [];
+        return nativeEnumerate.call(mediaDevices);
+      };
+      const permissionState = async (name) => {
         try {
-          Object.defineProperty(navigator.mediaDevices, 'enumerateDevices', {
-            configurable: true, writable: true, value: nativeLike(enumerate, navigator.mediaDevices.enumerateDevices || enumerate),
+          const result = await navigator.permissions.query({ name });
+          return String(result && result.state || 'prompt');
+        } catch (_) {
+          return 'prompt';
+        }
+      };
+      const enumerate = async function enumerateDevices() {
+        // Chromium only reveals media labels and stable device IDs after the
+        // matching capture permission is granted. Returning synthetic IDs while
+        // the permission is still prompt/denied is a direct anti-detect tell.
+        const [camera, microphone] = await Promise.all([
+          permissionState('camera'),
+          permissionState('microphone'),
+        ]);
+        const visibleKinds = new Set();
+        if (camera === 'granted') visibleKinds.add('videoinput');
+        if (microphone === 'granted') visibleKinds.add('audioinput');
+        if (camera === 'granted' || microphone === 'granted') visibleKinds.add('audiooutput');
+        if (!visibleKinds.size) return nativeList();
+
+        const actual = await nativeList();
+        const result = [];
+        const used = new Set();
+        for (const device of actual) {
+          const kind = String(device && device.kind || '');
+          const replacement = visibleKinds.has(kind) ? spoofedDevices.find((item) => item.kind === kind && !used.has(item)) : null;
+          if (replacement && CFG.mediaDevices.mode === 'empty') {
+            result.push({ ...replacement, deviceId: '', label: '', groupId: '' });
+            used.add(replacement);
+          } else if (replacement) {
+            result.push(replacement);
+            used.add(replacement);
+          } else {
+            result.push(device);
+          }
+        }
+        for (const device of spoofedDevices) {
+          if (!visibleKinds.has(device.kind) || used.has(device)) continue;
+          result.push(CFG.mediaDevices.mode === 'empty'
+            ? { ...device, deviceId: '', label: '', groupId: '' }
+            : device);
+        }
+        return result;
+      };
+      if (mediaDevices) {
+        try {
+          Object.defineProperty(mediaDevices, 'enumerateDevices', {
+            configurable: true, writable: true, value: nativeLike(enumerate, nativeEnumerate || enumerate),
           });
         } catch (_) {
-          try { navigator.mediaDevices.enumerateDevices = enumerate; } catch (__) {}
+          try { mediaDevices.enumerateDevices = enumerate; } catch (__) {}
         }
       }
     } catch (_) {}
@@ -2301,6 +2379,7 @@ function buildInjectionScript(fp) {
 
 /** Worker-safe subset injected before attached workers are resumed. */
 function buildWorkerInjectionScript(fp) {
+  if (fp.consistencyMode === 'native-host') return '';
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,

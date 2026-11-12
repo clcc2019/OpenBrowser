@@ -2,6 +2,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const net = require('net');
 const { pathToFileURL } = require('url');
 const { spawn, execFileSync } = require('child_process');
 const cdp = require('./cdp');
@@ -39,6 +40,31 @@ const HELPER_CLEANUP_ATTEMPTS = process.platform === 'win32' ? 32 : 3;
 const HELPER_CLEANUP_DELAY_MS = process.platform === 'win32' ? 250 : 120;
 const HELPER_CLEANUP_TIMEOUT_MS = process.platform === 'win32' ? 14000 : 3000;
 const STOP_ALL_ITEM_TIMEOUT_MS = process.platform === 'win32' ? 22000 : 12000;
+const RESERVED_DEBUG_PORTS = new Set();
+
+async function allocateLoopbackDebugPort() {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const port = await new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.unref();
+      server.once('error', reject);
+      server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+        const address = server.address();
+        const value = address && typeof address === 'object' ? Number(address.port) : 0;
+        server.close((error) => error ? reject(error) : resolve(value));
+      });
+    }).catch(() => 0);
+    if (!Number.isInteger(port) || port <= 0 || RESERVED_DEBUG_PORTS.has(port)) continue;
+    RESERVED_DEBUG_PORTS.add(port);
+    return port;
+  }
+  throw new Error('Unable to reserve a loopback CDP port');
+}
+
+function releaseLoopbackDebugPort(port) {
+  const value = Number(port);
+  if (Number.isInteger(value) && value > 0) RESERVED_DEBUG_PORTS.delete(value);
+}
 
 function isChildExited(child) {
   if (!child) return true;
@@ -2560,8 +2586,9 @@ class BrowserEngine {
     return cleanupPromise;
   }
 
-  async waitForPort(root, timeout = 30000, child = null) {
+  async waitForPort(root, timeout = 30000, child = null, expectedPort = 0) {
     const file = path.join(root, 'DevToolsActivePort');
+    const fixedPort = Number(expectedPort);
     const started = Date.now();
     // Do not delete DevToolsActivePort here — cleared before spawn; post-spawn delete races Chromium.
     const assertChildAlive = () => {
@@ -2577,6 +2604,14 @@ class BrowserEngine {
       }
     };
     const tryReadPort = async () => {
+      if (Number.isInteger(fixedPort) && fixedPort > 0) {
+        try {
+          await cdp.json(`http://127.0.0.1:${fixedPort}/json/version`);
+          return fixedPort;
+        } catch (_) {
+          return 0;
+        }
+      }
       try {
         const content = await fsp.readFile(file, 'utf8');
         const port = Number(content.split(/\r?\n/)[0]);
@@ -2864,6 +2899,7 @@ class BrowserEngine {
     let proxyForwarder = null;
     let kernelWindowName = null;
     let liveItem = null;
+    let debugPort = null;
     const startupResources = {
       root: null,
       profileLock: null,
@@ -2960,6 +2996,10 @@ class BrowserEngine {
       }
     }
     this.emitStartProgress(profile.id, 'configure', 48, '正在配置启动参数…');
+    // Chromium 157 exposes navigator.webdriver=true when launched with port 0.
+    // Reserve a random loopback port up front so CDP remains dynamic without
+    // activating that native automation signal.
+    debugPort = await allocateLoopbackDebugPort();
     let args = [
       `--user-data-dir=${root}`,
       `--disk-cache-dir=${path.join(root, 'OpenBrowserCache')}`,
@@ -2974,7 +3014,7 @@ class BrowserEngine {
       '--disable-gesture-requirement-for-presentation',
       // Random loopback port only; never bind 0.0.0.0. Restrict CDP WebSocket origins
       // (was * — any local page that learns the port could attach and steal session).
-      '--remote-debugging-port=0',
+      `--remote-debugging-port=${debugPort}`,
       '--remote-allow-origins=http://127.0.0.1,http://localhost',
     ];
     if (disableVulkanOnWayland()) args.push('--disable-vulkan');
@@ -3197,7 +3237,9 @@ class BrowserEngine {
       child.stderr?.on('data', (chunk) => { startupDiagnostic.stderr = appendDiagnosticOutput(startupDiagnostic.stderr, chunk); });
       child.on('error', (error) => { startupDiagnostic.spawnError = error.message; });
       this.emitStartProgress(profile.id, 'cdp', 76, '正在等待调试端口…');
-      port = await this.waitForPort(root, 30000, child);
+      port = await this.waitForPort(root, 30000, child, debugPort);
+      releaseLoopbackDebugPort(debugPort);
+      debugPort = null;
       connection = await portConnection(port);
       startupResources.connection = connection;
       this.assertStartGenerationActive(profile.id, lifecycleGeneration);
@@ -3431,6 +3473,7 @@ class BrowserEngine {
     this.emit({ type: 'status', id: profile.id, running: true, ...this.publicRunning(profile.id) });
     return this.publicRunning(profile.id);
     } catch (error) {
+      releaseLoopbackDebugPort(debugPort);
       // Release anything acquired before the env became live. The inner spawn/extension
       // catches already release on their own failure paths (making this a safe no-op via
       // token/close idempotency); this covers the earlier steps — proxy bridge, tab reset,

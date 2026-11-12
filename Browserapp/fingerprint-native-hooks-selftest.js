@@ -58,6 +58,17 @@ augment: null,
   return win;
 }
 
+function makeMediaDomContext(permissionStates, nativeDevices) {
+  const win = makeDomContext();
+  win.navigator.permissions = {
+    async query({ name }) { return { state: permissionStates[name] || 'prompt' }; },
+  };
+  win.navigator.mediaDevices = {
+    async enumerateDevices() { return nativeDevices.map((item) => ({ ...item })); },
+  };
+  return win;
+}
+
 const fp = buildFingerprint({
   id: 'hooks-test',
   privacy: { canvas: 'noise', webgl: 'noise', audio: 'noise' },
@@ -91,6 +102,19 @@ const fp = buildFingerprint({
   ok('navigator has no own webdriver property', !vm.runInContext("Object.prototype.hasOwnProperty.call(navigator, 'webdriver')", ctx));
   ok('inherited webdriver remains false', vm.runInContext('navigator.webdriver === false', ctx));
 
+  const nativeWdCtx = makeDomContext();
+  const nativeWd = function webdriver() { return false; };
+  Object.defineProperty(nativeWdCtx.Navigator.prototype, 'webdriver', {
+    configurable: true,
+    enumerable: true,
+    get: nativeWd,
+  });
+  nativeWdCtx.__nativeWebdriverGetter = nativeWd;
+  const nativeWdVm = vm.createContext(nativeWdCtx);
+  vm.runInContext(buildInjectionScript(fp), nativeWdVm, { timeout: 10000 });
+  ok('native webdriver=false accessor is left untouched',
+    vm.runInContext("Object.getOwnPropertyDescriptor(Navigator.prototype, 'webdriver').get === __nativeWebdriverGetter", nativeWdVm));
+
   for (const key of ['width', 'height', 'colorDepth']) {
     const got = probe('Screen.prototype', key);
     if (!got) { console.log(`     (no accessor installed for screen.${key}; skipped)`); continue; }
@@ -109,7 +133,9 @@ const fp = buildFingerprint({
 {
   const hostFp = buildFingerprint(hostConsistentProfile({ id: 'host-hooks', privacy: { matchHostOs: true } }));
   const ctx = vm.createContext(makeDomContext());
-  vm.runInContext(buildInjectionScript(hostFp), ctx, { timeout: 10000 });
+  const hostScript = buildInjectionScript(hostFp);
+  if (hostScript) vm.runInContext(hostScript, ctx, { timeout: 10000 });
+  ok('native-host mode emits no JavaScript stealth hooks', hostScript === '');
   const screen = vm.runInContext('({ width: screen.width, colorDepth: screen.colorDepth })', ctx);
   ok('native-host mode keeps the real screen dimensions', screen.width === 1920 && screen.colorDepth === 24);
 }
@@ -169,4 +195,41 @@ const fp = buildFingerprint({
   }
 }
 
-console.log(`\nfingerprint-native-hooks-selftest: ${passed} checks passed.`);
+(async () => {
+  // --- media devices must follow the browser's permission boundary ---
+  const mediaFp = buildFingerprint({
+    id: 'media-permission-test',
+    privacy: { mediaDevices: 'noise' },
+    advanced: {},
+  });
+  const nativeMedia = [
+    { deviceId: '', kind: 'audiooutput', label: '', groupId: '' },
+  ];
+
+  const promptCtx = vm.createContext(makeMediaDomContext({ camera: 'prompt', microphone: 'prompt' }, nativeMedia));
+  vm.runInContext(buildInjectionScript(mediaFp), promptCtx, { timeout: 10000 });
+  const promptDevices = await vm.runInContext('navigator.mediaDevices.enumerateDevices()', promptCtx);
+  ok('mediaDevices keeps native devices while capture permission is pending',
+    promptDevices.length === 1 && promptDevices[0].kind === 'audiooutput' && promptDevices[0].label === '' && promptDevices[0].deviceId === '');
+
+  const grantedCtx = vm.createContext(makeMediaDomContext({ camera: 'granted', microphone: 'granted' }, nativeMedia));
+  vm.runInContext(buildInjectionScript(mediaFp), grantedCtx, { timeout: 10000 });
+  const grantedDevices = await vm.runInContext('navigator.mediaDevices.enumerateDevices()', grantedCtx);
+  ok('mediaDevices applies the spoof only after capture permission is granted',
+    grantedDevices.length === 3
+      && grantedDevices.every((device) => device.label && device.deviceId)
+      && grantedDevices.some((device) => device.kind === 'audioinput')
+      && grantedDevices.some((device) => device.kind === 'videoinput'));
+
+  const micCtx = vm.createContext(makeMediaDomContext({ camera: 'prompt', microphone: 'granted' }, nativeMedia));
+  vm.runInContext(buildInjectionScript(mediaFp), micCtx, { timeout: 10000 });
+  const micDevices = await vm.runInContext('navigator.mediaDevices.enumerateDevices()', micCtx);
+  ok('microphone permission does not expose camera labels',
+    micDevices.some((device) => device.kind === 'audioinput' && device.label)
+      && !micDevices.some((device) => device.kind === 'videoinput'));
+
+  console.log(`\nfingerprint-native-hooks-selftest: ${passed} checks passed.`);
+})().catch((error) => {
+  console.error(error.stack || error);
+  process.exitCode = 1;
+});

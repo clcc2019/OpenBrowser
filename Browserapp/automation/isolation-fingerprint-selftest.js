@@ -346,7 +346,15 @@ async function main() {
   assert.strictEqual(hostFp.webgl.renderer, null);
   assert.strictEqual(hostFp.hardwareConcurrency, null);
   assert.strictEqual(hostFp.deviceMemory, null);
-  assert.ok(hostFp.speech.voices.every((voice) => !String(voice.voiceURI || '').startsWith('ob-voice://')));
+  assert.strictEqual(hostFp.canvas.mode, 'real');
+  assert.strictEqual(hostFp.webgl.mode, 'real');
+  assert.strictEqual(hostFp.audio.mode, 'real');
+  assert.strictEqual(hostFp.clientRects.mode, 'real');
+  assert.strictEqual(hostFp.mediaDevices.mode, 'real');
+  assert.strictEqual(hostFp.battery.mode, 'real');
+  assert.strictEqual(buildInjectionScript(hostFp), '', 'stock Chromium native-host mode must not inject JS fingerprint hooks');
+  assert.strictEqual(hostFp.speech.mode, 'real');
+  assert.strictEqual(hostFp.speech.voices, null);
   assert.strictEqual(hostFp.uaProfile.chromeMajor, 157);
   const nativeArgs = fingerprintChromiumArgs(hostFp, hostProfile, { kernelVersion: '150.0.7871.186', timezone: 'Asia/Singapore' });
   assert.ok(nativeArgs.includes('--fingerprint-brand=Chrome'));
@@ -355,7 +363,7 @@ async function main() {
   assert.ok(nativeArgs.includes('--fingerprint-hardware-concurrency=' + require('os').cpus().length));
   assert.ok(nativeArgs.includes('--timezone=Asia/Singapore'));
   assert.ok(nativeArgs.includes('--disable-spoofing=font,audio,canvas,clientrects,gpu'));
-  pass('stock Chromium host consistency keeps UA, Client Hints and graphics surfaces aligned');
+  pass('stock Chromium host consistency keeps native surfaces and disables detectable JS hooks');
 
   const workerScript = buildWorkerInjectionScript(a1);
   assert.doesNotThrow(() => new Function(workerScript));

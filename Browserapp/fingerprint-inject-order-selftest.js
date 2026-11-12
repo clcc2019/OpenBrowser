@@ -33,6 +33,9 @@ async function main() {
   assert.ok(block.includes('Fingerprint inject BEFORE'), 'order comment present');
   // CLI must not open start page before CDP inject
   assert.ok(engineSrc.includes("args.push('about:blank')"), 'spawn must use about:blank instead of startUrl on CLI');
+  assert.ok(engineSrc.includes('--remote-debugging-port=${debugPort}'), 'browser launches with a preallocated fixed loopback CDP port');
+  assert.ok(!engineSrc.includes("'--remote-debugging-port=0'"), 'port 0 must not be used because Chromium exposes navigator.webdriver=true');
+  assert.ok(engineSrc.includes('this.waitForPort(root, 30000, child, debugPort)'), 'CDP readiness must probe the preallocated port directly');
   assert.ok(engineSrc.includes('do NOT put the OpenBrowser start page') || engineSrc.includes('Do NOT put the OpenBrowser start page'), 'CLI startUrl deferral comment');
   // re-inject after navigate
   assert.ok(block.includes('start-page re-inject') || block.includes('appliedTargetIds: new Set()'), 're-inject after start page navigate');
