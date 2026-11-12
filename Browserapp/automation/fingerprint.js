@@ -852,8 +852,14 @@ function buildFingerprint(profile = {}) {
       ? full
       : `${major}.0.0.0`;
   };
+  // The reduced UA uses major.0.0.0, but high-entropy Client Hints normally
+  // expose the actual build. Use the kernel build when the requested major
+  // matches and no valid explicit full version was supplied.
+  const validConfiguredFull = /^\d+\.\d+\.\d+\.\d+$/.test(String(configuredFullCandidate || ''))
+    && Number(String(configuredFullCandidate).split('.')[0]) === configuredChromeMajor;
   const configuredChromeFull = configuredChromeMajor
-    ? fullVersionForMajor(configuredChromeMajor, configuredFullCandidate)
+    ? fullVersionForMajor(configuredChromeMajor, validConfiguredFull
+      ? configuredFullCandidate : (configuredChromeMajor === kernelMajor ? kernelFull : ''))
     : '';
   const targetChromeMajor = configuredChromeMajor
     || (syncUa ? kernelMajor : (kernelMajor && !uaOverride ? kernelMajor : (Number(clientHintsIn.chromeMajor) || 0)));

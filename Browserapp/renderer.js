@@ -271,7 +271,7 @@ function defaultGroups() {
 }
 
 const defaultProfiles = () => [
-  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PROFILE_OS, location: 'Local', userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: false, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'webgl', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } },
+  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PROFILE_OS, location: 'Local', userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: true, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } },
 ];
 
 function positiveProfileNumber(value) {
@@ -4687,8 +4687,8 @@ $('#profile-form').addEventListener('submit', async (event) => {
     userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }),
     platform: { type: 'other', startUrl },
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
-    // New profiles get a coherent device persona; existing ones are left as they were.
-    privacy: { matchHostOs: false, languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'webgl', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } },
+    // New profiles use host-consistent surfaces; existing settings are preserved.
+    privacy: { matchHostOs: true, languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } },
   };
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
   try {
@@ -4871,7 +4871,7 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
-    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : { userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: false, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'webgl', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } }), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PROFILE_OS, location: 'Local', cookies: '' });
+    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : { userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: true, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } }), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PROFILE_OS, location: 'Local', cookies: '' });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];

@@ -33,10 +33,10 @@ ok('renderer populates the select from the profile', /editorSet\('#editor-device
 ok('normalizing keeps an existing profile off by default', /deviceProfile: String\(privacy\.deviceProfile \|\| 'default'\)/.test(renderer));
 ok('newly created profiles opt in', /privacy: \{[^}]*deviceProfile: 'persona'[^}]*\}/.test(renderer));
 ok('new profiles default to the host platform', /const DEFAULT_PROFILE_OS = HOST_PROFILE_OS;/.test(renderer));
-ok('host consistency remains exposed but defaults off', /id="editor-match-host-os"/.test(html)
-  && !/id="editor-match-host-os" type="checkbox" checked/.test(html)
+ok('host consistency remains exposed and defaults on', /id="editor-match-host-os"/.test(html)
+  && /id="editor-match-host-os" type="checkbox" checked/.test(html)
   && /matchHostOs: privacy\.matchHostOs !== false/.test(renderer));
-ok('new profiles default to device-isolation persona mode', (renderer.match(/privacy: \{[^}]*matchHostOs: false[^}]*deviceProfile: 'persona'/g) || []).length >= 2);
+ok('new profiles default to host-consistent mode', (renderer.match(/privacy: \{[^}]*matchHostOs: true[^}]*deviceProfile: 'persona'[^}]*webglMeta: 'real'[^}]*webgpu: 'real'/g) || []).length >= 3);
 
 // --- engine whitelist accepts exactly those values ---
 {

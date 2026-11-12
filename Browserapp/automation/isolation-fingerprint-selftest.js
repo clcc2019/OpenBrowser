@@ -132,6 +132,11 @@ async function main() {
 
   const kernelAligned = buildFingerprint({ id: 'env-kernel', kernelVersion: '151.0.7922.34', privacy: {} });
   assert.strictEqual(kernelAligned.uaProfile.chromeMajor, 151);
+  const configuredKernel = buildFingerprint({ id: 'configured-kernel', kernelVersion: '151.0.7922.34', privacy: { fingerprint: { chromeMajor: 151 } } });
+  assert.strictEqual(configuredKernel.userAgentMetadata.fullVersion, '151.0.7922.34');
+  assert.strictEqual(configuredKernel.userAgentMetadata.fullVersionList.find((brand) => brand.brand === 'Chromium').version, '151.0.7922.34');
+  const explicitFull = buildFingerprint({ id: 'configured-kernel', kernelVersion: '151.0.7922.34', privacy: { fingerprint: { chromeMajor: 151, ua_full_version: '151.0.7000.1' } } });
+  assert.strictEqual(explicitFull.userAgentMetadata.fullVersion, '151.0.7000.1');
   assert.strictEqual(kernelAligned.userAgentMetadata.fullVersionList.find((item) => item.brand === 'Google Chrome')?.version.split('.')[0], '151');
   pass('automatic UA and Client Hints align with installed kernel major');
 
