@@ -13,10 +13,11 @@ const DEFAULT_PROFILE_OS = HOST_PROFILE_OS;
 // claimed platform differs from the host. New isolated profiles therefore use
 // the other desktop platform by default; users can still choose any OS.
 const DEFAULT_PERSONA_OS = HOST_PROFILE_OS === 'Windows' ? 'Linux' : 'Windows';
-const DEFAULT_CHROME_MAJOR = 157;
+const DEFAULT_CHROME_MAJOR = 150;
 const DEFAULT_CHROME_FULL_VERSION = `${DEFAULT_CHROME_MAJOR}.0.0.0`;
 const PROFILE_OS_MIGRATION_KEY = 'openbrowser-profile-os-migration-v2';
-const PROFILE_CHROME_MIGRATION_KEY = 'openbrowser-profile-chrome-major-v1';
+const PROFILE_CHROME_MIGRATION_KEY = 'openbrowser-profile-chrome-major-v2';
+const PROFILE_DEVICE_ISOLATION_MIGRATION_KEY = 'openbrowser-profile-device-isolation-v1';
 const PROFILE_PLATFORM_FINGERPRINT_FIELDS = [
   'userAgent', 'os', 'platform', 'architecture', 'platformVersion', 'platform_version',
   'clientHints', 'uaFullVersion', 'ua_full_version', 'fullVersion', 'bitness', 'mobile', 'wow64', 'model',
@@ -676,7 +677,7 @@ function updateClientHintsForChromeMajor(value, major = DEFAULT_CHROME_MAJOR) {
   return hints;
 }
 
-function migrateProfileToChrome157(profile) {
+function migrateProfileToKernelChromeVersion(profile) {
   const normalized = normalizeProfileSettings(profile);
   const privacy = { ...(normalized.privacy || {}) };
   const fingerprint = { ...(privacy.fingerprint || {}) };
@@ -699,12 +700,78 @@ function profileChromeMigrationPending() {
   try { return localStorage.getItem(PROFILE_CHROME_MIGRATION_KEY) !== '1'; } catch (_) { return true; }
 }
 
-function migrateProfilesToChrome157(profiles) {
-  return Array.isArray(profiles) ? profiles.map(migrateProfileToChrome157) : [];
+function migrateProfilesToKernelChromeVersion(profiles) {
+  return Array.isArray(profiles) ? profiles.map(migrateProfileToKernelChromeVersion) : [];
 }
 
 function markProfileChromeMigrationComplete() {
   try { localStorage.setItem(PROFILE_CHROME_MIGRATION_KEY, '1'); } catch (_) {}
+}
+
+function isolatedProfileOs(profile) {
+  const value = String(profile?.os || '').toLowerCase();
+  if (/windows|win32|win64/.test(value)) return 'Windows';
+  if (/mac|darwin|os x/.test(value)) return 'macOS';
+  const parity = [...String(profile?.id || profile?.name || '')]
+    .reduce((sum, char) => sum + char.charCodeAt(0), 0) % 2;
+  return parity ? 'Windows' : 'macOS';
+}
+
+function migrateProfileToDeviceIsolation(profile) {
+  const normalized = normalizeProfileSettings(profile);
+  const os = isolatedProfileOs(normalized);
+  const macOs = os === 'macOS';
+  const privacy = { ...(normalized.privacy || {}) };
+  const fingerprint = { ...(privacy.fingerprint || {}) };
+  for (const key of [
+    'os', 'platform', 'platformVersion', 'platform_version', 'userAgent',
+    'webglVendor', 'webglRenderer', 'webgpu', 'gpuVendor', 'gpuArchitecture', 'vendor',
+  ]) delete fingerprint[key];
+  fingerprint.seed = String(fingerprint.seed || normalized.id || '').trim();
+  fingerprint.cores = null;
+  fingerprint.memory = null;
+  fingerprint.webglMeta = 'noise';
+  fingerprint.webgpu = 'blocked';
+  const clientHints = { ...(fingerprint.clientHints || {}) };
+  delete clientHints.platformVersion;
+  delete clientHints.platform_version;
+  clientHints.platform = macOs ? 'macOS' : 'Windows';
+  clientHints.architecture = macOs ? 'arm' : 'x86';
+  clientHints.bitness = '64';
+  fingerprint.clientHints = clientHints;
+  Object.assign(privacy, {
+    matchHostOs: false,
+    deviceProfile: 'persona',
+    personaVersion: 5,
+    canvas: 'noise',
+    webgl: 'noise',
+    webglMeta: 'noise',
+    webgpu: 'blocked',
+    audio: 'noise',
+    clientRects: 'noise',
+    media: 'noise',
+    mediaDevices: 'noise',
+    speech: 'noise',
+    battery: 'noise',
+    deviceNameMode: 'noise',
+    webrtc: 'proxy',
+    cores: null,
+    memory: null,
+    fingerprint,
+  });
+  return { ...normalized, os, userAgent: '', privacy };
+}
+
+function profileDeviceIsolationMigrationPending() {
+  try { return localStorage.getItem(PROFILE_DEVICE_ISOLATION_MIGRATION_KEY) !== '1'; } catch (_) { return true; }
+}
+
+function migrateProfilesToDeviceIsolation(profiles) {
+  return Array.isArray(profiles) ? profiles.map(migrateProfileToDeviceIsolation) : [];
+}
+
+function markProfileDeviceIsolationMigrationComplete() {
+  try { localStorage.setItem(PROFILE_DEVICE_ISOLATION_MIGRATION_KEY, '1'); } catch (_) {}
 }
 
 const loadedUi = loadUi();
@@ -5402,8 +5469,10 @@ function updateEngineBadge(info) {
 async function initialize() {
   const migrateExistingProfiles = profileOsMigrationPending();
   const migrateExistingChromeVersions = profileChromeMigrationPending();
+  const migrateDeviceIsolation = profileDeviceIsolationMigrationPending();
   if (migrateExistingProfiles) ui.profiles = migrateProfilesToHostOS(ui.profiles);
-  if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToChrome157(ui.profiles);
+  if (migrateDeviceIsolation) ui.profiles = migrateProfilesToDeviceIsolation(ui.profiles);
+  if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToKernelChromeVersion(ui.profiles);
   refreshLocaleChrome();
   const info = await window.ops.getInfo();
   const appVersion = document.getElementById('app-version');
@@ -5464,11 +5533,13 @@ async function initialize() {
     }
   } catch (_) {}
   if (migrateExistingProfiles) ui.profiles = migrateProfilesToHostOS(ui.profiles);
-  if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToChrome157(ui.profiles);
+  if (migrateDeviceIsolation) ui.profiles = migrateProfilesToDeviceIsolation(ui.profiles);
+  if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToKernelChromeVersion(ui.profiles);
   save();
   engineProfiles = await window.ops.syncProfiles(ui.profiles);
   if (migrateExistingProfiles) markProfileOsMigrationComplete();
   if (migrateExistingChromeVersions) markProfileChromeMigrationComplete();
+  if (migrateDeviceIsolation) markProfileDeviceIsolationMigrationComplete();
   await refreshExtensions(); await refreshSessions(); renderProfiles(); renderLogs();
   log('System', readyBrowserLog(info));
   switchView(document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles');

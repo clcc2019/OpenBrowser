@@ -5,10 +5,11 @@ const crypto = require('crypto');
 const { URL } = require('url');
 const { parseCoordinates } = require('./fingerprint');
 const { normalizeOsKey } = require('./user-agent');
+const { CURRENT_VERSION: FINGERPRINT_CHROMIUM_VERSION } = require('./fingerprint-chromium');
 const { cleanApiKey, isApiKeyPlaceholder, resolveApiKey } = require('./api-key');
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const DEFAULT_CHROME_MAJOR = 157;
+const DEFAULT_CHROME_MAJOR = Number(String(FINGERPRINT_CHROMIUM_VERSION).split('.')[0]) || 150;
 
 function responseHeaders(origin = '', extra = {}) {
   const headers = {
@@ -669,20 +670,35 @@ class LocalApiServer {
         profileFingerprint.chromeMajor = DEFAULT_CHROME_MAJOR;
       }
       const hostOs = process.platform === 'darwin' ? 'macOS' : (process.platform === 'win32' ? 'Windows' : 'Linux');
+      profileFingerprint.seed = String(profileFingerprint.seed || id);
       const profile = {
         ...body,
         id, number,
         name: String(body.name || body.title || ('Environment ' + number)),
         title: String(body.title || body.name || ('Environment ' + number)),
-        os: String(body.os || hostOs),
+        os: String(body.os || (hostOs === 'Windows' ? 'macOS' : 'Windows')),
         language: String(body.language || 'en-US'),
         networkMode: body.networkMode || (/^(direct|offline|none)$/i.test(proxy) ? 'direct' : 'proxy'),
         proxy,
         fingerprint: profileFingerprint,
         privacy: {
-          matchHostOs: true,
+          matchHostOs: false,
           deviceProfile: 'persona',
           personaVersion: 5,
+          canvas: 'noise',
+          webgl: 'noise',
+          webglMeta: 'noise',
+          webgpu: 'blocked',
+          audio: 'noise',
+          clientRects: 'noise',
+          media: 'noise',
+          mediaDevices: 'noise',
+          speech: 'noise',
+          battery: 'noise',
+          deviceNameMode: 'noise',
+          webrtc: 'proxy',
+          cores: null,
+          memory: null,
           ...(body.privacy && typeof body.privacy === 'object' ? body.privacy : {}),
           fingerprint: profileFingerprint,
         },

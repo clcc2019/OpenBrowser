@@ -21,7 +21,7 @@ const { ProfileStoreSqlite } = require('./automation/profile-store-sqlite');
 const { LAUNCH_WINDOW_SIZE, buildFingerprint, hostConsistentProfile, fingerprintChromiumArgs, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab, parseCoordinates } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
 const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
-const { BrowserKernelManager, ensureKernelReadyForLaunch, SOURCE_CHROME_STABLE, SOURCE_CFT, SOURCE_CUSTOM, SOURCE_FINGERPRINT_CHROMIUM } = require('./automation/browser-kernel');
+const { BrowserKernelManager, ensureKernelReadyForLaunch, SOURCE_CHROME_STABLE, SOURCE_CFT, SOURCE_CUSTOM, SOURCE_FINGERPRINT_CHROMIUM, FINGERPRINT_CHROMIUM_VERSION } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
   isOpenBrowser148,
@@ -31,7 +31,136 @@ const {
 const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath } = require('./automation/fingerprint-debug-log');
 
 const KERNEL_POLICY_VERSION = 4;
+const PROFILE_ISOLATION_VERSION = 1;
 const MAX_PROFILE_PROXY_LENGTH = 64 * 1024;
+
+function chromeVersionParts(value) {
+  const full = /^\d+\.\d+\.\d+\.\d+$/.test(String(value || ''))
+    ? String(value)
+    : FINGERPRINT_CHROMIUM_VERSION;
+  return { full, major: Number(full.split('.')[0]) };
+}
+
+function updateChromeBrandVersions(value, version) {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => /chrome|chromium/i.test(String(item?.brand || ''))
+    ? { ...item, version }
+    : item);
+}
+
+function alignProfileChromeVersion(profile, kernelVersion) {
+  const { full, major } = chromeVersionParts(kernelVersion);
+  const reduced = `${major}.0.0.0`;
+  const privacy = { ...(profile.privacy || {}) };
+  const fingerprint = { ...(privacy.fingerprint || {}) };
+  const updateUa = (value) => String(value || '').replace(/(Chrome\/)\d+(?:\.\d+)*/i, `$1${reduced}`);
+  const userAgent = updateUa(profile.userAgent);
+  const fpUserAgent = updateUa(fingerprint.userAgent);
+  const updateHints = (value) => {
+    const hints = value && typeof value === 'object' ? { ...value } : {};
+    hints.chromeMajor = major;
+    hints.ua_full_version = full;
+    hints.uaFullVersion = full;
+    hints.fullVersion = full;
+    if (Array.isArray(hints.brands)) hints.brands = updateChromeBrandVersions(hints.brands, String(major));
+    if (Array.isArray(hints.fullVersionList)) hints.fullVersionList = updateChromeBrandVersions(hints.fullVersionList, full);
+    return hints;
+  };
+  fingerprint.chromeMajor = major;
+  fingerprint.userAgent = fpUserAgent;
+  fingerprint.ua_full_version = full;
+  fingerprint.uaFullVersion = full;
+  fingerprint.fullVersion = full;
+  fingerprint.clientHints = updateHints(fingerprint.clientHints);
+  privacy.fingerprint = fingerprint;
+  if (privacy.clientHints && typeof privacy.clientHints === 'object') {
+    privacy.clientHints = updateHints(privacy.clientHints);
+  }
+  const proxyMeta = profile.proxyMeta && typeof profile.proxyMeta === 'object'
+    ? { ...profile.proxyMeta }
+    : profile.proxyMeta;
+  if (proxyMeta && proxyMeta.tlsChromeMajor != null) proxyMeta.tlsChromeMajor = major;
+  const changed = userAgent !== String(profile.userAgent || '')
+    || fpUserAgent !== String(profile.privacy?.fingerprint?.userAgent || '')
+    || fingerprint.chromeMajor !== profile.privacy?.fingerprint?.chromeMajor
+    || fingerprint.ua_full_version !== profile.privacy?.fingerprint?.ua_full_version
+    || fingerprint.uaFullVersion !== profile.privacy?.fingerprint?.uaFullVersion
+    || fingerprint.fullVersion !== profile.privacy?.fingerprint?.fullVersion
+    || JSON.stringify(fingerprint.clientHints) !== JSON.stringify(profile.privacy?.fingerprint?.clientHints)
+    || JSON.stringify(privacy.clientHints) !== JSON.stringify(profile.privacy?.clientHints)
+    || (proxyMeta && proxyMeta.tlsChromeMajor !== profile.proxyMeta?.tlsChromeMajor);
+  return { profile: { ...profile, userAgent, privacy, proxyMeta }, changed };
+}
+
+function isolatedProfileOs(profile) {
+  const value = String(profile?.os || '').toLowerCase();
+  if (/windows|win32|win64/.test(value)) return 'Windows';
+  if (/mac|darwin|os x/.test(value)) return 'macOS';
+  // Fingerprint Chromium has native WebGL metadata for Windows and macOS only.
+  // Linux personas therefore expose the host GPU, so distribute those profiles
+  // across the two supported platforms without changing their proxy or locale.
+  const parity = [...String(profile?.id || profile?.name || '')]
+    .reduce((sum, char) => sum + char.charCodeAt(0), 0) % 2;
+  return parity ? 'Windows' : 'macOS';
+}
+
+function alignProfileDeviceIsolation(profile) {
+  const os = isolatedProfileOs(profile);
+  const macOs = os === 'macOS';
+  const privacy = { ...(profile.privacy || {}) };
+  const fingerprint = { ...(privacy.fingerprint || {}) };
+  const seed = String(fingerprint.seed || profile.fingerprintSeed || profile.id || '').trim();
+  for (const key of [
+    'os', 'platform', 'platformVersion', 'platform_version', 'userAgent',
+    'webglVendor', 'webglRenderer', 'webgpu', 'gpuVendor', 'gpuArchitecture', 'vendor',
+  ]) delete fingerprint[key];
+  fingerprint.seed = seed;
+  fingerprint.cores = null;
+  fingerprint.memory = null;
+  fingerprint.webglMeta = 'noise';
+  fingerprint.webgpu = 'blocked';
+  const clientHints = { ...(fingerprint.clientHints || {}) };
+  delete clientHints.platformVersion;
+  delete clientHints.platform_version;
+  clientHints.platform = macOs ? 'macOS' : 'Windows';
+  clientHints.architecture = macOs ? 'arm' : 'x86';
+  clientHints.bitness = '64';
+  fingerprint.clientHints = clientHints;
+  privacy.matchHostOs = false;
+  privacy.deviceProfile = 'persona';
+  privacy.personaVersion = 5;
+  privacy.canvas = 'noise';
+  privacy.webgl = 'noise';
+  privacy.webglMeta = 'noise';
+  privacy.webgpu = 'blocked';
+  privacy.audio = 'noise';
+  privacy.clientRects = 'noise';
+  privacy.media = 'noise';
+  privacy.mediaDevices = 'noise';
+  privacy.speech = 'noise';
+  privacy.battery = 'noise';
+  privacy.deviceNameMode = 'noise';
+  privacy.webrtc = 'proxy';
+  privacy.cores = null;
+  privacy.memory = null;
+  privacy.fingerprint = fingerprint;
+  const next = {
+    ...profile,
+    os,
+    userAgent: '',
+    privacy,
+  };
+  const isolationKeys = [
+    'matchHostOs', 'deviceProfile', 'personaVersion', 'canvas', 'webgl', 'webglMeta', 'webgpu',
+    'audio', 'clientRects', 'media', 'mediaDevices', 'speech', 'battery', 'deviceNameMode',
+    'webrtc', 'cores', 'memory', 'fingerprint',
+  ];
+  const isolationState = (value) => Object.fromEntries(isolationKeys.map((key) => [key, value?.[key]]));
+  const changed = os !== profile.os
+    || String(profile.userAgent || '') !== ''
+    || JSON.stringify(isolationState(privacy)) !== JSON.stringify(isolationState(profile.privacy));
+  return { profile: next, changed };
+}
 // Chromium's Windows renderer/GPU helpers can outlive the browser process by
 // several seconds while profile databases close. Keep the profile lock until
 // the OS process list confirms they are gone, but give taskkill enough time to
@@ -483,6 +612,8 @@ class BrowserEngine {
   async init(bundledExtensionPath) {
     await this.kernelManager.loadMeta();
     let migrateKernelPolicy = false;
+    let migrateChromeVersion = false;
+    let migrateDeviceIsolation = false;
     let recoveredState = false;
     let state = null;
     let primaryStateError = null;
@@ -546,6 +677,20 @@ class BrowserEngine {
           } catch (_) {}
         }
       }
+      const installedKernel = this.kernelManager.resolveInstalled();
+      const kernelVersion = installedKernel?.version || FINGERPRINT_CHROMIUM_VERSION;
+      const isolateDevices = Number(saved.profileIsolationVersion) !== PROFILE_ISOLATION_VERSION;
+      migrateDeviceIsolation ||= isolateDevices;
+      for (const [profileId, profile] of this.profiles) {
+        const isolated = isolateDevices
+          ? alignProfileDeviceIsolation(profile)
+          : { profile, changed: false };
+        const aligned = alignProfileChromeVersion(isolated.profile, kernelVersion);
+        if (!isolated.changed && !aligned.changed) continue;
+        this.profiles.set(profileId, aligned.profile);
+        migrateDeviceIsolation ||= isolated.changed;
+        migrateChromeVersion ||= aligned.changed;
+      }
       if (typeof saved.preferIndependentKernel === 'boolean') this.preferIndependentKernel = saved.preferIndependentKernel;
       if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION) {
         // Prior releases could select a system browser implicitly. Migrate to
@@ -575,7 +720,7 @@ class BrowserEngine {
       this.extensions.set(builtIn.id, builtIn);
       await this.persist();
     }
-    if (migrateKernelPolicy || recoveredState || state?.plaintext) await this.persist();
+    if (migrateKernelPolicy || migrateChromeVersion || migrateDeviceIsolation || recoveredState || state?.plaintext) await this.persist();
   }
 
   resolveStoredProxyProfile(incoming) {
@@ -647,6 +792,7 @@ class BrowserEngine {
       assignments,
       profiles: [...this.profiles.values()],
       kernelPolicyVersion: KERNEL_POLICY_VERSION,
+      profileIsolationVersion: PROFILE_ISOLATION_VERSION,
       preferIndependentKernel: this.preferIndependentKernel,
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
       systemBrowserPath: this.systemBrowserPath,
