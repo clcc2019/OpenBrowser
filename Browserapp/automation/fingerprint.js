@@ -756,16 +756,32 @@ function expectedClientHintPlatform(os) {
   return 'Windows';
 }
 
+function acceptLanguageForFingerprint(fp = {}) {
+  const values = (Array.isArray(fp.languages) ? fp.languages : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const primary = String(values[0] || '').split('-')[0];
+  if (primary && !values.some((value) => value.toLowerCase() === primary.toLowerCase())) {
+    values.push(primary);
+  }
+  return values.join(',');
+}
+
 /**
  * Build fingerprint config from profile + optional privacy.fingerprint overrides.
  */
 function buildFingerprint(profile = {}) {
   const stableIdentity = profile.id || profile.name || 'default';
-  const launchSeed = String(profile.fingerprintLaunchSeed || '').trim();
-  const seed = hashSeed(launchSeed ? `${stableIdentity}:${launchSeed}` : stableIdentity);
-  const rnd = mulberry32(u32(seed, 0));
   const privacy = profile.privacy || {};
   const fpIn = privacy.fingerprint && typeof privacy.fingerprint === 'object' ? privacy.fingerprint : {};
+  const persistedSeed = String(profile.fingerprintSeed || fpIn.seed || '').trim();
+  const launchSeed = String(profile.fingerprintLaunchSeed || '').trim();
+  const seed = hashSeed(
+    persistedSeed
+      ? `${stableIdentity}:persisted:${persistedSeed}`
+      : (launchSeed ? `${stableIdentity}:${launchSeed}` : stableIdentity)
+  );
+  const rnd = mulberry32(u32(seed, 0));
 
   const rawCoresOverride = fpIn.cores ?? privacy.cores;
   const rawMemoryOverride = fpIn.memory ?? privacy.memory;
@@ -2847,7 +2863,6 @@ function chromeArgsForFingerprint(fp, profile = {}) {
 }
 
 async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}, options = {}) {
-  if (fp.nativeKernelFingerprint === true) return;
   const privacy = profile.privacy || {};
   const timezone = normalizeTimezoneValue(privacy.timezoneMode === 'custom'
     ? privacy.timezone
@@ -2866,10 +2881,6 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     return cdpCall(webSocketDebuggerUrl, method, params);
   };
 
-  // Page domain must be enabled or addScriptToEvaluateOnNewDocument is a no-op on some hosts.
-  await invoke('Page.enable', {}).catch(() => {});
-  await invoke('Runtime.enable', {}).catch(() => {});
-
   // Soft overrides: CDP rejects a second setLocale/setTimezone with
   // "Another locale override is already in effect" — must not abort the whole inject.
   const softOverride = async (method, params) => {
@@ -2877,7 +2888,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
       await invoke(method, params);
     } catch (error) {
       const msg = String(error && error.message || error || '');
-      if (/already in effect|cannot be overridden|not available/i.test(msg)) return;
+      if (/already in effect|cannot be overridden|not available|not supported/i.test(msg)) return;
       // Chrome only accepts some emulation commands on top-level targets.
       // Subframes inherit those settings; their document-start script is still required.
       if (options.targetType === 'iframe' && /only be executed on top-level targets/i.test(msg)) return;
@@ -2885,13 +2896,46 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
     }
   };
 
+  // Fingerprint Chromium owns canvas, audio, WebGL and other renderer surfaces
+  // natively. Its 150 build still emits an empty Sec-CH-UA-Bitness and inherits
+  // the host ICU locale, so align those two protocol-level surfaces through CDP.
+  // This intentionally does not enable Runtime/Page or install JS hooks.
+  if (fp.nativeKernelFingerprint === true) {
+    if (fp.userAgent || fp.uaProfile) {
+      const uaProfile = fp.uaProfile || buildUaProfile({
+        userAgent: fp.userAgent,
+        platform: fp.platform,
+      });
+      const acceptLanguage = acceptLanguageForFingerprint(fp);
+      const override = cdpUserAgentOverride(uaProfile, acceptLanguage);
+      await softOverride('Emulation.setUserAgentOverride', override);
+      await softOverride('Network.enable', {});
+      await softOverride('Network.setUserAgentOverride', {
+        userAgent: override.userAgent,
+        acceptLanguage: override.acceptLanguage,
+        platform: override.platform,
+        userAgentMetadata: override.userAgentMetadata,
+      });
+    }
+    if (timezone) await softOverride('Emulation.setTimezoneOverride', { timezoneId: timezone });
+    if (geoposition) await softOverride('Emulation.setGeolocationOverride', geoposition);
+    if (fp.languages?.[0]) {
+      await softOverride('Emulation.setLocaleOverride', { locale: fp.languages[0] });
+    }
+    return;
+  }
+
+  // Page domain must be enabled or addScriptToEvaluateOnNewDocument is a no-op on some hosts.
+  await invoke('Page.enable', {}).catch(() => {});
+  await invoke('Runtime.enable', {}).catch(() => {});
+
   // Network/Emulation.setUserAgentOverride + UserAgentMetadata (Client Hints)
   if (fp.userAgent || fp.uaProfile) {
     const uaProfile = fp.uaProfile || buildUaProfile({
       userAgent: fp.userAgent,
       platform: fp.platform,
     });
-    const acceptLanguage = (fp.languages || []).join(',');
+    const acceptLanguage = acceptLanguageForFingerprint(fp);
     const override = cdpUserAgentOverride(uaProfile, acceptLanguage);
     // Emulation affects navigator + most page JS
     await softOverride('Emulation.setUserAgentOverride', override);

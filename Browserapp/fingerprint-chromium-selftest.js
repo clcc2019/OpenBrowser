@@ -97,12 +97,39 @@ async function main() {
   assert.strictEqual(nativeFp.nativeKernelFingerprint, true);
   assert.ok(nativeFp.userAgent.includes('Chrome/150.0.0.0'));
   assert.strictEqual(nativeFp.userAgentMetadata.uaFullVersion, '150.0.7871.186');
+  assert.strictEqual(nativeFp.userAgentMetadata.bitness, '64');
+  assert.ok(nativeFp.userAgentMetadata.fullVersionList.every((item) => /^\d+\.\d+\.\d+\.\d+$/.test(item.version)));
   assert.strictEqual(buildInjectionScript(nativeFp), '');
   assert.strictEqual(buildWorkerInjectionScript(nativeFp), '');
   const calls = [];
   await applyFingerprintToTab(async (...args) => calls.push(args), 'ws://unused', nativeFp, nativeProfile);
-  assert.deepStrictEqual(calls, []);
-  console.log('  PASS  native kernel mode performs no JS or CDP surface overrides');
+  const methods = calls.map((args) => args[1]);
+  assert.ok(methods.includes('Emulation.setUserAgentOverride'));
+  assert.ok(methods.includes('Network.setUserAgentOverride'));
+  assert.ok(methods.includes('Emulation.setLocaleOverride'));
+  assert.ok(!methods.includes('Page.enable'));
+  assert.ok(!methods.includes('Runtime.enable'));
+  assert.ok(!calls.some((args) => args[1] === 'Page.addScriptToEvaluateOnNewDocument'));
+  const uaOverride = calls.find((args) => args[1] === 'Emulation.setUserAgentOverride')?.[2];
+  assert.strictEqual(uaOverride.userAgentMetadata.bitness, '64');
+  assert.strictEqual(uaOverride.userAgentMetadata.architecture, 'x86');
+  const localeOverride = calls.find((args) => args[1] === 'Emulation.setLocaleOverride')?.[2];
+  assert.strictEqual(localeOverride.locale, 'en-US');
+  assert.strictEqual(uaOverride.acceptLanguage, 'en-US,en');
+  console.log('  PASS  native kernel keeps native JS surfaces and fixes only CDP UA-CH/locale metadata');
+
+  const rotatedProfile = {
+    ...nativeProfile,
+    privacy: {
+      ...nativeProfile.privacy,
+      fingerprint: { ...nativeProfile.privacy.fingerprint, seed: 'persistent-rotation-v1' },
+    },
+  };
+  const rotatedA = buildFingerprint(rotatedProfile);
+  const rotatedB = buildFingerprint(rotatedProfile);
+  assert.notStrictEqual(rotatedA.seed, nativeFp.seed);
+  assert.strictEqual(rotatedA.seed, rotatedB.seed);
+  console.log('  PASS  persisted seed rotation changes the device identity without per-launch drift');
 }
 
 main().catch((error) => {

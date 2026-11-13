@@ -1320,6 +1320,18 @@ class BrowserEngine {
     }
   }
 
+  async nativeProtocolCall(item, tab) {
+    if (!item.nativeProtocolConnections) item.nativeProtocolConnections = new Map();
+    let entry = item.nativeProtocolConnections.get(tab.id);
+    if (!entry || entry.url !== tab.webSocketDebuggerUrl || entry.connection?.closed) {
+      entry?.connection?.close();
+      const connection = await cdp.connect(tab.webSocketDebuggerUrl, { timeout: 5000 });
+      entry = { url: tab.webSocketDebuggerUrl, connection };
+      item.nativeProtocolConnections.set(tab.id, entry);
+    }
+    return (method, params = {}, timeout = 6000) => entry.connection.command(method, params, { timeout });
+  }
+
   async applyRuntimeSettings(port, profile, fingerprint = null, options = {}) {
     const phase = String(options.phase || 'applyRuntimeSettings');
     const tabs = await cdp.tabs(port);
@@ -1334,6 +1346,13 @@ class BrowserEngine {
     const fp = fingerprint || buildFingerprint(enriched);
     // Track which CDP page targets already received inject (new tabs must not skip FP)
     const applied = options.appliedTargetIds instanceof Set ? options.appliedTargetIds : new Set();
+    const nativeKernelAuthority = fp.nativeKernelFingerprint === true
+      || fp.consistencyMode === 'native-kernel';
+    const appliedUrls = options.trackOn?.fpAppliedUrls instanceof Map
+      ? options.trackOn.fpAppliedUrls
+      : null;
+    const hasCurrentSurface = (tab) => applied.has(tab.id)
+      && (!nativeKernelAuthority || !appliedUrls || appliedUrls.get(tab.id) === tab.url);
     const blocked = [];
     if (profile.advanced.blockVideo) blocked.push('*.mp4', '*.webm', '*.m3u8', '*.mov', '*.avi');
     const customBlock = String(profile.advanced.blockUrls || '')
@@ -1375,11 +1394,12 @@ class BrowserEngine {
     // live tab already carries the inject there is nothing to do, and logging begin/skip/end
     // each time would burn disk and append tab URLs to the diagnostic log forever.
     // Prune closed targets, keep the tracked state fresh, and return quietly.
-    if (!force && tabs.every((tab) => applied.has(tab.id))) {
+    if (!force && tabs.every(hasCurrentSurface)) {
       const liveIds = new Set(tabs.map((tab) => tab.id));
       for (const id of [...applied]) {
         if (!liveIds.has(id)) applied.delete(id);
       }
+      if (appliedUrls) for (const id of [...appliedUrls.keys()]) if (!liveIds.has(id)) appliedUrls.delete(id);
       if (options.trackOn) {
         options.trackOn.fpAppliedTargets = applied;
         options.trackOn.fingerprint = fp;
@@ -1398,15 +1418,26 @@ class BrowserEngine {
     });
 
     for (const tab of tabs) {
-      if (!force && applied.has(tab.id)) {
+      if (!force && hasCurrentSurface(tab)) {
         await fpLog('inject.skip-tab', { phase, profileId: profile.id, tabId: tab.id, url: tab.url, reason: 'already-applied' });
         continue;
       }
       try {
-        await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched);
+        const nativeCall = nativeKernelAuthority && options.trackOn
+          ? await this.nativeProtocolCall(options.trackOn, tab)
+          : null;
+        const tabCall = nativeCall || ((method, params = {}, timeout = 6000) => (
+          cdp.call(tab.webSocketDebuggerUrl, method, params, timeout)
+        ));
+        await applyFingerprintToTab(
+          nativeCall || cdp.call,
+          nativeCall ? null : tab.webSocketDebuggerUrl,
+          fp,
+          enriched
+        );
         let live = null;
         try {
-          const probe = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+          const probe = await tabCall('Runtime.evaluate', {
             expression: LIVE_PROBE_EXPRESSION,
             returnByValue: true,
           }, 8000);
@@ -1434,8 +1465,14 @@ class BrowserEngine {
           live,
           mismatch,
         });
-        // If probe still shows host hardware, re-evaluate inject once more immediately.
-        if (mismatch && (mismatch.cores || mismatch.webglRenderer || mismatch.memory)) {
+        const hardwareMismatch = Boolean(mismatch
+          && (mismatch.cores || mismatch.webglRenderer || mismatch.memory));
+        // Native kernels intentionally own the hardware surface. Comparing their
+        // selected GPU/RAM against OpenBrowser's separate persona creates a false
+        // failure and re-enables Runtime on every watch tick. Only protocol-level
+        // UA/platform drift is actionable in this mode.
+        if (mismatch && (mismatch.ua || mismatch.platform
+          || (!nativeKernelAuthority && hardwareMismatch))) {
           await fpLog('inject.tab-ineffective', {
             phase,
             profileId: profile.id,
@@ -1443,8 +1480,8 @@ class BrowserEngine {
             mismatch,
           });
           try {
-            await applyFingerprintToTab(cdp.call, tab.webSocketDebuggerUrl, fp, enriched);
-            const probe2 = await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', {
+            await applyFingerprintToTab(nativeCall || cdp.call, nativeCall ? null : tab.webSocketDebuggerUrl, fp, enriched);
+            const probe2 = await tabCall('Runtime.evaluate', {
               expression: LIVE_PROBE_EXPRESSION,
               returnByValue: true,
             }, 8000);
@@ -1455,12 +1492,19 @@ class BrowserEngine {
               tabId: tab.id,
               live: live2,
             });
-            const coresOk = !(fp.hardwareConcurrency != null && live2?.hardwareConcurrency != null
+            const coresOk = nativeKernelAuthority || !(fp.hardwareConcurrency != null && live2?.hardwareConcurrency != null
               && Number(fp.hardwareConcurrency) !== Number(live2.hardwareConcurrency));
-            const webglOk = !(fp.webgl?.renderer && live2?.webglRenderer
+            const memoryOk = nativeKernelAuthority || !(fp.deviceMemory != null && live2?.deviceMemory != null
+              && Number(fp.deviceMemory) !== Number(live2.deviceMemory));
+            const webglOk = nativeKernelAuthority || !(fp.webgl?.renderer && live2?.webglRenderer
               && String(live2.webglRenderer) !== String(fp.webgl.renderer)
               && /Radeon|GeForce|W6800|GTX |RTX /i.test(String(live2.webglRenderer)));
-            if (coresOk && webglOk) applied.add(tab.id);
+            const uaOk = !(fp.userAgent && live2?.userAgent && fp.userAgent !== live2.userAgent);
+            const platformOk = !(fp.platform && live2?.platform && fp.platform !== live2.platform);
+            if (uaOk && platformOk && coresOk && memoryOk && webglOk) {
+              applied.add(tab.id);
+              appliedUrls?.set(tab.id, tab.url);
+            }
             // else leave unmarked so force/post-startpage can try again
           } catch (retryError) {
             await fpLog('inject.tab-retry-fail', {
@@ -1472,6 +1516,7 @@ class BrowserEngine {
           }
         } else {
           applied.add(tab.id);
+        appliedUrls?.set(tab.id, tab.url);
         }
       } catch (error) {
         await fpLog('inject.tab-fail', {
@@ -1488,12 +1533,24 @@ class BrowserEngine {
         }
       }
       if (blocked.length) {
-        await cdp.call(tab.webSocketDebuggerUrl, 'Network.enable');
-        await cdp.call(tab.webSocketDebuggerUrl, 'Network.setBlockedURLs', { urls: blocked });
+        const nativeCall = nativeKernelAuthority && options.trackOn
+          ? await this.nativeProtocolCall(options.trackOn, tab).catch(() => null)
+          : null;
+        const tabCall = nativeCall || ((method, params = {}, timeout = 6000) => (
+          cdp.call(tab.webSocketDebuggerUrl, method, params, timeout)
+        ));
+        await tabCall('Network.enable');
+        await tabCall('Network.setBlockedURLs', { urls: blocked });
       }
       if (portScanScript) {
-        await cdp.call(tab.webSocketDebuggerUrl, 'Page.addScriptToEvaluateOnNewDocument', { source: portScanScript });
-        await cdp.call(tab.webSocketDebuggerUrl, 'Runtime.evaluate', { expression: portScanScript });
+        const nativeCall = nativeKernelAuthority && options.trackOn
+          ? await this.nativeProtocolCall(options.trackOn, tab).catch(() => null)
+          : null;
+        const tabCall = nativeCall || ((method, params = {}, timeout = 6000) => (
+          cdp.call(tab.webSocketDebuggerUrl, method, params, timeout)
+        ));
+        await tabCall('Page.addScriptToEvaluateOnNewDocument', { source: portScanScript });
+        await tabCall('Runtime.evaluate', { expression: portScanScript });
       }
       // applied.add only when probe matched (see above)
     }
@@ -1501,6 +1558,14 @@ class BrowserEngine {
     const liveIds = new Set(tabs.map((t) => t.id));
     for (const id of [...applied]) {
       if (!liveIds.has(id)) applied.delete(id);
+    }
+    if (appliedUrls) for (const id of [...appliedUrls.keys()]) if (!liveIds.has(id)) appliedUrls.delete(id);
+    if (options.trackOn?.nativeProtocolConnections) {
+      for (const [id, entry] of options.trackOn.nativeProtocolConnections) {
+        if (liveIds.has(id) && !entry.connection?.closed) continue;
+        entry.connection?.close();
+        options.trackOn.nativeProtocolConnections.delete(id);
+      }
     }
     if (options.trackOn) {
       options.trackOn.fpAppliedTargets = applied;
@@ -1532,6 +1597,8 @@ class BrowserEngine {
     });
     if (!item.fpAppliedTargets) item.fpAppliedTargets = new Set();
     if (targetInfo?.targetId) item.fpAppliedTargets.add(targetInfo.targetId);
+    if (!item.fpAppliedUrls) item.fpAppliedUrls = new Map();
+    if (targetInfo?.targetId) item.fpAppliedUrls.set(targetInfo.targetId, String(targetInfo.url || ''));
     item.fingerprint = baseFp;
     return injectFp;
   }
@@ -1541,6 +1608,8 @@ class BrowserEngine {
     const browserWs = await cdp.browserSocket(item.port);
     const workerTypes = new Set(['worker', 'shared_worker', 'service_worker']);
     const internalUrl = /^(chrome|chrome-extension|edge|edge-extension|devtools):/i;
+    const nativeKernelAuthority = fingerprint.nativeKernelFingerprint === true
+      || fingerprint.consistencyMode === 'native-kernel';
     const report = (error, targetInfo = {}) => {
       item.workerFingerprintError = error.message;
       this.emit({
@@ -1559,18 +1628,22 @@ class BrowserEngine {
         let timer;
         try {
           if (targetInfo.type === 'page' || targetInfo.type === 'iframe') {
-            const inject = async () => {
+            const configure = async () => {
               await connection.command('Target.setAutoAttach', {
                 autoAttach: true,
                 waitForDebuggerOnStart: true,
                 flatten: true,
               }, { sessionId });
-              // Critical: inject fingerprint BEFORE resuming the target.
-              await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
+              // JS-based fingerprints must be installed before document scripts run.
+              // Native kernels need no JS, and must be configured after resume because
+              // their renderer initialization overwrites pre-resume UA metadata.
+              if (!nativeKernelAuthority) {
+                await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
+              }
             };
             const timeoutMs = this.fingerprintAttachTimeoutMs || 8000;
             await Promise.race([
-              inject(),
+              configure(),
               new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Fingerprint injection timed out')), timeoutMs); }),
             ]);
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
@@ -1605,6 +1678,10 @@ class BrowserEngine {
           clearTimeout(timer);
           if (waitingForDebugger && mayResume) {
             await connection.command('Runtime.runIfWaitingForDebugger', {}, { sessionId })
+              .catch((error) => report(error, targetInfo));
+          }
+          if ((targetInfo.type === 'page' || targetInfo.type === 'iframe') && nativeKernelAuthority && mayResume) {
+            await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger: false })
               .catch((error) => report(error, targetInfo));
           }
         }
@@ -1919,6 +1996,9 @@ class BrowserEngine {
       phase: 'post-startpage',
       force: true,
     });
+    if (injectFp.nativeKernelFingerprint === true || injectFp.consistencyMode === 'native-kernel') {
+      await this.ensureNativeClientHintConsistency(item, profile, injectFp);
+    }
     // Short settle before the first repaint request; the retry below covers a slower boot.
     await sleep(120);
     // Ask welcome page to repaint fingerprint table from spoofed navigator.
@@ -1960,10 +2040,12 @@ class BrowserEngine {
       live = { probeError: String(error.message || error) };
     }
     const intended = summarizeFp(injectFp);
-    const hostLikeWebgl = Boolean(live?.webglRenderer && /Radeon|GeForce|Intel\(R\)|W6800|RX |GTX |RTX /i.test(String(live.webglRenderer)))
+    const nativeKernelAuthority = injectFp.nativeKernelFingerprint === true
+      || injectFp.consistencyMode === 'native-kernel';
+    const hostLikeWebgl = !nativeKernelAuthority && Boolean(live?.webglRenderer && /Radeon|GeForce|Intel\(R\)|W6800|RX |GTX |RTX /i.test(String(live.webglRenderer)))
       && intended?.webglRenderer
       && String(live.webglRenderer) !== String(intended.webglRenderer);
-    const hostLikeCores = intended?.hardwareConcurrency != null
+    const hostLikeCores = !nativeKernelAuthority && intended?.hardwareConcurrency != null
       && live?.hardwareConcurrency != null
       && Number(live.hardwareConcurrency) !== Number(intended.hardwareConcurrency)
       && Number(live.hardwareConcurrency) >= 12;
@@ -2010,6 +2092,96 @@ class BrowserEngine {
       await fpLog('probe.reload-fail', { profileId: profile.id, error: String(error.message || error) });
     }
     return live;
+  }
+
+  async ensureNativeClientHintConsistency(item, profile, fingerprint) {
+    const language = String(fingerprint.languages?.[0] || profile.language || '').trim();
+    const expectedBitness = String(fingerprint.userAgentMetadata?.bitness || '64');
+    const expectedArchitecture = String(fingerprint.userAgentMetadata?.architecture || 'x86');
+    const expression = `(async () => {
+      try {
+        const data = navigator.userAgentData;
+        const hints = data && data.getHighEntropyValues
+          ? await data.getHighEntropyValues(['architecture', 'bitness', 'platformVersion', 'wow64'])
+          : null;
+        return {
+          language: String(navigator.language || ''),
+          languages: Array.from(navigator.languages || []),
+          locale: (() => { try { return Intl.DateTimeFormat().resolvedOptions().locale || ''; } catch (_) { return ''; } })(),
+          architecture: hints?.architecture || '',
+          bitness: hints?.bitness || '',
+          platformVersion: hints?.platformVersion || '',
+        };
+      } catch (error) { return { error: String(error && error.message || error) }; }
+    })()`;
+    const sleep = (ms) => new Promise((resolve) => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
+    const deadline = Date.now() + 6000;
+    let stable = 0;
+    let last = null;
+    let reapplied = false;
+    let lastApplyError = '';
+    const reapply = async (page, call) => {
+      try {
+        await applyFingerprintToTab(call, null, fingerprint, profile);
+        lastApplyError = '';
+      } catch (error) {
+        lastApplyError = String(error.message || error);
+        await fpLog('native-ch-apply-fail', { profileId: profile.id, error: lastApplyError });
+      }
+    };
+    while (Date.now() < deadline) {
+      const tabs = await cdp.tabs(item.port).catch(() => []);
+      const page = tabs[0];
+      if (!page?.webSocketDebuggerUrl) {
+        await sleep(250);
+        continue;
+      }
+      let protocolCall = null;
+      try {
+        protocolCall = await this.nativeProtocolCall(item, page);
+      } catch (error) {
+        lastApplyError = String(error.message || error);
+        await fpLog('native-ch-connect-fail', { profileId: profile.id, error: lastApplyError });
+        await sleep(250);
+        continue;
+      }
+      if (!reapplied && !last) {
+        // The launch target can swap renderer processes after the first CDP pass.
+        await reapply(page, protocolCall);
+        reapplied = true;
+      }
+      try {
+        const probe = await protocolCall('Runtime.evaluate', {
+          expression,
+          awaitPromise: true,
+          returnByValue: true,
+        }, 3000);
+        last = probe?.result?.value || probe?.value || null;
+      } catch (error) {
+        last = { error: String(error.message || error) };
+      }
+      const primary = String(language).split('-')[0].toLowerCase();
+      const languagesOk = !language || (Array.isArray(last?.languages)
+        && last.languages[0]?.toLowerCase() === language.toLowerCase()
+        && last.languages.some((value) => String(value).toLowerCase() === primary));
+      const ok = last
+        && !last.error
+        && last.bitness === expectedBitness
+        && last.architecture === expectedArchitecture
+        && (!language || last.locale?.toLowerCase() === language.toLowerCase())
+        && languagesOk;
+      stable = ok ? stable + 1 : 0;
+      if (stable >= 4) {
+        await fpLog('native-ch-consistency-ok', { profileId: profile.id, live: last });
+        return last;
+      }
+      if (!ok) {
+        await reapply(page, protocolCall);
+      }
+      await sleep(300);
+    }
+    await fpLog('native-ch-consistency-fail', { profileId: profile.id, expected: { language, expectedBitness, expectedArchitecture }, live: last, applyError: lastApplyError || null });
+    return last;
   }
 
   /**
@@ -2299,6 +2471,8 @@ class BrowserEngine {
       this.clearRunningWatch(item);
       item.workerFingerprintConnection?.close();
       item.workerFingerprintConnection = null;
+      for (const entry of item.nativeProtocolConnections?.values() || []) entry.connection?.close();
+      item.nativeProtocolConnections?.clear();
 
       if (options.kill && !isChildExited(item.child) && item.pid) {
         await killProcessTree(item.pid, managedBrowserKillOptions(item, item.root)).catch(() => {});
@@ -3313,8 +3487,10 @@ class BrowserEngine {
       loadedExtensions: reconciled.extensions,
       fingerprint,
       kernelWindowName: kernelWindowName || null,
-      nativeKernelFingerprint: isOpenBrowser148(browser),
-      nativeFingerprintKernel: browser.source === SOURCE_CUSTOM && browser.nativeFingerprint === true,
+      nativeKernelFingerprint,
+      nativeFingerprintKernel: nativeKernelFingerprint,
+      fpAppliedUrls: new Map(),
+      nativeProtocolConnections: new Map(),
       childExitState: childExitState || { exited: isChildExited(child), code: child.exitCode, signal: child.signalCode, error: null },
       lifecycleGeneration,
       cleanupState: 'active',
@@ -3451,6 +3627,14 @@ class BrowserEngine {
             message: 'start-page re-inject: ' + reInjectError.message,
           });
         }
+      } else if (!restoreSession && item.nativeKernelFingerprint) {
+        // The launch target is still swapping its initial WebUI process when the
+        // first CDP pass runs. Reapply after that target settles so the native UA
+        // metadata survives the first web navigation instead of reverting bitness
+        // to the upstream empty value.
+        await this.ensureStartPageFingerprint(item, profile, injectFp, startUrl).catch(async (error) => {
+          await fpLog('start.native-settle-fail', { profileId: profile.id, error: String(error.message || error) });
+        });
       }
       // Brand window title as 环境 N (not generic Chrome)
       await this.applyEnvWindowTitle(item.port, profile).catch(() => {});
@@ -3630,6 +3814,8 @@ class BrowserEngine {
     this.clearRunningWatch(item);
     item.workerFingerprintConnection?.close();
     item.workerFingerprintConnection = null;
+    for (const entry of item.nativeProtocolConnections?.values() || []) entry.connection?.close();
+    item.nativeProtocolConnections?.clear();
     const profile = this.profiles.get(safe) || item.profile || {};
     // Snapshot cookies before close when this env opts into cloud backup (close-time Cookie sync)
     let cookieExport = '';

@@ -137,8 +137,9 @@ function buildFullVersionList(major, fullVersion) {
     if (b.brand === 'Chromium' || b.brand === 'Google Chrome') {
       return { brand: b.brand, version: full };
     }
-    // grease keeps short version
-    return { brand: b.brand, version: b.version };
+    // UserAgentMetadata.fullVersionList uses four-part versions for every
+    // brand, including GREASE. The regular `brands` list keeps the short form.
+    return { brand: b.brand, version: `${b.version}.0.0.0` };
   });
 }
 
