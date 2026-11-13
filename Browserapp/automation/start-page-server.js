@@ -4,14 +4,12 @@ const http = require('http');
 const https = require('https');
 const tls = require('tls');
 const net = require('net');
-const dns = require('dns');
 const crypto = require('crypto');
 const { URL } = require('url');
 const { buildStartPageHtml } = require('./start-page-template');
 const { calculateIpHealthScore } = require('./ip-health-score');
 const { lookupDirectCountry, parseProxy, startAuthenticatedProxy, normalizeTimezoneValue } = require('../proxy-forwarder');
 const { fpLog } = require('./fingerprint-debug-log');
-const dnsPromises = dns.promises;
 
 /**
  * OpenBrowser · 原生启动页服务（纯本机）
@@ -442,36 +440,28 @@ function proxyResolvesRemotely(protocol) {
   return REMOTE_RESOLVING_PROXY_PROTOCOLS.has(scheme);
 }
 
-async function fetchJsonUrl(url, { timeout = 12000, headers = {} } = {}) {
-  const probe = await probeDirect(url, timeout, 200000);
-  if (!probe.ok && !(probe.status >= 200 && probe.status < 500)) {
-    throw new Error(probe.error || ('HTTP ' + (probe.status || 0)));
+async function dnsLeakServiceRequest(proxy, url, timeout = 12000, maxBody = 65536) {
+  const result = proxy
+    ? await probeViaProxy(proxy, url, timeout, maxBody)
+    : await probeDirect(url, timeout, maxBody);
+  if (!result.ok && !(result.status >= 200 && result.status < 500)) {
+    throw new Error(result.error || ('HTTP ' + (result.status || 0)));
   }
-  const text = String(probe.body || '').trim();
-  if (!text) throw new Error('empty response');
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new Error('invalid json response');
-  }
+  return result;
 }
 
-async function resolveDnsLeakProbes(testId, count = 12) {
-  const id = String(testId || '').trim();
-  if (!id) return { resolved: 0, hosts: [] };
-  const indexes = Array.from({ length: count }, (_, i) => i);
-  const hosts = indexes.map((i) => `${i}.${id}.bash.ws`);
-  // Fire unique A lookups so the leak service can observe which resolvers query them.
-  // NXDOMAIN / timeout still count as probes that left this machine.
-  await Promise.all(hosts.map(async (host) => {
-    try {
-      await Promise.race([
-        dnsPromises.lookup(host, { all: true }),
-        sleep(2500).then(() => { throw new Error('timeout'); }),
-      ]);
-    } catch (_) { /* expected for many probes */ }
-  }));
-  return { resolved: hosts.length, hosts };
+async function startDnsLeakProbe(options = {}) {
+  const probeCount = Math.min(20, Math.max(8, Number(options.probeCount) || 12));
+  const idProbe = await dnsLeakServiceRequest(options.proxy, 'https://bash.ws/id', 10000, 4096);
+  const testId = String(idProbe.body || '').trim();
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(testId)) throw new Error('failed to allocate dns leak test id');
+  const hosts = Array.from({ length: probeCount }, (_, i) => `${i}.${testId}.bash.ws`);
+  return {
+    testId,
+    hosts,
+    probeUrls: hosts.map((host) => `http://${host}/?ob=${Date.now()}-${Math.random().toString(36).slice(2)}`),
+    provider: 'openbrowser-browser-dns-probe',
+  };
 }
 
 function summarizeDnsLeak(rows = [], exitNetwork = null, options = {}) {
@@ -544,8 +534,8 @@ function summarizeDnsLeak(rows = [], exitNetwork = null, options = {}) {
     if (remoteResolvingProxy) {
       state = 'info';
       label = '经代理远端解析';
-      detail = regions + '。探测使用应用进程的本机解析路径；浏览器通过 ' + proxyProtocol
-        + ' 代理在代理端解析域名，因此该地区差异本身不构成 DNS 泄露。';
+      detail = regions + '。探测请求由浏览器发起并经 ' + proxyProtocol
+        + ' 代理远端解析；DNS 与出口地区不同通常表示代理商的递归解析器位于其他地区，不是宿主 DNS 泄露。';
     } else {
       state = 'bad';
       label = '可能存在 DNS 泄露';
@@ -591,34 +581,29 @@ function summarizeDnsLeak(rows = [], exitNetwork = null, options = {}) {
 }
 
 /**
- * DNS leak check:
- * 1) request a unique test id from bash.ws
- * 2) resolve N unique subdomains via local resolver path
- * 3) read which DNS servers the service observed
- * 4) compare DNS countries with current exit IP country
- *
- * For proxy profiles, the probe still uses the host resolver path — this is
- * intentional: it surfaces true DNS leaks when the browser/OS bypasses the proxy.
+ * Browser-origin DNS leak check. The start page requests the unique hosts, so
+ * Chromium's real proxy/DNS path is observed. The server only allocates the
+ * test and reads the result through the same proxy.
  */
-async function lookupDnsLeak(options = {}) {
+async function finishDnsLeakProbe(options = {}) {
   const exitNetwork = options.exitNetwork || null;
-  const probeCount = Math.min(20, Math.max(8, Number(options.probeCount) || 12));
+  const testId = String(options.testId || '').trim();
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(testId)) throw new Error('dns leak test id is invalid');
   try {
-    const idProbe = await probeDirect('https://bash.ws/id', 10000, 4096);
-    const testId = String(idProbe.body || '').trim();
-    if (!/^[A-Za-z0-9_-]{6,64}$/.test(testId)) {
-      throw new Error('failed to allocate dns leak test id');
-    }
-    await resolveDnsLeakProbes(testId, probeCount);
-    await sleep(1200);
-    const rows = await fetchJsonUrl(`https://bash.ws/dnsleak/test/${encodeURIComponent(testId)}?json`, {
-      timeout: 15000,
-    });
+    const resultProbe = await dnsLeakServiceRequest(
+      options.proxy,
+      `https://bash.ws/dnsleak/test/${encodeURIComponent(testId)}?json`,
+      15000
+    );
+    let rows;
+    try { rows = JSON.parse(String(resultProbe.body || '').trim()); }
+    catch (_) { throw new Error('dns leak service returned invalid json'); }
     const summary = summarizeDnsLeak(rows, exitNetwork, { proxyProtocol: options.proxyProtocol });
     return {
       ...summary,
       testId,
-      provider: 'openbrowser-dns-probe',
+      probeMode: 'browser',
+      provider: 'openbrowser-browser-dns-probe',
     };
   } catch (error) {
     return {
@@ -635,8 +620,22 @@ async function lookupDnsLeak(options = {}) {
       conclusion: '',
       checkedAt: new Date().toISOString(),
       error: String(error && error.message || error || ''),
+      probeMode: 'browser',
     };
   }
+}
+
+async function lookupDnsLeak(options = {}) {
+  if (options.testId) return finishDnsLeakProbe(options);
+  const started = await startDnsLeakProbe(options);
+  return {
+    ...started,
+    ok: true,
+    state: 'info',
+    label: '等待浏览器探测',
+    detail: '唯一域名必须由当前浏览器通过代理发起，拒绝使用宿主解析器代替浏览器测试。',
+    browserProbeRequired: true,
+  };
 }
 
 function formatTime(ts) {
@@ -671,6 +670,8 @@ class StartPageServer {
     this.engine = options.engine || null;
     this.lookupDirectNetwork = options.lookupDirectNetwork || lookupDirectNetwork;
     this.lookupReachability = options.lookupReachability || lookupReachability;
+    this.startDnsLeakProbe = options.startDnsLeakProbe || startDnsLeakProbe;
+    this.finishDnsLeakProbe = options.finishDnsLeakProbe || finishDnsLeakProbe;
     this.lookupDnsLeak = options.lookupDnsLeak || lookupDnsLeak;
   }
 
@@ -1190,14 +1191,24 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
         }
       }
       try {
-        const data = await this.lookupDnsLeak({
+        const action = String(query.action || 'full');
+        const testId = String(query.testId || '');
+        const profile = this.engine?.profiles?.get?.(String(pid || '')) || null;
+        const proxy = session?.networkMode === 'proxy' ? String(profile?.proxy || '') : '';
+        const probeOptions = {
           exitNetwork: exitNetwork || {
             ip: session?.exitIp || '',
             countryCode: session?.countryCode || '',
             country: '',
           },
           proxyProtocol: session?.proxyProtocol || (session?.networkMode === 'direct' ? 'direct' : ''),
-        });
+          proxy,
+          testId,
+        };
+        let data;
+        if (action === 'start') data = await this.startDnsLeakProbe(probeOptions);
+        else if (action === 'result') data = await this.finishDnsLeakProbe(probeOptions);
+        else data = await this.lookupDnsLeak(probeOptions);
         return this.#json(res, 200, {
           ok: true,
           data,
@@ -1229,7 +1240,7 @@ h1{margin:0 0 12px;font-size:20px}p{margin:8px 0;color:#b7becc}code{color:#93c5f
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'no-store',
-        'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        'Content-Security-Policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' http://*.bash.ws; img-src 'self' data: http://*.bash.ws; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
         'Referrer-Policy': 'no-referrer',
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'DENY',
@@ -1268,6 +1279,8 @@ module.exports = {
   buildStartPageHtml,
   lookupDirectNetwork,
   lookupReachability,
+  startDnsLeakProbe,
+  finishDnsLeakProbe,
   lookupDnsLeak,
   summarizeDnsLeak,
   DEFAULT_PORT,

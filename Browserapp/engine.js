@@ -32,6 +32,7 @@ const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath }
 
 const KERNEL_POLICY_VERSION = 4;
 const PROFILE_ISOLATION_VERSION = 1;
+const PROFILE_HOST_MODE_VERSION = 1;
 const MAX_PROFILE_PROXY_LENGTH = 64 * 1024;
 
 function chromeVersionParts(value) {
@@ -614,6 +615,7 @@ class BrowserEngine {
     let migrateKernelPolicy = false;
     let migrateChromeVersion = false;
     let migrateDeviceIsolation = false;
+    let migrateHostMode = false;
     let recoveredState = false;
     let state = null;
     let primaryStateError = null;
@@ -677,19 +679,13 @@ class BrowserEngine {
           } catch (_) {}
         }
       }
-      const installedKernel = this.kernelManager.resolveInstalled();
-      const kernelVersion = installedKernel?.version || FINGERPRINT_CHROMIUM_VERSION;
-      const isolateDevices = Number(saved.profileIsolationVersion) !== PROFILE_ISOLATION_VERSION;
-      migrateDeviceIsolation ||= isolateDevices;
-      for (const [profileId, profile] of this.profiles) {
-        const isolated = isolateDevices
-          ? alignProfileDeviceIsolation(profile)
-          : { profile, changed: false };
-        const aligned = alignProfileChromeVersion(isolated.profile, kernelVersion);
-        if (!isolated.changed && !aligned.changed) continue;
-        this.profiles.set(profileId, aligned.profile);
-        migrateDeviceIsolation ||= isolated.changed;
-        migrateChromeVersion ||= aligned.changed;
+      // Existing profile identities are persistent. Kernel versions are aligned
+      // at launch; loading state must not rewrite saved OS, UA, or graphics.
+      if (Number(saved.profileHostModeVersion) !== PROFILE_HOST_MODE_VERSION) {
+        for (const [profileId, profile] of this.profiles) {
+          this.profiles.set(profileId, { ...profile, privacy: { ...profile.privacy, matchHostOs: true } });
+        }
+        migrateHostMode = true;
       }
       if (typeof saved.preferIndependentKernel === 'boolean') this.preferIndependentKernel = saved.preferIndependentKernel;
       if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION) {
@@ -720,7 +716,7 @@ class BrowserEngine {
       this.extensions.set(builtIn.id, builtIn);
       await this.persist();
     }
-    if (migrateKernelPolicy || migrateChromeVersion || migrateDeviceIsolation || recoveredState || state?.plaintext) await this.persist();
+    if (migrateKernelPolicy || migrateChromeVersion || migrateDeviceIsolation || migrateHostMode || recoveredState || state?.plaintext) await this.persist();
   }
 
   resolveStoredProxyProfile(incoming) {
@@ -793,6 +789,7 @@ class BrowserEngine {
       profiles: [...this.profiles.values()],
       kernelPolicyVersion: KERNEL_POLICY_VERSION,
       profileIsolationVersion: PROFILE_ISOLATION_VERSION,
+      profileHostModeVersion: PROFILE_HOST_MODE_VERSION,
       preferIndependentKernel: this.preferIndependentKernel,
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
       systemBrowserPath: this.systemBrowserPath,
@@ -1481,6 +1478,9 @@ class BrowserEngine {
   async applyRuntimeSettings(port, profile, fingerprint = null, options = {}) {
     const phase = String(options.phase || 'applyRuntimeSettings');
     const tabs = await cdp.tabs(port);
+    if (options.requireDocumentStart && tabs.length === 0) {
+      throw new Error('没有可注入指纹的浏览器页面');
+    }
     const network = this.networkInfo.get(profile.id) || {};
     // merge IP-detected geo/tz into profile for fingerprint apply
     const enriched = {
@@ -1579,7 +1579,8 @@ class BrowserEngine {
           nativeCall || cdp.call,
           nativeCall ? null : tab.webSocketDebuggerUrl,
           fp,
-          enriched
+          enriched,
+          { requireDocumentStart: options.requireDocumentStart === true }
         );
         let live = null;
         try {
@@ -1674,7 +1675,7 @@ class BrowserEngine {
         });
         // Soft-fail per tab: keep trying other tabs / later phases instead of aborting start.
         const msg = String(error.message || error || '');
-        if (!/Uncaught|already in effect|cannot be overridden|softInject/i.test(msg)) {
+        if (options.requireDocumentStart || !/Uncaught|already in effect|cannot be overridden|softInject/i.test(msg)) {
           throw error;
         }
       }
@@ -1780,12 +1781,9 @@ class BrowserEngine {
                 waitForDebuggerOnStart: true,
                 flatten: true,
               }, { sessionId });
-              // JS-based fingerprints must be installed before document scripts run.
-              // Native kernels need no JS, and must be configured after resume because
-              // their renderer initialization overwrites pre-resume UA metadata.
-              if (!nativeKernelAuthority) {
-                await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
-              }
+              // Configure protocol overrides before execution; native renderers may
+              // reset them during initialization, so also reapply after resume.
+              await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger });
             };
             const timeoutMs = this.fingerprintAttachTimeoutMs || 8000;
             await Promise.race([
@@ -1793,10 +1791,11 @@ class BrowserEngine {
               new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Fingerprint injection timed out')), timeoutMs); }),
             ]);
           } else if (workerTypes.has(targetInfo.type) && !internalUrl.test(String(targetInfo.url || ''))) {
-            await connection.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 10000 });
+            const result = await connection.command('Runtime.evaluate', { expression: source }, { sessionId, timeout: 10000 });
+            if (result?.exceptionDetails) throw new Error('Worker fingerprint injection failed');
           }
         } catch (error) {
-          if ((targetInfo.type === 'page' || targetInfo.type === 'iframe') && waitingForDebugger) {
+          if ((targetInfo.type === 'page' || targetInfo.type === 'iframe' || workerTypes.has(targetInfo.type)) && waitingForDebugger) {
             // Never resume a document whose injection failed or timed out. Close
             // it; if Chromium cannot close this target, stop the browser instead.
             mayResume = false;
@@ -1812,6 +1811,10 @@ class BrowserEngine {
                 expected: false, error: error.message, kill: true, waitForExit: true,
               }).catch((cleanupError) => report(cleanupError, targetInfo));
             }
+          } else if (workerTypes.has(targetInfo.type) && !item.cleanedUp && !item.stopping) {
+            await this.handleBrowserGone(item.profile.id, item, 'fingerprint-injection-failed', {
+              expected: false, error: error.message, kill: true, waitForExit: true,
+            }).catch((cleanupError) => report(cleanupError, targetInfo));
           }
           report(error, targetInfo);
           this.emit({
@@ -1828,7 +1831,14 @@ class BrowserEngine {
           }
           if ((targetInfo.type === 'page' || targetInfo.type === 'iframe') && nativeKernelAuthority && mayResume) {
             await this.applyFingerprintToSession(connection, sessionId, item, fingerprint, { ...targetInfo, waitingForDebugger: false })
-              .catch((error) => report(error, targetInfo));
+              .catch(async (error) => {
+                report(error, targetInfo);
+                if (!item.cleanedUp && !item.stopping) {
+                  await this.handleBrowserGone(item.profile.id, item, 'fingerprint-injection-failed', {
+                    expected: false, error: error.message, kill: true, waitForExit: true,
+                  }).catch((cleanupError) => report(cleanupError, targetInfo));
+                }
+              });
           }
         }
       })();
@@ -2350,8 +2360,7 @@ class BrowserEngine {
       }
     }
     const timezone = resolveExitTimezone(profile, pageNetwork || {});
-    const profileForFingerprint = browserUsesHostConsistency(browser)
-      && profile.privacy?.matchHostOs !== false
+    const profileForFingerprint = profile.privacy?.matchHostOs !== false
       ? hostConsistentProfile(profile)
       : profile;
     const nativeKernelFingerprint = browser?.source === SOURCE_FINGERPRINT_CHROMIUM
@@ -3268,8 +3277,7 @@ class BrowserEngine {
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
     const pageNetwork = this.networkInfo.get(profile.id) || {};
     const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
-    const profileForFingerprint = browserUsesHostConsistency(browser)
-      && profile.privacy?.matchHostOs !== false
+    const profileForFingerprint = profile.privacy?.matchHostOs !== false
       ? hostConsistentProfile(profile)
       : profile;
     const nativeKernelFingerprint = browser.source === SOURCE_FINGERPRINT_CHROMIUM
@@ -3385,6 +3393,7 @@ class BrowserEngine {
           id: profile.id,
           message: '内核 init 指纹同步失败：' + error.message,
         });
+        throw new Error('内核指纹初始化失败：' + error.message);
       }
     }
     if (!profile.advanced.allowSignin) args.push('--disable-sync');
@@ -3418,6 +3427,13 @@ class BrowserEngine {
       const existingBypass = args.findIndex((a) => a.startsWith('--proxy-bypass-list='));
       if (existingBypass >= 0) args[existingBypass] = '--proxy-bypass-list=' + bypass;
       else args.push(`--proxy-bypass-list=${bypass}`);
+      if (profile.networkMode === 'proxy' && proxyConfig && proxy !== 'direct://') {
+        // Explicit HTTP/SOCKS proxies carry origin hostnames to the remote
+        // resolver. Disable speculative DNS paths that can query the host
+        // resolver before the proxy has a chance to handle the request.
+        args.push('--dns-prefetch-disable');
+        disabledFeatures.push('PreconnectToSearch');
+      }
     }
     // Startup URLs: do NOT put the OpenBrowser start page (or first custom URL) on the
     // CLI. The process would paint and run collectFingerprint before CDP inject.
@@ -3425,18 +3441,14 @@ class BrowserEngine {
     if (!restoreSession) {
       if (startUrl) args.push('about:blank');
       else if (customStartUrls.length) args.push('about:blank');
-      for (const extra of customStartUrls.slice(1)) args.push(extra);
     }
     // Cross-platform process overhead reducers (safe for multi-profile fleets).
     // Applied for all envs — not only proxied ones — so Win/mac idle CPU stays low.
     const perfFlags = [
-      '--disable-component-update',
       '--disable-default-apps',
-      '--disable-client-side-phishing-detection',
       '--disable-domain-reliability',
       '--disable-breakpad',
       '--disable-hang-monitor',
-      '--disable-ipc-flooding-protection',
       '--metrics-recording-only',
       '--no-pings',
     ];
@@ -3717,12 +3729,12 @@ class BrowserEngine {
         logFile: fingerprintLogPath(),
       });
       this.emitStartProgress(profile.id, 'inject', 88, '正在注入指纹与运行时…');
-      // Pre-inject is best-effort: must NEVER block start-page navigation.
       try {
         item.fingerprint = await this.applyRuntimeSettings(item.port, profile, injectFp, {
           appliedTargetIds: item.fpAppliedTargets,
           trackOn: item,
           phase: 'pre-startpage',
+          requireDocumentStart: true,
         }) || fingerprint;
       } catch (preInjectError) {
         item.fingerprint = fingerprint;
@@ -3735,6 +3747,7 @@ class BrowserEngine {
           id: profile.id,
           message: 'pre-startpage inject: ' + preInjectError.message,
         });
+        throw preInjectError;
       }
       // Keep reported modes as profile intent (not the stripped inject payload)
       if (item.nativeKernelFingerprint && fingerprint) {
@@ -3754,8 +3767,8 @@ class BrowserEngine {
         item.workerFingerprintError = error.message;
         await fpLog('worker.inject-fail', { profileId: profile.id, error: String(error.message || error) });
         this.emit({ type: 'worker-fingerprint-injection-failed', id: profile.id, message: error.message });
+        throw error;
       });
-      // Always open the welcome/start page (even if inject failed).
       if (!restoreSession && startUrl) {
         await fpLog('start.navigate-startpage', { profileId: profile.id, startUrl });
         try {
@@ -3782,6 +3795,11 @@ class BrowserEngine {
           await fpLog('start.native-settle-fail', { profileId: profile.id, error: String(error.message || error) });
         });
       }
+      if (!restoreSession) {
+        for (const url of customStartUrls.slice(1)) {
+          await item.workerFingerprintConnection.command('Target.createTarget', { url });
+        }
+      }
       // Brand window title as 环境 N (not generic Chrome)
       await this.applyEnvWindowTitle(item.port, profile).catch(() => {});
       await fpLog('start.done', {
@@ -3792,13 +3810,7 @@ class BrowserEngine {
     } catch (error) {
       item.cdpError = error.message;
       await fpLog('start.fail', { profileId: profile.id, error: String(error.message || error) });
-      // Last chance: still try to open start page so UI is not stuck on about:blank.
-      if (!restoreSession && startUrl && item.port) {
-        try {
-          await this.keepDefaultTab(item.port, startUrl);
-          await fpLog('start.navigate-after-fail', { profileId: profile.id, startUrl });
-        } catch (_) {}
-      }
+      throw error;
     }
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
     if (this.running.get(profile.id) !== item || item.cleanedUp || item.stopping) {

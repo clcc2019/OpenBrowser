@@ -659,6 +659,7 @@ function hostConsistentProfile(profile = {}) {
     'userAgent', 'os', 'platform', 'architecture', 'platformVersion', 'platform_version',
     'clientHints', 'uaFullVersion', 'ua_full_version', 'fullVersion', 'bitness', 'mobile', 'wow64', 'model',
     'webglVendor', 'webglRenderer', 'webgl', 'webgpu', 'gpuVendor', 'gpuArchitecture', 'vendor', 'chromeMajor',
+    'canvas', 'audio', 'clientRects', 'mediaDevices', 'speech', 'battery', 'deviceNameMode', 'deviceName', 'webrtc',
   ];
   for (const field of platformFields) delete input[field];
   input.webglMeta = 'real';
@@ -777,9 +778,9 @@ function buildFingerprint(profile = {}) {
   const persistedSeed = String(profile.fingerprintSeed || fpIn.seed || '').trim();
   const launchSeed = String(profile.fingerprintLaunchSeed || '').trim();
   const seed = hashSeed(
-    persistedSeed
-      ? `${stableIdentity}:persisted:${persistedSeed}`
-      : (launchSeed ? `${stableIdentity}:${launchSeed}` : stableIdentity)
+    launchSeed
+      ? `${stableIdentity}:${launchSeed}`
+      : (persistedSeed ? `${stableIdentity}:persisted:${persistedSeed}` : stableIdentity)
   );
   const rnd = mulberry32(u32(seed, 0));
 

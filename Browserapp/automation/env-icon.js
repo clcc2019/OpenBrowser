@@ -870,9 +870,6 @@ PY
   fi
 fi
 
-[[ "\$HAS_NO_SANDBOX" -eq 0 ]] && EXTRA+=(--no-sandbox)
-[[ "\$HAS_MOCK" -eq 0 ]] && EXTRA+=(--use-mock-keychain)
-[[ "\$HAS_REMOTE" -eq 0 ]] && EXTRA+=(--remote-allow-origins=*)
 [[ "\$HAS_DDE" -eq 0 ]] && EXTRA+=(--do-not-de-elevate)
 
 # IPC stub detached (survives exec); next launch re-binds the same sockets

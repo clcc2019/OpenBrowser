@@ -9,19 +9,30 @@ const HOST_PROFILE_OS = (() => {
   return 'Linux';
 })();
 const DEFAULT_PROFILE_OS = HOST_PROFILE_OS;
-// Fingerprint Chromium only applies its native GPU metadata persona when the
-// claimed platform differs from the host. New isolated profiles therefore use
-// the other desktop platform by default; users can still choose any OS.
-const DEFAULT_PERSONA_OS = HOST_PROFILE_OS === 'Windows' ? 'Linux' : 'Windows';
+const DEFAULT_PERSONA_OS = HOST_PROFILE_OS;
 const DEFAULT_CHROME_MAJOR = 150;
 const DEFAULT_CHROME_FULL_VERSION = `${DEFAULT_CHROME_MAJOR}.0.0.0`;
 const PROFILE_OS_MIGRATION_KEY = 'openbrowser-profile-os-migration-v2';
 const PROFILE_CHROME_MIGRATION_KEY = 'openbrowser-profile-chrome-major-v2';
 const PROFILE_DEVICE_ISOLATION_MIGRATION_KEY = 'openbrowser-profile-device-isolation-v1';
+const PROFILE_HOST_MODE_MIGRATION_KEY = 'openbrowser-profile-host-mode-v1';
 const PROFILE_PLATFORM_FINGERPRINT_FIELDS = [
   'userAgent', 'os', 'platform', 'architecture', 'platformVersion', 'platform_version',
   'clientHints', 'uaFullVersion', 'ua_full_version', 'fullVersion', 'bitness', 'mobile', 'wow64', 'model',
 ];
+
+function newNativeFingerprintPrivacy() {
+  const bytes = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(bytes);
+  const seed = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  return {
+    matchHostOs: true, deviceProfile: 'default',
+    canvas: 'real', webgl: 'real', webglMeta: 'real', webgpu: 'real',
+    audio: 'real', clientRects: 'real', media: 'real', mediaDevices: 'real',
+    battery: 'real', speech: 'real', deviceNameMode: 'real', webrtc: 'proxy',
+    fingerprint: { seed },
+  };
+}
 
 function t(key, params) {
   return window.OpenBrowserI18n?.t?.(key, params) ?? key;
@@ -276,7 +287,7 @@ function defaultGroups() {
 }
 
 const defaultProfiles = () => [
-  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PERSONA_OS, location: 'Local', userAgent: defaultUserAgentForProfile({ os: DEFAULT_PERSONA_OS }), privacy: { matchHostOs: false, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'blocked', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } },
+  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PERSONA_OS, location: 'Local', userAgent: '', privacy: newNativeFingerprintPrivacy() },
 ];
 
 function positiveProfileNumber(value) {
@@ -487,12 +498,11 @@ function cloneProfilePreferences(profile) {
   const value = normalizeProfileSettings(profile);
   const privacy = structuredClone(value.privacy || {});
   const chromeMajor = Number(privacy.fingerprint?.chromeMajor) || DEFAULT_CHROME_MAJOR;
-  // Preferences may be shared, but an anti-detect identity must not be duplicated.
-  // The new profile id deterministically creates its own marks/snapshots on first start.
+  // A copied environment keeps preferences but gets an independent stable seed.
   delete privacy.fingerprint;
   delete privacy.batterySnapshot;
   delete privacy.mediaLabels;
-  privacy.fingerprint = { chromeMajor };
+  privacy.fingerprint = { chromeMajor, seed: newNativeFingerprintPrivacy().fingerprint.seed };
   return {
     os: value.os,
     userAgent: value.userAgent,
@@ -3760,7 +3770,7 @@ async function copyProfile(id) {
   const number = nextProfileNumber(); const previousNext = ui.nextProfileNumber;
   const copy = JSON.parse(JSON.stringify(source));
   const preferences = cloneProfilePreferences(source);
-  if (Object.values(preferences.privacy).includes('noise') || preferences.privacy.deviceProfile === 'default') copy.privacy = preferences.privacy;
+  copy.privacy = preferences.privacy;
   Object.assign(copy, { id: createInternalProfileId(number), number, name: String(number), cookies: '', updatedAt: new Date().toISOString() });
   for (const key of ['exitIp', 'exitCountryCode', 'exitTimezone', 'exitLatitude', 'exitLongitude', 'exitCheckedAt', 'exitLatencyMs', 'exitNetworkType']) delete copy[key];
   ui.profiles.push(copy); ui.nextProfileNumber = number + 1; save();
@@ -4755,11 +4765,11 @@ $('#profile-form').addEventListener('submit', async (event) => {
     groupId,
     os: DEFAULT_PERSONA_OS,
     location: 'Local',
-    userAgent: defaultUserAgentForProfile({ os: DEFAULT_PERSONA_OS }),
+    userAgent: '',
     platform: { type: 'other', startUrl },
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
     // New profiles use host-consistent surfaces; existing settings are preserved.
-    privacy: { matchHostOs: false, languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'blocked', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } },
+    privacy: { ...newNativeFingerprintPrivacy(), languageMode: 'ip', langFromIp: true, uiLanguage: 'profile' },
   };
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
   try {
@@ -4942,7 +4952,9 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
-    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : { userAgent: defaultUserAgentForProfile({ os: DEFAULT_PERSONA_OS }), privacy: { matchHostOs: false, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'blocked', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } }), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PERSONA_OS, location: 'Local', cookies: '' });
+    const preferences = templatePreferences ? structuredClone(templatePreferences) : { userAgent: '', privacy: newNativeFingerprintPrivacy() };
+    if (templatePreferences) preferences.privacy.fingerprint.seed = newNativeFingerprintPrivacy().fingerprint.seed;
+    created.push({ ...preferences, id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PERSONA_OS, location: 'Local', cookies: '' });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];
@@ -5467,12 +5479,18 @@ function updateEngineBadge(info) {
 }
 
 async function initialize() {
-  const migrateExistingProfiles = profileOsMigrationPending();
-  const migrateExistingChromeVersions = profileChromeMigrationPending();
-  const migrateDeviceIsolation = profileDeviceIsolationMigrationPending();
-  if (migrateExistingProfiles) ui.profiles = migrateProfilesToHostOS(ui.profiles);
-  if (migrateDeviceIsolation) ui.profiles = migrateProfilesToDeviceIsolation(ui.profiles);
-  if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToKernelChromeVersion(ui.profiles);
+  let migrateHostMode = true;
+  try { migrateHostMode = localStorage.getItem(PROFILE_HOST_MODE_MIGRATION_KEY) !== '1'; } catch (_) {}
+  const useHostMode = (profile) => ({
+    ...profile,
+    privacy: {
+      ...(profile.privacy || {}), matchHostOs: true, deviceProfile: 'default',
+      canvas: 'real', webgl: 'real', webglMeta: 'real', webgpu: 'real',
+      audio: 'real', clientRects: 'real', media: 'real', mediaDevices: 'real',
+      battery: 'real', speech: 'real', deviceNameMode: 'real', webrtc: 'proxy',
+    },
+  });
+  if (migrateHostMode) ui.profiles = ui.profiles.map(useHostMode);
   refreshLocaleChrome();
   const info = await window.ops.getInfo();
   const appVersion = document.getElementById('app-version');
@@ -5532,14 +5550,12 @@ async function initialize() {
       }
     }
   } catch (_) {}
-  if (migrateExistingProfiles) ui.profiles = migrateProfilesToHostOS(ui.profiles);
-  if (migrateDeviceIsolation) ui.profiles = migrateProfilesToDeviceIsolation(ui.profiles);
-  if (migrateExistingChromeVersions) ui.profiles = migrateProfilesToKernelChromeVersion(ui.profiles);
+  if (migrateHostMode) ui.profiles = ui.profiles.map(useHostMode);
   save();
   engineProfiles = await window.ops.syncProfiles(ui.profiles);
-  if (migrateExistingProfiles) markProfileOsMigrationComplete();
-  if (migrateExistingChromeVersions) markProfileChromeMigrationComplete();
-  if (migrateDeviceIsolation) markProfileDeviceIsolationMigrationComplete();
+  if (migrateHostMode) {
+    try { localStorage.setItem(PROFILE_HOST_MODE_MIGRATION_KEY, '1'); } catch (_) {}
+  }
   await refreshExtensions(); await refreshSessions(); renderProfiles(); renderLogs();
   log('System', readyBrowserLog(info));
   switchView(document.querySelector('.view.active')?.id?.replace(/^view-/, '') || 'profiles');
@@ -5575,7 +5591,7 @@ $('#batch-import-file').addEventListener('change', async (event) => {
   try {
     const extension = file.name.toLowerCase().endsWith('.json') ? 'json' : 'csv'; const imported = parseImportedProfiles(await file.text(), extension);
     const start = nextProfileNumber(); const used = new Set(ui.profiles.map((item) => item.id));
-    const normalized = imported.map((item, index) => { const number = start + index; const id = createInternalProfileId(number, used); used.add(id); return { id, number, name: String(number), browser: 'Google Chrome', language: String(item.language || 'en-US'), proxy: String(item.proxy || item.ip || 'Direct'), proxyType: String(item.proxyType || item.proxytype || ''), exitIp: String(item.exitIp || item.ip || ''), exitCountryCode: String(item.exitCountryCode || item.countrycode || ''), tag: String(item.tag || item.group || 'Imported'), os: DEFAULT_PROFILE_OS, userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } }, location: String(item.location || 'Local') }; });
+    const normalized = imported.map((item, index) => { const number = start + index; const id = createInternalProfileId(number, used); used.add(id); return { id, number, name: String(number), browser: 'Google Chrome', language: String(item.language || 'en-US'), proxy: String(item.proxy || item.ip || 'Direct'), proxyType: String(item.proxyType || item.proxytype || ''), exitIp: String(item.exitIp || item.ip || ''), exitCountryCode: String(item.exitCountryCode || item.countrycode || ''), tag: String(item.tag || item.group || 'Imported'), os: DEFAULT_PROFILE_OS, userAgent: '', privacy: newNativeFingerprintPrivacy(), location: String(item.location || 'Local') }; });
     ui.profiles.push(...normalized); ui.nextProfileNumber = start + normalized.length; save(); engineProfiles = await window.ops.syncProfiles(ui.profiles); renderProfiles(); log('Import', '\u6279\u91cf\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883'); toast('\u5df2\u5bfc\u5165 ' + normalized.length + ' \u4e2a\u73af\u5883');
   } catch (error) { ui.profiles = ui.profiles.slice(0, previousLength); ui.nextProfileNumber = previousNext; save(); toast('\u5bfc\u5165\u5931\u8d25\uff1a' + error.message); }
   event.target.value = '';

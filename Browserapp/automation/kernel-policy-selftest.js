@@ -28,6 +28,7 @@ const {
   SOURCE_CHROME_STABLE,
   SOURCE_CUSTOM,
   SOURCE_FINGERPRINT_CHROMIUM,
+  PINNED_FINGERPRINT_CHROMIUM_RELEASE,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
 
@@ -103,6 +104,11 @@ async function main() {
     console.log('  PASS  user-downloaded Chrome Stable overrides a legacy bundled CFT kernel');
 
     const downloadManager = new BrowserKernelManager(path.join(root, 'download-user-data'));
+    if ((process.platform === 'linux' || process.platform === 'win32') && process.arch === 'x64') {
+      const release = await downloadManager.fetchFingerprintChromiumRelease();
+      assert.strictEqual(release.version, PINNED_FINGERPRINT_CHROMIUM_RELEASE.version);
+      assert.ok(PINNED_FINGERPRINT_CHROMIUM_RELEASE.assets.some((asset) => asset.digest === release.asset.digest));
+    }
     let requestedRelease = null;
     downloadManager.fetchFingerprintChromiumRelease = async () => ({
       version: '150.0.7871.186',

@@ -25,7 +25,6 @@ const {
   CURRENT_VERSION: FINGERPRINT_CHROMIUM_VERSION,
   RELEASES_API: FINGERPRINT_CHROMIUM_RELEASES_API,
   PINNED_RELEASE: PINNED_FINGERPRINT_CHROMIUM_RELEASE,
-  normalizeFingerprintRelease,
   selectFingerprintAsset,
   sha256Digest,
 } = require('./fingerprint-chromium');
@@ -1463,17 +1462,8 @@ class BrowserKernelManager {
   }
 
   async fetchFingerprintChromiumRelease() {
-    this.onProgress({ phase: 'meta', message: '查询 Fingerprint Chromium 最新版本…' });
-    let release = PINNED_FINGERPRINT_CHROMIUM_RELEASE;
-    try {
-      release = normalizeFingerprintRelease(await fetchJson(FINGERPRINT_CHROMIUM_RELEASES_API));
-    } catch (error) {
-      this.onProgress({
-        phase: 'meta',
-        message: `无法查询最新版，使用已审计版本 ${FINGERPRINT_CHROMIUM_VERSION}：${error.message || error}`,
-        version: FINGERPRINT_CHROMIUM_VERSION,
-      });
-    }
+    const release = PINNED_FINGERPRINT_CHROMIUM_RELEASE;
+    this.onProgress({ phase: 'meta', message: `使用固定 Fingerprint Chromium ${FINGERPRINT_CHROMIUM_VERSION} 和 SHA-256`, version: FINGERPRINT_CHROMIUM_VERSION });
     const asset = selectFingerprintAsset(release);
     if (!asset) {
       throw new Error(`Fingerprint Chromium ${release.version} 没有当前平台资产：${process.platform}/${process.arch}`);
