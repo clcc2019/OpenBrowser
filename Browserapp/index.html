@@ -360,7 +360,7 @@
                 <div class="settings-row"><span>系统平台</span>
                   <select id="editor-os"><option value="macOS">macOS</option><option value="Windows">Windows</option><option value="Linux">Linux</option></select>
                 </div>
-                <label class="check-row"><input id="editor-match-host-os" type="checkbox" checked> 跟随本机系统（推荐，保持 GPU、字体与平台一致）</label>
+                <label class="check-row"><input id="editor-match-host-os" type="checkbox"> 跟随本机系统（关闭后使用设备 persona）</label>
                 <label class="check-row"><input id="editor-refresh-fingerprint" type="checkbox"> 每次打开刷新指纹</label>
                 <label>User-Agent
                   <textarea id="editor-user-agent" rows="2" placeholder="留空 = 按环境 ID 自动生成"></textarea>
@@ -1162,7 +1162,7 @@
   <div><h2 data-i18n="system.nav.runtime">浏览器运行时</h2><p data-i18n="system.group.runtime.desc">管理独立内核、运行参数与能力状态。</p></div>
 </div>
 <article class="storage-settings-card settings-span-full" id="kernel-settings-card">
-  <div class="storage-settings-head"><div><h3>独立浏览器内核</h3><p>优先使用安装包内置内核；点击下载时使用 <strong>Google Chrome Stable</strong> 正式包。平台目录：<code>kernels/macos-x64</code> · <code>kernels/windows-x64</code> · <code>kernels/macos-arm64</code> · <code>kernels/chrome-stable</code>。</p></div><span id="kernel-status-badge">检测中</span></div>
+  <div class="storage-settings-head"><div><h3>独立浏览器内核</h3><p>默认使用 <strong>Fingerprint Chromium</strong> 原生指纹内核，自动检查上游版本并校验 SHA-256。当前固定支持 Chrome 150 起的 Linux x64 / Windows x64 发布包。</p></div><span id="kernel-status-badge">检测中</span></div>
   <div class="settings-kernel-paths">
     <div class="storage-path-box"><small>内核路径</small><code id="kernel-path">—</code></div>
     <div class="storage-path-box"><small>版本 / 来源</small><code id="kernel-version">—</code></div>
@@ -1171,15 +1171,15 @@
     <div class="storage-path-box"><small>内核通道</small><code id="kernel-channel">Google Chrome Stable</code></div>
   </div>
   <div class="storage-actions" style="margin-top:12px">
-    <button class="primary" id="kernel-download" type="button">下载 Chrome Stable</button>
-    <button class="outline" id="kernel-check-update" type="button">检查 Stable 版本</button>
+    <button class="primary" id="kernel-download" type="button">下载 / 更新指纹内核</button>
+    <button class="outline" id="kernel-check-update" type="button">检查指纹内核更新</button>
     <button class="outline" id="kernel-choose" type="button">选择自定义内核</button>
     <button class="outline" id="kernel-refresh" type="button">刷新状态</button>
   </div>
   <label class="check-row" style="margin-top:12px;display:flex;gap:8px;align-items:center"><input id="kernel-prefer-independent" type="checkbox" checked> 优先使用独立内核（推荐）</label>
   <label class="check-row" style="margin-top:6px;display:flex;gap:8px;align-items:center"><input id="kernel-allow-system" type="checkbox"> 允许手动回退到本机浏览器（默认关闭）</label>
   <label class="settings-select-row"><span>手动选择回退浏览器（Windows 可选 Chrome 或 Edge）</span><select id="kernel-system-browser"><option value="">未选择</option></select></label>
-  <p class="storage-warning" id="kernel-progress">点击下载会获取 Google Chrome Stable 正式包并校验，不使用 Chrome for Testing 包。默认不会自动回退到本机浏览器。</p>
+  <p class="storage-warning" id="kernel-progress">点击下载会获取 adryfish/fingerprint-chromium 最新发布包，校验版本、平台和 SHA-256。默认不会自动回退到本机浏览器。</p>
 </article>
 <article class="storage-settings-card settings-diagnostic-card" id="runtime-card">
   <h3 data-i18n="system.runtime">运行时</h3>

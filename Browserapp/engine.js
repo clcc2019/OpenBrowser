@@ -21,7 +21,7 @@ const { ProfileStoreSqlite } = require('./automation/profile-store-sqlite');
 const { LAUNCH_WINDOW_SIZE, buildFingerprint, hostConsistentProfile, fingerprintChromiumArgs, buildWorkerInjectionScript, chromeArgsForFingerprint, applyFingerprintToTab, parseCoordinates } = require('./automation/fingerprint');
 const isolation = require('./automation/isolation');
 const { lockPath, acquireProfileLock, updateProfileLock, releaseProfileLock, scanProcessesUsingProfile, isPidAlive, auditIsolation, isSystemBrowserExecutable, isPathInsideOrEqual, validateDataRootIsolationSecure, validateProfileRootSecure, assertProfileId, assertSafeProfileChild } = isolation;
-const { BrowserKernelManager, ensureKernelReadyForLaunch, SOURCE_CHROME_STABLE, SOURCE_CFT, SOURCE_CUSTOM } = require('./automation/browser-kernel');
+const { BrowserKernelManager, ensureKernelReadyForLaunch, SOURCE_CHROME_STABLE, SOURCE_CFT, SOURCE_CUSTOM, SOURCE_FINGERPRINT_CHROMIUM } = require('./automation/browser-kernel');
 const { ensureStartPageServer, getStartPageServer } = require('./automation/start-page-server');
 const {
   isOpenBrowser148,
@@ -2036,10 +2036,13 @@ class BrowserEngine {
       && profile.privacy?.matchHostOs !== false
       ? hostConsistentProfile(profile)
       : profile;
+    const nativeKernelFingerprint = browser?.source === SOURCE_FINGERPRINT_CHROMIUM
+      && browser?.nativeFingerprint === true;
     const fpForStart = (() => {
       try {
         return buildFingerprint({
           ...profileForFingerprint,
+          nativeKernelFingerprint,
           kernelVersion: profile.kernelVersion || this.browserSelection()?.browser?.version,
           exitTimezone: timezone,
           exitLatitude: pageNetwork?.latitude ?? profile.exitLatitude,
@@ -2949,8 +2952,11 @@ class BrowserEngine {
       && profile.privacy?.matchHostOs !== false
       ? hostConsistentProfile(profile)
       : profile;
+    const nativeKernelFingerprint = browser.source === SOURCE_FINGERPRINT_CHROMIUM
+      && browser.nativeFingerprint === true;
     const fingerprint = buildFingerprint({
       ...profileForFingerprint,
+      nativeKernelFingerprint,
       fingerprintLaunchSeed: allowSeedRefresh ? crypto.randomBytes(16).toString('hex') : '',
       kernelVersion: browser.version,
       exitTimezone: resolveExitTimezone(profile, pageNetwork),
@@ -3020,7 +3026,8 @@ class BrowserEngine {
     if (disableVulkanOnWayland()) args.push('--disable-vulkan');
     // Fingerprint chrome flags (UA / webrtc / webgl / lang / window-size)
     args = mergeLaunchArgs(args, chromeArgsForFingerprint(fingerprint, profileForFingerprint));
-    if (browser.source === SOURCE_CUSTOM && browser.nativeFingerprint === true) {
+    if ((browser.source === SOURCE_CUSTOM || browser.source === SOURCE_FINGERPRINT_CHROMIUM)
+      && browser.nativeFingerprint === true) {
       args = mergeLaunchArgs(args, fingerprintChromiumArgs(fingerprint, profileForFingerprint, {
         kernelVersion: browser.version,
         timezone: resolveExitTimezone(profile, pageNetwork),

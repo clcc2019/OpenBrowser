@@ -9,6 +9,10 @@ const HOST_PROFILE_OS = (() => {
   return 'Linux';
 })();
 const DEFAULT_PROFILE_OS = HOST_PROFILE_OS;
+// Fingerprint Chromium only applies its native GPU metadata persona when the
+// claimed platform differs from the host. New isolated profiles therefore use
+// the other desktop platform by default; users can still choose any OS.
+const DEFAULT_PERSONA_OS = HOST_PROFILE_OS === 'Windows' ? 'Linux' : 'Windows';
 const DEFAULT_CHROME_MAJOR = 157;
 const DEFAULT_CHROME_FULL_VERSION = `${DEFAULT_CHROME_MAJOR}.0.0.0`;
 const PROFILE_OS_MIGRATION_KEY = 'openbrowser-profile-os-migration-v2';
@@ -271,7 +275,7 @@ function defaultGroups() {
 }
 
 const defaultProfiles = () => [
-  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PROFILE_OS, location: 'Local', userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: true, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } },
+  { id: 'env-001', number: 1, name: '1', browser: 'Google Chrome', language: 'zh-CN', networkMode: 'direct', proxy: 'Direct', tag: '', groupId: 'grp-default', os: DEFAULT_PERSONA_OS, location: 'Local', userAgent: defaultUserAgentForProfile({ os: DEFAULT_PERSONA_OS }), privacy: { matchHostOs: false, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'blocked', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } },
 ];
 
 function positiveProfileNumber(value) {
@@ -4682,13 +4686,13 @@ $('#profile-form').addEventListener('submit', async (event) => {
     proxy,
     tag: String(data.get('tag') || 'Default'),
     groupId,
-    os: DEFAULT_PROFILE_OS,
+    os: DEFAULT_PERSONA_OS,
     location: 'Local',
-    userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }),
+    userAgent: defaultUserAgentForProfile({ os: DEFAULT_PERSONA_OS }),
     platform: { type: 'other', startUrl },
     // Browser UI language defaults to exit-IP country; fixed locale is optional in editor.
     // New profiles use host-consistent surfaces; existing settings are preserved.
-    privacy: { matchHostOs: true, languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } },
+    privacy: { matchHostOs: false, languageMode: 'ip', langFromIp: true, uiLanguage: 'profile', deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'blocked', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } },
   };
   ui.profiles.push(profile); ui.nextProfileNumber = number + 1; save();
   try {
@@ -4871,7 +4875,7 @@ $('#batch-add-form').addEventListener('submit', async (event) => {
   const used = new Set(ui.profiles.map((item) => item.id)); const created = [];
   while (created.length < count) {
     const number = start + created.length; const id = createInternalProfileId(number, used); used.add(id);
-    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : { userAgent: defaultUserAgentForProfile({ os: DEFAULT_PROFILE_OS }), privacy: { matchHostOs: true, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'real', webgpu: 'real', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } }), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PROFILE_OS, location: 'Local', cookies: '' });
+    created.push({ ...(templatePreferences ? structuredClone(templatePreferences) : { userAgent: defaultUserAgentForProfile({ os: DEFAULT_PERSONA_OS }), privacy: { matchHostOs: false, deviceProfile: 'persona', personaVersion: 5, webglMeta: 'noise', webgpu: 'blocked', fingerprint: { chromeMajor: DEFAULT_CHROME_MAJOR } } }), id, number, name: String(number), title: '', browser: 'Google Chrome', language, networkMode: proxies.length ? 'proxy' : 'direct', proxy: proxies.length ? proxies[created.length] : 'Direct', tag, groupId, os: templatePreferences?.os || DEFAULT_PERSONA_OS, location: 'Local', cookies: '' });
   }
   try {
     const verified = proxies.length ? await verifyProxyAssignments(created, proxies) : [];
@@ -6453,6 +6457,7 @@ window.ops.onEvent((value) => {
 
 // ========== Independent browser kernel — Donut Wayfern channel ==========
 function kernelSourceLabel(source) {
+  if (source === 'fingerprint-chromium') return 'Fingerprint Chromium';
   if (source === 'donut-wayfern') return 'Donut Wayfern';
   if (source === 'chrome-stable') return 'Google Chrome Stable';
   if (source === 'chrome-for-testing') return 'Chrome for Testing';
@@ -6485,12 +6490,12 @@ async function refreshKernelPanel() {
       const remote = st.meta?.remoteVersion;
       verEl.textContent = k
         ? `${k.version || '—'} · ${kernelSourceLabel(k.source)}${remote && remote !== k.version ? tx(' · 远端 ') + remote : ''}`
-        : tx('点击下方下载 Google Chrome Stable');
+        : tx('点击下方下载指纹内核');
     }
     if (channelEl) {
       channelEl.textContent = st.channel
         ? [st.channel.name, st.channel.metaUrl].filter(Boolean).join(' · ')
-        : 'Google Chrome Stable';
+        : 'Fingerprint Chromium';
     }
     const selection = info.kernelSelection;
     if (activePathEl) activePathEl.textContent = selection?.browser?.path || selection?.message || tx('未选择可执行文件');
@@ -6525,8 +6530,8 @@ document.getElementById('kernel-download')?.addEventListener('click', async () =
   const btn = document.getElementById('kernel-download');
   try {
     if (btn) btn.disabled = true;
-    if (progress) progress.textContent = tx('正在准备 Google Chrome Stable…');
-    toast(tx('开始下载 Google Chrome Stable…'));
+    if (progress) progress.textContent = tx('正在准备 Fingerprint Chromium…');
+    toast(tx('开始下载 / 更新 Fingerprint Chromium…'));
     const kernel = await window.ops.kernelDownload(true);
     if (progress) progress.textContent = tx('内置内核就绪：') + (kernel?.path || '');
     toast(tx(`${kernelSourceLabel(kernel?.source)} 已就绪 v${kernel?.version || ''}`));
@@ -6543,7 +6548,7 @@ document.getElementById('kernel-download')?.addEventListener('click', async () =
 document.getElementById('kernel-check-update')?.addEventListener('click', async () => {
   const progress = document.getElementById('kernel-progress');
   try {
-    if (progress) progress.textContent = tx('查询 Google Chrome Stable 版本…');
+    if (progress) progress.textContent = tx('查询 Fingerprint Chromium 版本…');
     const result = await window.ops.kernelCheckUpdate();
     if (result.error) {
       toast(tx('内置内核：') + result.error);

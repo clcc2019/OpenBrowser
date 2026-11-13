@@ -707,26 +707,39 @@ function hostConsistentProfile(profile = {}) {
 
 function fingerprintChromiumArgs(fp, profile = {}, options = {}) {
   const seed = Number.parseInt(String(fp.seed || '').slice(0, 8), 16) || 1;
-  const platform = hostProfileOs();
+  const targetOs = desktopOs(fp.uaProfile?.os || parseOsFromUa(fp.userAgent));
+  const platform = targetOs === 'linux'
+    ? 'linux'
+    : (targetOs === 'macos' || targetOs === 'macos_arm' ? 'macos' : 'windows');
+  const platformVersion = String(fp.userAgentMetadata?.platformVersion || hostPlatformVersion());
   const version = String(options.kernelVersion || fp.uaProfile?.chromeFull || '150.0.0.0');
   const language = String((fp.languages && fp.languages[0]) || profile.language || 'en-US');
   const timezone = String(options.timezone || '').trim();
-  const cores = Math.max(1, Number(os.cpus().length) || 1);
+  const cores = Math.max(1, Number(fp.hardwareConcurrency) || Number(os.cpus().length) || 1);
   const args = [
     `--fingerprint=${seed}`,
     `--fingerprint-platform=${platform}`,
-    `--fingerprint-platform-version=${hostPlatformVersion()}`,
+    `--fingerprint-platform-version=${platformVersion}`,
     '--fingerprint-brand=Chrome',
     `--fingerprint-brand-version=${version}`,
     `--fingerprint-hardware-concurrency=${cores}`,
     `--lang=${language}`,
     `--accept-lang=${language},${language.split('-')[0] || 'en'}`,
-    // OpenBrowser owns canvas/audio/client-rect/GPU noise at the JS layer. Keep
-    // the native kernel focused on UA, platform, Client Hints and hardware.
-    '--disable-spoofing=font,audio,canvas,clientrects,gpu',
   ];
+  const disabledSpoofing = [];
+  if (!fp.fonts) disabledSpoofing.push('font');
+  if (fp.audio?.mode === 'real' || fp.audio?.mode === 'muted') disabledSpoofing.push('audio');
+  if (fp.canvas?.mode === 'real') disabledSpoofing.push('canvas');
+  if (fp.clientRects?.mode === 'real') disabledSpoofing.push('clientrects');
+  if (fp.webgl?.metaMode === 'real') disabledSpoofing.push('gpu');
+  if (disabledSpoofing.length) args.push(`--disable-spoofing=${disabledSpoofing.join(',')}`);
   if (timezone) args.push(`--timezone=${timezone}`);
   if (fp.webrtc === 'proxy' || fp.webrtc === 'disabled') args.push('--disable-non-proxied-udp');
+  // Fingerprint Chromium 150 has no native WebGPU adapter-info spoofing. A
+  // requested WebGL-matched or blocked mode must therefore disable WebGPU
+  // rather than expose the host GPU through a contradictory API.
+  if (fp.webgpu?.mode !== 'real') args.push('--disable-features=WebGPU,WebGPUService');
+  args.push('--disable-quic');
   return args;
 }
 
@@ -832,7 +845,12 @@ function buildFingerprint(profile = {}) {
   // otherwise a migrated 157 profile is silently changed back during startup.
   // Keep clientHints.chromeMajor as a fallback only; older profiles still use the
   // actual kernel when one is available.
-  const configuredChromeMajor = Math.max(0, Math.floor(Number(fpIn.chromeMajor) || 0));
+  // A native kernel cannot honestly claim a Chrome major different from its
+  // actual binary. Ignore stale per-profile overrides in native-kernel mode and
+  // derive UA/client hints from the installed kernel version instead.
+  const configuredChromeMajor = profile.nativeKernelFingerprint === true
+    ? 0
+    : Math.max(0, Math.floor(Number(fpIn.chromeMajor) || 0));
   const kernelMajor = Number(String(profile.kernelVersion || '').match(/^\d+/)?.[0]) || 0;
   const kernelFull = /^\d+\.\d+\.\d+\.\d+$/.test(String(profile.kernelVersion || ''))
     ? String(profile.kernelVersion) : `${kernelMajor}.0.0.0`;
@@ -1107,7 +1125,10 @@ function buildFingerprint(profile = {}) {
   const fingerprint = {
     seed: seed.toString('hex').slice(0, 16),
     profileId: profile.id,
-    consistencyMode: profile.hostConsistency ? 'native-host' : 'profile',
+    nativeKernelFingerprint: profile.nativeKernelFingerprint === true,
+    consistencyMode: profile.nativeKernelFingerprint
+      ? 'native-kernel'
+      : (profile.hostConsistency ? 'native-host' : 'profile'),
     platform: fpIn.platform || uaProfile.platform || OS_PRESETS[uaOs].platformNav,
     userAgent: uaProfile.userAgent,
     uaProfile,
@@ -1291,7 +1312,7 @@ function buildInjectionScript(fp) {
   // that replacement. Native-host mode therefore uses CDP for UA/locale/timezone
   // and leaves every other fingerprint surface untouched. Per-profile
   // canvas/audio/GPU identities require a native fingerprint kernel.
-  if (fp.consistencyMode === 'native-host') return '';
+  if (fp.consistencyMode === 'native-host' || fp.consistencyMode === 'native-kernel') return '';
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     consistencyMode: fp.consistencyMode || 'profile',
@@ -2385,7 +2406,7 @@ function buildInjectionScript(fp) {
 
 /** Worker-safe subset injected before attached workers are resumed. */
 function buildWorkerInjectionScript(fp) {
-  if (fp.consistencyMode === 'native-host') return '';
+  if (fp.consistencyMode === 'native-host' || fp.consistencyMode === 'native-kernel') return '';
   const stability = fp.stability || fp.canvas?.stability || resolveStabilityPolicy({}, {});
   const json = JSON.stringify({
     platform: fp.platform,
@@ -2826,6 +2847,7 @@ function chromeArgsForFingerprint(fp, profile = {}) {
 }
 
 async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile = {}, options = {}) {
+  if (fp.nativeKernelFingerprint === true) return;
   const privacy = profile.privacy || {};
   const timezone = normalizeTimezoneValue(privacy.timezoneMode === 'custom'
     ? privacy.timezone

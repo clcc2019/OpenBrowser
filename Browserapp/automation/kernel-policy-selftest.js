@@ -27,6 +27,7 @@ const {
   SOURCE_CFT,
   SOURCE_CHROME_STABLE,
   SOURCE_CUSTOM,
+  SOURCE_FINGERPRINT_CHROMIUM,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
 
@@ -103,36 +104,34 @@ async function main() {
 
     const downloadManager = new BrowserKernelManager(path.join(root, 'download-user-data'));
     let requestedRelease = null;
-    downloadManager.fetchChromeStableRelease = async () => ({
-      version: 'stable',
-      url: 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb',
-      kind: 'deb',
+    downloadManager.fetchFingerprintChromiumRelease = async () => ({
+      version: '150.0.7871.186',
+      source: SOURCE_FINGERPRINT_CHROMIUM,
       platform: 'linux-x64',
-      source: SOURCE_CHROME_STABLE,
+      asset: { name: 'fingerprint.tar.xz', url: 'https://github.com/adryfish/fingerprint-chromium/releases/download/150.0.7871.186/fingerprint.tar.xz', digest: 'sha256:' + 'a'.repeat(64), size: 1 },
     });
-    downloadManager.installChromeStable = async (release) => {
+    downloadManager.installFingerprintChromium = async (release) => {
       requestedRelease = release;
-      return { name: 'Google Chrome Stable', path: 'downloaded-chrome', version: '152.0.0.0', source: SOURCE_CHROME_STABLE, independent: true };
+      return { name: 'Fingerprint Chromium', path: 'downloaded-fingerprint-chromium', version: '150.0.7871.186', source: SOURCE_FINGERPRINT_CHROMIUM, nativeFingerprint: true, independent: true };
     };
     const downloaded = await downloadManager.ensureIntegrated();
-    assert.strictEqual(requestedRelease.source, SOURCE_CHROME_STABLE);
-    assert.strictEqual(downloaded.version, '152.0.0.0');
-    console.log('  PASS  missing kernel dispatches to the Google Chrome Stable downloader');
+    assert.strictEqual(requestedRelease.source, SOURCE_FINGERPRINT_CHROMIUM);
+    assert.strictEqual(downloaded.version, '150.0.7871.186');
+    console.log('  PASS  missing kernel dispatches to Fingerprint Chromium');
 
-    let forcedStableDownload = false;
-    manager.fetchChromeStableRelease = async () => ({
-      version: 'stable',
-      url: 'https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb',
-      kind: 'deb',
+    let forcedFingerprintDownload = false;
+    manager.fetchFingerprintChromiumRelease = async () => ({
+      version: '150.0.7871.186',
+      source: SOURCE_FINGERPRINT_CHROMIUM,
       platform: 'linux-x64',
-      source: SOURCE_CHROME_STABLE,
+      asset: { name: 'fingerprint.tar.xz', url: 'https://github.com/adryfish/fingerprint-chromium/releases/download/150.0.7871.186/fingerprint.tar.xz', digest: 'sha256:' + 'b'.repeat(64), size: 1 },
     });
-    manager.installChromeStable = async () => {
-      forcedStableDownload = true;
-      return { name: 'Google Chrome Stable', path: 'stable-chrome', version: '152.0.0.0', source: SOURCE_CHROME_STABLE, independent: true };
+    manager.installFingerprintChromium = async () => {
+      forcedFingerprintDownload = true;
+      return { name: 'Fingerprint Chromium', path: 'fingerprint-chrome', version: '150.0.7871.186', source: SOURCE_FINGERPRINT_CHROMIUM, nativeFingerprint: true, independent: true };
     };
     await manager.ensureIntegrated(true);
-    assert.strictEqual(forcedStableDownload, true);
+    assert.strictEqual(forcedFingerprintDownload, true);
     console.log('  PASS  forced kernel download replaces the legacy Chrome for Testing package');
 
     assert.throws(() => validateArchiveMemberName('../outside/chrome'));

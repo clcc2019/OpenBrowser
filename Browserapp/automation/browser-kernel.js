@@ -12,6 +12,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const https = require('https');
 const http = require('http');
 const { execFile, spawn } = require('child_process');
@@ -20,6 +21,14 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { isSystemBrowserExecutable } = require('./isolation');
 const cdp = require('../cdp');
+const {
+  CURRENT_VERSION: FINGERPRINT_CHROMIUM_VERSION,
+  RELEASES_API: FINGERPRINT_CHROMIUM_RELEASES_API,
+  PINNED_RELEASE: PINNED_FINGERPRINT_CHROMIUM_RELEASE,
+  normalizeFingerprintRelease,
+  selectFingerprintAsset,
+  sha256Digest,
+} = require('./fingerprint-chromium');
 
 /** Optional remote kernel feed URL (unused when integrated seeds are present). */
 const WAYFERN_META = 'https://donutbrowser.com/wayfern.json';
@@ -37,6 +46,7 @@ const SOURCE_WAYFERN = 'donut-wayfern';
 const SOURCE_CFT = 'chrome-for-testing';
 const SOURCE_CHROME_STABLE = 'chrome-stable';
 const SOURCE_CUSTOM = 'custom';
+const SOURCE_FINGERPRINT_CHROMIUM = 'fingerprint-chromium';
 /** Bundled / userData OpenBrowser 148 independent kernel. Default on macOS x64. */
 const SOURCE_OPENBROWSER = 'openbrowser-148';
 const OPENBROWSER_KERNEL_VERSION = '148.0.7778.165';
@@ -51,6 +61,10 @@ const KERNEL_HOSTS = new Set([
   'googlechromelabs.github.io',
   'storage.googleapis.com',
   'dl.google.com',
+  'api.github.com',
+  'github.com',
+  'release-assets.githubusercontent.com',
+  'objects.githubusercontent.com',
 ]);
 const acceptedWayfernTerms = new Set();
 
@@ -296,11 +310,55 @@ function findOpenBrowserKernelBinary(kernelsRoot, extraRoots = []) {
 
 function kernelDisplayName(source) {
   if (source === SOURCE_OPENBROWSER) return 'OpenBrowser 148';
+  if (source === SOURCE_FINGERPRINT_CHROMIUM) return 'Fingerprint Chromium';
   if (source === SOURCE_WAYFERN) return 'Independent kernel';
   if (source === SOURCE_CHROME_STABLE) return 'Google Chrome Stable';
   if (source === SOURCE_CUSTOM) return 'Custom Chromium';
   if (source === SOURCE_CFT) return 'Chrome for Testing';
   return 'Independent Chromium';
+}
+
+function fingerprintChromiumVersionRoot(kernelsRoot, version) {
+  return path.join(kernelsRoot, SOURCE_FINGERPRINT_CHROMIUM, 'versions', String(version));
+}
+
+function findInstalledFingerprintChromium(kernelsRoot) {
+  const versionsRoot = path.join(kernelsRoot, SOURCE_FINGERPRINT_CHROMIUM, 'versions');
+  let entries = [];
+  try { entries = fs.readdirSync(versionsRoot, { withFileTypes: true }); } catch (_) { return null; }
+  const candidates = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const root = path.join(versionsRoot, entry.name);
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(root, 'kernel.json'), 'utf8'));
+      const binary = safeInstalledBinary(path.join(root, manifest.binary || ''), root);
+      if (!binary) continue;
+      candidates.push({
+        root,
+        binary,
+        version: String(manifest.version || entry.name),
+        source: SOURCE_FINGERPRINT_CHROMIUM,
+        nativeFingerprint: true,
+      });
+    } catch (_) {}
+  }
+  candidates.sort((a, b) => compareVersions(b.version, a.version));
+  return candidates[0] || null;
+}
+
+async function verifyFileSha256(file, expectedDigest) {
+  const expected = sha256Digest(expectedDigest);
+  if (!expected) throw new Error('Fingerprint Chromium SHA-256 digest is invalid');
+  const actual = await new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256');
+    const stream = fs.createReadStream(file);
+    stream.on('error', reject);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
+  if (actual !== expected) throw new Error(`Fingerprint Chromium SHA-256 mismatch: expected ${expected}, got ${actual}`);
+  return actual;
 }
 
 function isWayfernKernel(candidate = {}, versionOutput = '') {
@@ -1036,6 +1094,30 @@ class BrowserKernelManager {
   }
 
   resolveInstalled() {
+    if (this.meta.source === SOURCE_FINGERPRINT_CHROMIUM) {
+      const root = fingerprintChromiumVersionRoot(this.kernelsRoot, this.meta.version || '');
+      const binary = safeInstalledBinary(this.meta.binary, root);
+      if (binary) {
+        return {
+          name: kernelDisplayName(SOURCE_FINGERPRINT_CHROMIUM),
+          path: binary,
+          version: this.meta.version || 'unknown',
+          independent: true,
+          source: SOURCE_FINGERPRINT_CHROMIUM,
+          nativeFingerprint: true,
+        };
+      }
+    } else if (!this.meta.source) {
+      const installedFingerprint = findInstalledFingerprintChromium(this.kernelsRoot);
+      if (installedFingerprint) {
+        return {
+          ...installedFingerprint,
+          name: kernelDisplayName(SOURCE_FINGERPRINT_CHROMIUM),
+          independent: true,
+        };
+      }
+    }
+
     // A user-requested Stable download overrides legacy kernels bundled by an
     // older package. Otherwise the old CFT resource would win forever.
     if (this.meta.source === SOURCE_CHROME_STABLE && this.meta.binary) {
@@ -1130,7 +1212,8 @@ class BrowserKernelManager {
               version: this.meta.version || 'unknown',
               independent: true,
               source: src,
-              nativeFingerprint: src === SOURCE_CUSTOM && this.meta.nativeFingerprint === true,
+              nativeFingerprint: src === SOURCE_FINGERPRINT_CHROMIUM
+                || (src === SOURCE_CUSTOM && this.meta.nativeFingerprint === true),
             };
           }
         }
@@ -1235,6 +1318,7 @@ class BrowserKernelManager {
     // Channel label only claims openbrowser-148 default when that kernel is present.
     const openBrowserDefault = isOpenBrowser148SupportedHost()
       && Boolean(installed && installed.source === SOURCE_OPENBROWSER);
+    const fingerprintIntegrated = Boolean(installed && installed.source === SOURCE_FINGERPRINT_CHROMIUM);
     const wayfernIntegrated = !openBrowserDefault
       && Boolean(installed && installed.source === SOURCE_WAYFERN);
     const stableIntegrated = !openBrowserDefault
@@ -1249,7 +1333,14 @@ class BrowserKernelManager {
       kernel: installed,
       meta: this.meta,
       autoDownload: true,
-      channel: openBrowserDefault
+      channel: fingerprintIntegrated
+        ? {
+          name: `Fingerprint Chromium ${installed.version}`,
+          metaUrl: FINGERPRINT_CHROMIUM_RELEASES_API,
+          site: 'https://github.com/adryfish/fingerprint-chromium',
+          engineSite: 'https://github.com/adryfish/fingerprint-chromium',
+        }
+        : openBrowserDefault
         ? {
           name: 'OpenBrowser 148（macOS x86 内置）',
           metaUrl: null,
@@ -1276,7 +1367,9 @@ class BrowserKernelManager {
             site: cftIntegrated ? 'https://googlechromelabs.github.io/chrome-for-testing/' : 'https://www.google.com/chrome/',
             engineSite: 'https://www.google.com/chrome/',
           },
-      note: openBrowserDefault
+      note: fingerprintIntegrated
+        ? '使用原生 Fingerprint Chromium，指纹参数直接由 Chromium 内核消费，不再叠加页面级 JS 指纹 hook。'
+        : openBrowserDefault
         ? 'macOS x86 优先使用安装包/源码内置的 OpenBrowser 148（kernels/macos-x64/）；点击下载可切换到 Google Chrome Stable 正式包。'
         : wayfernIntegrated
           ? 'Windows x64 / macOS arm64 优先使用安装包内置 Wayfern；点击下载可切换到 Google Chrome Stable 正式包。'
@@ -1369,6 +1462,125 @@ class BrowserKernelManager {
     };
   }
 
+  async fetchFingerprintChromiumRelease() {
+    this.onProgress({ phase: 'meta', message: '查询 Fingerprint Chromium 最新版本…' });
+    let release = PINNED_FINGERPRINT_CHROMIUM_RELEASE;
+    try {
+      release = normalizeFingerprintRelease(await fetchJson(FINGERPRINT_CHROMIUM_RELEASES_API));
+    } catch (error) {
+      this.onProgress({
+        phase: 'meta',
+        message: `无法查询最新版，使用已审计版本 ${FINGERPRINT_CHROMIUM_VERSION}：${error.message || error}`,
+        version: FINGERPRINT_CHROMIUM_VERSION,
+      });
+    }
+    const asset = selectFingerprintAsset(release);
+    if (!asset) {
+      throw new Error(`Fingerprint Chromium ${release.version} 没有当前平台资产：${process.platform}/${process.arch}`);
+    }
+    return {
+      version: release.version,
+      publishedAt: release.publishedAt,
+      platform: donutPlatformKey(),
+      source: SOURCE_FINGERPRINT_CHROMIUM,
+      asset,
+      raw: release,
+    };
+  }
+
+  async installFingerprintChromium(release) {
+    const version = String(release?.version || '').trim();
+    const asset = release?.asset;
+    if (!version || !asset?.url || !asset?.name) throw new Error('Fingerprint Chromium release is incomplete');
+    const root = path.join(this.kernelsRoot, SOURCE_FINGERPRINT_CHROMIUM);
+    const versionsRoot = path.join(root, 'versions');
+    const work = fingerprintChromiumVersionRoot(this.kernelsRoot, version);
+    const archivePath = path.join(root, `${version}-${asset.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`);
+    const staging = path.join(root, `.install-${version}-${process.pid}-${Date.now()}`);
+    const runtime = path.join(staging, 'runtime');
+    await fsp.mkdir(versionsRoot, { recursive: true });
+    await fsp.mkdir(runtime, { recursive: true });
+
+    try {
+      this.onProgress({ phase: 'download', message: `下载 Fingerprint Chromium ${version}…`, version, url: asset.url });
+      await downloadFile(asset.url, archivePath, (progress) => this.onProgress({ phase: 'download', ...progress, version }));
+      this.onProgress({ phase: 'validate', message: '校验 Fingerprint Chromium SHA-256…', version });
+      await verifyFileSha256(archivePath, asset.digest);
+
+      this.onProgress({ phase: 'extract', message: '解压 Fingerprint Chromium…', version });
+      const kind = archiveKindFromUrl(asset.name);
+      if (kind === 'dmg') await extractDmg(archivePath, runtime);
+      else if (kind === 'tar.xz') await extractTarXz(archivePath, runtime);
+      else if (kind === 'tar.gz') await extractTarGz(archivePath, runtime);
+      else await extractZip(archivePath, runtime);
+
+      let binary = await findExecutable(runtime, process.platform === 'win32' ? ['chrome.exe'] : ['chrome', 'chromium']);
+      binary = safeInstalledBinary(binary, staging);
+      if (!binary) throw new Error('Fingerprint Chromium 解压后未找到可执行文件');
+      if (process.platform !== 'win32') {
+        try { await fsp.chmod(binary, 0o755); } catch (_) {}
+      }
+      const relativeBinary = path.relative(staging, binary);
+      this.onProgress({ phase: 'validate', message: '验证原生指纹参数支持…', version, binary });
+      const probe = await this.probeBrowserBinary(binary, { fingerprintProbe: true });
+      if (!probe.fingerprintSupport) throw new Error('Fingerprint Chromium 未通过原生 --fingerprint 参数验证');
+      if (!String(probe.version || '').startsWith(version.split('.').slice(0, 3).join('.'))) {
+        throw new Error(`Fingerprint Chromium 版本不一致：期望 ${version}，实际 ${probe.version || 'unknown'}`);
+      }
+      await fsp.writeFile(path.join(staging, 'kernel.json'), JSON.stringify({
+        version,
+        source: SOURCE_FINGERPRINT_CHROMIUM,
+        platform: donutPlatformKey(),
+        binary: relativeBinary,
+        digest: asset.digest,
+        asset: asset.name,
+        downloadUrl: asset.url,
+      }, null, 2) + '\n', 'utf8');
+
+      const previous = `${work}.previous-${Date.now()}`;
+      let movedPrevious = false;
+      if (fs.existsSync(work)) {
+        await fsp.rename(work, previous);
+        movedPrevious = true;
+      }
+      try {
+        await fsp.rename(staging, work);
+      } catch (error) {
+        if (movedPrevious) await fsp.rename(previous, work).catch(() => {});
+        throw error;
+      }
+      if (movedPrevious) await fsp.rm(previous, { recursive: true, force: true }).catch(() => {});
+
+      const finalBinary = path.join(work, relativeBinary);
+      this.meta.binary = finalBinary;
+      this.meta.version = version;
+      this.meta.platform = donutPlatformKey();
+      this.meta.updatedAt = new Date().toISOString();
+      this.meta.source = SOURCE_FINGERPRINT_CHROMIUM;
+      this.meta.nativeFingerprint = true;
+      this.meta.downloadUrl = asset.url;
+      this.meta.remoteVersion = version;
+      this.meta.digest = asset.digest;
+      await this.saveMeta();
+
+      try {
+        const entries = (await fsp.readdir(versionsRoot, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory() && entry.name !== version)
+          .map((entry) => entry.name)
+          .sort((a, b) => compareVersions(b, a));
+        for (const old of entries.slice(1)) {
+          await fsp.rm(path.join(versionsRoot, old), { recursive: true, force: true }).catch(() => {});
+        }
+      } catch (_) {}
+
+      this.onProgress({ phase: 'done', message: `Fingerprint Chromium ${version} 已就绪`, version, binary: finalBinary });
+      return this.resolveInstalled();
+    } finally {
+      await fsp.rm(staging, { recursive: true, force: true }).catch(() => {});
+      await fsp.rm(archivePath, { force: true }).catch(() => {});
+    }
+  }
+
   /** Resolve an integrated kernel, or download the official Chrome Stable package. */
   async ensureIntegrated(force = false) {
     if (!this.installPromise) {
@@ -1380,6 +1592,16 @@ class BrowserKernelManager {
   async ensureIntegratedInternal(force = false) {
     await this.loadMeta();
     const existing = this.resolveInstalled();
+    if (existing?.source === SOURCE_FINGERPRINT_CHROMIUM && !force) return existing;
+    if (!existing || force) {
+      try {
+        return await this.installFingerprintChromium(await this.fetchFingerprintChromiumRelease());
+      } catch (error) {
+        if (existing && !force) return existing;
+        this.onProgress({ phase: 'meta', message: `Fingerprint Chromium 暂不可用：${error.message || error}`, error: true });
+        if (force) throw error;
+      }
+    }
     if (existing && !force && existing.source !== SOURCE_CFT) {
       this.meta.binary = existing.path;
       this.meta.version = existing.version || this.meta.version || null;
@@ -1722,6 +1944,36 @@ class BrowserKernelManager {
   async checkUpdate() {
     await this.loadMeta();
     const installed = this.resolveInstalled();
+    try {
+      const release = await this.fetchFingerprintChromiumRelease();
+      const needsUpdate = !installed
+        || installed.source !== SOURCE_FINGERPRINT_CHROMIUM
+        || compareVersions(release.version, installed.version) > 0;
+      return {
+        installed,
+        remote: {
+          version: release.version,
+          source: SOURCE_FINGERPRINT_CHROMIUM,
+          url: release.asset.url,
+          platform: release.platform,
+          digest: release.asset.digest,
+        },
+        needsUpdate,
+        upToDate: Boolean(installed) && !needsUpdate,
+        autoDownload: true,
+      };
+    } catch (error) {
+      if (installed?.source === SOURCE_FINGERPRINT_CHROMIUM) {
+        return {
+          installed,
+          remote: null,
+          needsUpdate: false,
+          upToDate: true,
+          autoDownload: true,
+          error: error.message,
+        };
+      }
+    }
     if (installed && installed.source !== SOURCE_CFT && installed.source !== SOURCE_CHROME_STABLE) {
       return {
         installed,
@@ -1765,7 +2017,13 @@ module.exports = {
   SOURCE_CHROME_STABLE,
   SOURCE_CUSTOM,
   SOURCE_OPENBROWSER,
+  SOURCE_FINGERPRINT_CHROMIUM,
   OPENBROWSER_KERNEL_VERSION,
+  FINGERPRINT_CHROMIUM_VERSION,
+  FINGERPRINT_CHROMIUM_RELEASES_API,
+  PINNED_FINGERPRINT_CHROMIUM_RELEASE,
+  findInstalledFingerprintChromium,
+  verifyFileSha256,
   isWayfernKernel,
   companionLibraryForKernelBinary,
   isIntegratedKernelCdpReady,
