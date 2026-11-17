@@ -146,7 +146,7 @@ function run(command, args, capture = false) {
 
 async function addChromeStoreExtension(input, root, readManifest, fetchPackage = download) {
   const storeId = extractStoreId(input);
-  const query = new URLSearchParams({ response: 'redirect', prodversion: '150.0.0.0', acceptformat: 'crx2,crx3', x: `id=${storeId}&installsource=ondemand&uc` });
+  const query = new URLSearchParams({ response: 'redirect', prodversion: '148.0.0.0', acceptformat: 'crx2,crx3', x: `id=${storeId}&installsource=ondemand&uc` });
   const crx = await fetchPackage(`https://clients2.google.com/service/update2/crx?${query}`);
   const details = crxDetails(crx);
   if (details.extensionId && details.extensionId !== storeId) throw new Error(`CRX 签名 ID ${details.extensionId} 与商店 ID ${storeId} 不一致`);

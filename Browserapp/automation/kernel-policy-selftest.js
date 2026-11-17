@@ -63,6 +63,20 @@ async function main() {
     assert.strictEqual(manager.meta.binary, binary);
     console.log('  PASS  stale kernel metadata repaired to current data root');
 
+    const fingerprintUserData = path.join(root, 'fingerprint-user-data');
+    const fingerprintRoot = path.join(fingerprintUserData, 'kernels', 'fingerprint-chromium', 'versions', PINNED_FINGERPRINT_CHROMIUM_RELEASE.version);
+    const fingerprintBinary = path.join(fingerprintRoot, process.platform === 'win32' ? 'chrome.exe' : 'chrome');
+    await fsp.mkdir(fingerprintRoot, { recursive: true });
+    await fsp.writeFile(fingerprintBinary, '', 'utf8');
+    await fsp.writeFile(path.join(fingerprintRoot, 'kernel.json'), JSON.stringify({ version: PINNED_FINGERPRINT_CHROMIUM_RELEASE.version, binary: path.basename(fingerprintBinary) }));
+    const fingerprintManager = new BrowserKernelManager(fingerprintUserData);
+    await fingerprintManager.loadMeta();
+    assert.strictEqual(fingerprintManager.status().kernel.path, fingerprintBinary);
+    assert.strictEqual(fingerprintManager.meta.binary, fingerprintBinary);
+    const fingerprintEngine = new BrowserEngine({ getPath: () => fingerprintUserData });
+    assert.strictEqual(fingerprintEngine.chooseBrowser().path, fingerprintBinary);
+    console.log('  PASS  discovered Fingerprint Chromium is selectable and repairs metadata');
+
     const bundledRoot = path.join(root, 'bundled-kernels', 'wayfern');
     const bundledBinary = path.join(bundledRoot, process.platform === 'win32' ? 'wayfern.exe' : 'wayfern');
     await fsp.mkdir(bundledRoot, { recursive: true });
@@ -111,30 +125,30 @@ async function main() {
     }
     let requestedRelease = null;
     downloadManager.fetchFingerprintChromiumRelease = async () => ({
-      version: '150.0.7871.186',
+      version: '148.0.7778.215',
       source: SOURCE_FINGERPRINT_CHROMIUM,
       platform: 'linux-x64',
-      asset: { name: 'fingerprint.tar.xz', url: 'https://github.com/adryfish/fingerprint-chromium/releases/download/150.0.7871.186/fingerprint.tar.xz', digest: 'sha256:' + 'a'.repeat(64), size: 1 },
+      asset: { name: 'fingerprint.tar.xz', url: 'https://github.com/adryfish/fingerprint-chromium/releases/download/148.0.7778.215/fingerprint.tar.xz', digest: 'sha256:' + 'a'.repeat(64), size: 1 },
     });
     downloadManager.installFingerprintChromium = async (release) => {
       requestedRelease = release;
-      return { name: 'Fingerprint Chromium', path: 'downloaded-fingerprint-chromium', version: '150.0.7871.186', source: SOURCE_FINGERPRINT_CHROMIUM, nativeFingerprint: true, independent: true };
+      return { name: 'Fingerprint Chromium', path: 'downloaded-fingerprint-chromium', version: '148.0.7778.215', source: SOURCE_FINGERPRINT_CHROMIUM, nativeFingerprint: true, independent: true };
     };
     const downloaded = await downloadManager.ensureIntegrated();
     assert.strictEqual(requestedRelease.source, SOURCE_FINGERPRINT_CHROMIUM);
-    assert.strictEqual(downloaded.version, '150.0.7871.186');
+    assert.strictEqual(downloaded.version, '148.0.7778.215');
     console.log('  PASS  missing kernel dispatches to Fingerprint Chromium');
 
     let forcedFingerprintDownload = false;
     manager.fetchFingerprintChromiumRelease = async () => ({
-      version: '150.0.7871.186',
+      version: '148.0.7778.215',
       source: SOURCE_FINGERPRINT_CHROMIUM,
       platform: 'linux-x64',
-      asset: { name: 'fingerprint.tar.xz', url: 'https://github.com/adryfish/fingerprint-chromium/releases/download/150.0.7871.186/fingerprint.tar.xz', digest: 'sha256:' + 'b'.repeat(64), size: 1 },
+      asset: { name: 'fingerprint.tar.xz', url: 'https://github.com/adryfish/fingerprint-chromium/releases/download/148.0.7778.215/fingerprint.tar.xz', digest: 'sha256:' + 'b'.repeat(64), size: 1 },
     });
     manager.installFingerprintChromium = async () => {
       forcedFingerprintDownload = true;
-      return { name: 'Fingerprint Chromium', path: 'fingerprint-chrome', version: '150.0.7871.186', source: SOURCE_FINGERPRINT_CHROMIUM, nativeFingerprint: true, independent: true };
+      return { name: 'Fingerprint Chromium', path: 'fingerprint-chrome', version: '148.0.7778.215', source: SOURCE_FINGERPRINT_CHROMIUM, nativeFingerprint: true, independent: true };
     };
     await manager.ensureIntegrated(true);
     assert.strictEqual(forcedFingerprintDownload, true);
@@ -186,7 +200,7 @@ async function main() {
     await fsp.writeFile(path.join(nativeRoot, 'kernels', 'kernel-meta.json'), JSON.stringify({
       binary: nativeBinary,
       source: SOURCE_CUSTOM,
-      version: '150.0.7871.186',
+      version: '148.0.7778.215',
       nativeFingerprint: true,
     }), 'utf8');
     const nativeManager = new BrowserKernelManager(nativeRoot);

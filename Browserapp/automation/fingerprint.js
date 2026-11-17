@@ -650,7 +650,7 @@ function hostPlatformVersion() {
  * platform behaviour stay on the host. Keep those surfaces aligned and reserve
  * cross-platform personas for fingerprint-capable kernels.
  */
-function hostConsistentProfile(profile = {}) {
+function hostConsistentProfile(profile = {}, options = {}) {
   const privacy = profile.privacy && typeof profile.privacy === 'object' ? profile.privacy : {};
   const privacyWithoutHints = { ...privacy };
   delete privacyWithoutHints.clientHints;
@@ -671,6 +671,40 @@ function hostConsistentProfile(profile = {}) {
     architecture: process.arch === 'arm64' ? 'arm' : 'x86',
     bitness: '64',
   };
+  if (options.isolateSurfaces === true) {
+    input.webglMeta = 'noise';
+    input.webgpu = 'blocked';
+    input.cores = null;
+    input.memory = null;
+    return {
+      ...profile,
+      os: hostProfileOs(),
+      userAgent: '',
+      hostConsistency: true,
+      privacy: {
+        ...privacyWithoutHints,
+        matchHostOs: true,
+        deviceProfile: 'persona',
+        personaVersion: 5,
+        fontMode: 'default',
+        canvas: 'noise',
+        webgl: 'noise',
+        webglMeta: 'noise',
+        webgpu: 'blocked',
+        audio: 'noise',
+        clientRects: 'noise',
+        media: 'noise',
+        mediaDevices: 'noise',
+        speech: 'noise',
+        battery: 'noise',
+        deviceNameMode: 'noise',
+        webrtc: privacy.webrtc || 'proxy',
+        cores: null,
+        memory: null,
+        fingerprint: input,
+      },
+    };
+  }
   input.cores = 0;
   input.memory = 0;
   return {
@@ -713,7 +747,7 @@ function fingerprintChromiumArgs(fp, profile = {}, options = {}) {
     ? 'linux'
     : (targetOs === 'macos' || targetOs === 'macos_arm' ? 'macos' : 'windows');
   const platformVersion = String(fp.userAgentMetadata?.platformVersion || hostPlatformVersion());
-  const version = String(options.kernelVersion || fp.uaProfile?.chromeFull || '150.0.0.0');
+  const version = String(options.kernelVersion || fp.uaProfile?.chromeFull || '148.0.0.0');
   const language = String((fp.languages && fp.languages[0]) || profile.language || 'en-US');
   const timezone = String(options.timezone || '').trim();
   const cores = Math.max(1, Number(fp.hardwareConcurrency) || Number(os.cpus().length) || 1);
@@ -736,7 +770,7 @@ function fingerprintChromiumArgs(fp, profile = {}, options = {}) {
   if (disabledSpoofing.length) args.push(`--disable-spoofing=${disabledSpoofing.join(',')}`);
   if (timezone) args.push(`--timezone=${timezone}`);
   if (fp.webrtc === 'proxy' || fp.webrtc === 'disabled') args.push('--disable-non-proxied-udp');
-  // Fingerprint Chromium 150 has no native WebGPU adapter-info spoofing. A
+  // Fingerprint Chromium 148 has no native WebGPU adapter-info spoofing. A
   // requested WebGL-matched or blocked mode must therefore disable WebGPU
   // rather than expose the host GPU through a contradictory API.
   if (fp.webgpu?.mode !== 'real') args.push('--disable-features=WebGPU,WebGPUService');
@@ -2898,7 +2932,7 @@ async function applyFingerprintToTab(cdpCall, webSocketDebuggerUrl, fp, profile 
   };
 
   // Fingerprint Chromium owns canvas, audio, WebGL and other renderer surfaces
-  // natively. Its 150 build still emits an empty Sec-CH-UA-Bitness and inherits
+  // natively. Its 148 build still emits an empty Sec-CH-UA-Bitness and inherits
   // the host ICU locale, so align those two protocol-level surfaces through CDP.
   // This intentionally does not enable Runtime/Page or install JS hooks.
   if (fp.nativeKernelFingerprint === true) {

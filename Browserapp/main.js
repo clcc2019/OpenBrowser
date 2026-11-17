@@ -1431,7 +1431,7 @@ async function fetchChromeStoreMetadata(storeId) {
 
   let metadata = { name: '', description: '', icon_url: null };
   try {
-    const query = new URLSearchParams({ response: 'redirect', prodversion: '150.0.0.0', acceptformat: 'crx2,crx3', x: `id=${safeId}&installsource=ondemand&uc` });
+    const query = new URLSearchParams({ response: 'redirect', prodversion: '148.0.0.0', acceptformat: 'crx2,crx3', x: `id=${safeId}&installsource=ondemand&uc` });
     const buffer = await fetchStorePackage(`https://clients2.google.com/service/update2/crx?${query}`);
     const { crxDetails } = require('./store-extension');
     const zip = crxDetails(buffer).zip;

@@ -321,7 +321,7 @@ function fingerprintChromiumVersionRoot(kernelsRoot, version) {
   return path.join(kernelsRoot, SOURCE_FINGERPRINT_CHROMIUM, 'versions', String(version));
 }
 
-function findInstalledFingerprintChromium(kernelsRoot) {
+function findInstalledFingerprintChromium(kernelsRoot, preferredVersion = '') {
   const versionsRoot = path.join(kernelsRoot, SOURCE_FINGERPRINT_CHROMIUM, 'versions');
   let entries = [];
   try { entries = fs.readdirSync(versionsRoot, { withFileTypes: true }); } catch (_) { return null; }
@@ -342,6 +342,9 @@ function findInstalledFingerprintChromium(kernelsRoot) {
       });
     } catch (_) {}
   }
+  const preferred = candidates.find((candidate) => preferredVersion
+    && compareVersions(candidate.version, preferredVersion) === 0);
+  if (preferred) return preferred;
   candidates.sort((a, b) => compareVersions(b.version, a.version));
   return candidates[0] || null;
 }
@@ -1093,6 +1096,15 @@ class BrowserKernelManager {
   }
 
   resolveInstalled() {
+    const pinnedFingerprint = findInstalledFingerprintChromium(this.kernelsRoot, FINGERPRINT_CHROMIUM_VERSION);
+    if (pinnedFingerprint) {
+      return {
+        ...pinnedFingerprint,
+        path: pinnedFingerprint.binary,
+        name: kernelDisplayName(SOURCE_FINGERPRINT_CHROMIUM),
+        independent: true,
+      };
+    }
     if (this.meta.source === SOURCE_FINGERPRINT_CHROMIUM) {
       const root = fingerprintChromiumVersionRoot(this.kernelsRoot, this.meta.version || '');
       const binary = safeInstalledBinary(this.meta.binary, root);
@@ -1111,6 +1123,7 @@ class BrowserKernelManager {
       if (installedFingerprint) {
         return {
           ...installedFingerprint,
+          path: installedFingerprint.binary,
           name: kernelDisplayName(SOURCE_FINGERPRINT_CHROMIUM),
           independent: true,
         };
@@ -1582,8 +1595,10 @@ class BrowserKernelManager {
   async ensureIntegratedInternal(force = false) {
     await this.loadMeta();
     const existing = this.resolveInstalled();
-    if (existing?.source === SOURCE_FINGERPRINT_CHROMIUM && !force) return existing;
-    if (!existing || force) {
+    const fingerprintVersionMismatch = existing?.source === SOURCE_FINGERPRINT_CHROMIUM
+      && compareVersions(existing.version, FINGERPRINT_CHROMIUM_VERSION) !== 0;
+    if (existing?.source === SOURCE_FINGERPRINT_CHROMIUM && !force && !fingerprintVersionMismatch) return existing;
+    if (!existing || force || fingerprintVersionMismatch) {
       try {
         return await this.installFingerprintChromium(await this.fetchFingerprintChromiumRelease());
       } catch (error) {
@@ -1855,7 +1870,7 @@ class BrowserKernelManager {
         `--fingerprint-platform=${probePlatform}`,
         '--fingerprint-platform-version=15.0.0',
         '--fingerprint-brand=Chrome',
-        '--fingerprint-brand-version=150.0.0.0',
+        '--fingerprint-brand-version=148.0.0.0',
         '--fingerprint-hardware-concurrency=7',
       ] : [];
       child = spawn(resolved, [
@@ -1938,7 +1953,7 @@ class BrowserKernelManager {
       const release = await this.fetchFingerprintChromiumRelease();
       const needsUpdate = !installed
         || installed.source !== SOURCE_FINGERPRINT_CHROMIUM
-        || compareVersions(release.version, installed.version) > 0;
+        || compareVersions(release.version, installed.version) !== 0;
       return {
         installed,
         remote: {

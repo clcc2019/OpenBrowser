@@ -91,7 +91,7 @@ app.whenReady().then(() => {
       const fp = buildFingerprint({
         ...source,
         nativeKernelFingerprint: true,
-        kernelVersion: '150.0.7871.186',
+        kernelVersion: '148.0.7778.215',
         exitTimezone: profile?.exitTimezone,
       });
       bump(counts.uaMajor, fp?.uaProfile?.chromeMajor || '(none)');

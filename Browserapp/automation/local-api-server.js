@@ -9,7 +9,7 @@ const { CURRENT_VERSION: FINGERPRINT_CHROMIUM_VERSION } = require('./fingerprint
 const { cleanApiKey, isApiKeyPlaceholder, resolveApiKey } = require('./api-key');
 
 const MAX_BODY_BYTES = 1024 * 1024;
-const DEFAULT_CHROME_MAJOR = Number(String(FINGERPRINT_CHROMIUM_VERSION).split('.')[0]) || 150;
+const DEFAULT_CHROME_MAJOR = Number(String(FINGERPRINT_CHROMIUM_VERSION).split('.')[0]) || 148;
 
 function responseHeaders(origin = '', extra = {}) {
   const headers = {

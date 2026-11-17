@@ -18,15 +18,23 @@ const {
 } = require('./automation/fingerprint');
 
 async function main() {
-  assert.strictEqual(CURRENT_VERSION, '150.0.7871.186');
+  assert.strictEqual(CURRENT_VERSION, '148.0.7778.215');
   const release = normalizeFingerprintRelease(PINNED_RELEASE);
   assert.strictEqual(release.version, CURRENT_VERSION);
-  assert.ok(selectFingerprintAsset(release, 'linux', 'x64'));
-  assert.ok(selectFingerprintAsset(release, 'win32', 'x64'));
-  assert.strictEqual(selectFingerprintAsset(release, 'darwin', 'arm64'), null);
+  const linuxAsset = selectFingerprintAsset(release, 'linux', 'x64');
+  const macAsset = selectFingerprintAsset(release, 'darwin', 'arm64');
+  const windowsAsset = selectFingerprintAsset(release, 'win32', 'x64');
+  assert.match(linuxAsset?.name || '', /148\.0\.7778\.215-1-x86_64_linux\.tar\.xz$/);
+  assert.match(macAsset?.name || '', /148\.0\.7778\.215-1\.1_macos\.dmg$/);
+  assert.match(windowsAsset?.name || '', /148\.0\.7778\.215-1\.1_windows_x64\.zip$/);
+  assert.strictEqual(selectFingerprintAsset(release, 'darwin', 'x64'), null);
+  for (const asset of [linuxAsset, macAsset, windowsAsset]) {
+    assert.ok(asset.url.includes('/releases/download/148.0.7778.215/'));
+    assert.strictEqual(sha256Digest(asset.digest).length, 64);
+  }
   assert.strictEqual(sha256Digest(release.assets[0].digest).length, 64);
   assert.throws(() => normalizeFingerprintRelease({
-    tag_name: '150.0.7871.186',
+    tag_name: '148.0.7778.215',
     assets: [{ name: 'bad.zip', browser_download_url: 'https://example.com/bad.zip', digest: '', size: 1 }],
   }));
   console.log('  PASS  release assets, platform selection and SHA-256 validation');
@@ -34,7 +42,7 @@ async function main() {
   const windowsPersona = buildFingerprint({
     id: 'native-persona-windows',
     os: 'Windows',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
     language: 'en-US',
     privacy: {
       matchHostOs: false,
@@ -48,15 +56,15 @@ async function main() {
       webrtc: 'proxy',
       webgpu: 'blocked',
     },
-    kernelVersion: '150.0.7871.186',
+    kernelVersion: '148.0.7778.215',
   });
   const personaArgs = fingerprintChromiumArgs(windowsPersona, windowsPersona, {
-    kernelVersion: '150.0.7871.186',
+    kernelVersion: '148.0.7778.215',
     timezone: 'America/New_York',
   });
   assert.ok(personaArgs.includes('--fingerprint-platform=windows'));
   assert.ok(personaArgs.includes('--fingerprint-brand=Chrome'));
-  assert.ok(personaArgs.includes('--fingerprint-brand-version=150.0.7871.186'));
+  assert.ok(personaArgs.includes('--fingerprint-brand-version=148.0.7778.215'));
   assert.ok(personaArgs.includes(`--fingerprint-hardware-concurrency=${windowsPersona.hardwareConcurrency}`));
   assert.ok(personaArgs.includes('--disable-non-proxied-udp'));
   assert.ok(personaArgs.includes('--disable-quic'));
@@ -65,8 +73,8 @@ async function main() {
   console.log('  PASS  persona values map to native fingerprint flags');
 
   const hostProfile = hostConsistentProfile({ id: 'native-host-flags', privacy: { matchHostOs: true } });
-  const hostFp = buildFingerprint({ ...hostProfile, kernelVersion: '150.0.7871.186' });
-  const hostArgs = fingerprintChromiumArgs(hostFp, hostProfile, { kernelVersion: '150.0.7871.186' });
+  const hostFp = buildFingerprint({ ...hostProfile, kernelVersion: '148.0.7778.215' });
+  const hostArgs = fingerprintChromiumArgs(hostFp, hostProfile, { kernelVersion: '148.0.7778.215' });
   const disabled = hostArgs.find((arg) => arg.startsWith('--disable-spoofing='));
   assert.ok(disabled && ['font', 'audio', 'canvas', 'clientrects', 'gpu'].every((key) => disabled.includes(key)));
   console.log('  PASS  real-device modes disable corresponding native spoofing');
@@ -74,7 +82,7 @@ async function main() {
   const nativeProfile = {
     id: 'native-persona-windows',
     os: 'Windows',
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36',
     language: 'en-US',
     privacy: {
       matchHostOs: false,
@@ -90,13 +98,13 @@ async function main() {
       fingerprint: { chromeMajor: 157 },
     },
     nativeKernelFingerprint: true,
-    kernelVersion: '150.0.7871.186',
+    kernelVersion: '148.0.7778.215',
   };
   const nativeFp = buildFingerprint(nativeProfile);
   assert.strictEqual(nativeFp.consistencyMode, 'native-kernel');
   assert.strictEqual(nativeFp.nativeKernelFingerprint, true);
-  assert.ok(nativeFp.userAgent.includes('Chrome/150.0.0.0'));
-  assert.strictEqual(nativeFp.userAgentMetadata.uaFullVersion, '150.0.7871.186');
+  assert.ok(nativeFp.userAgent.includes('Chrome/148.0.0.0'));
+  assert.strictEqual(nativeFp.userAgentMetadata.uaFullVersion, '148.0.7778.215');
   assert.strictEqual(nativeFp.userAgentMetadata.bitness, '64');
   assert.ok(nativeFp.userAgentMetadata.fullVersionList.every((item) => /^\d+\.\d+\.\d+\.\d+$/.test(item.version)));
   assert.strictEqual(buildInjectionScript(nativeFp), '');

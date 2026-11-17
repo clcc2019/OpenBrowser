@@ -10,12 +10,13 @@ const HOST_PROFILE_OS = (() => {
 })();
 const DEFAULT_PROFILE_OS = HOST_PROFILE_OS;
 const DEFAULT_PERSONA_OS = HOST_PROFILE_OS;
-const DEFAULT_CHROME_MAJOR = 150;
-const DEFAULT_CHROME_FULL_VERSION = `${DEFAULT_CHROME_MAJOR}.0.0.0`;
+const DEFAULT_CHROME_MAJOR = HOST_PROFILE_OS === 'Linux' ? 150 : 148;
+const DEFAULT_CHROME_FULL_VERSION = HOST_PROFILE_OS === 'Linux' ? '150.0.7871.186' : '148.0.7778.215';
+const DEFAULT_CHROME_UA_VERSION = `${DEFAULT_CHROME_MAJOR}.0.0.0`;
 const PROFILE_OS_MIGRATION_KEY = 'openbrowser-profile-os-migration-v2';
-const PROFILE_CHROME_MIGRATION_KEY = 'openbrowser-profile-chrome-major-v2';
+const PROFILE_CHROME_MIGRATION_KEY = `openbrowser-profile-chrome-major-v3-${DEFAULT_CHROME_FULL_VERSION}`;
 const PROFILE_DEVICE_ISOLATION_MIGRATION_KEY = 'openbrowser-profile-device-isolation-v1';
-const PROFILE_HOST_MODE_MIGRATION_KEY = 'openbrowser-profile-host-mode-v1';
+const PROFILE_HOST_MODE_MIGRATION_KEY = 'openbrowser-profile-host-mode-v3-isolated';
 const PROFILE_PLATFORM_FINGERPRINT_FIELDS = [
   'userAgent', 'os', 'platform', 'architecture', 'platformVersion', 'platform_version',
   'clientHints', 'uaFullVersion', 'ua_full_version', 'fullVersion', 'bitness', 'mobile', 'wow64', 'model',
@@ -675,9 +676,8 @@ function updateChromeBrandVersions(value, version) {
     : item);
 }
 
-function updateClientHintsForChromeMajor(value, major = DEFAULT_CHROME_MAJOR) {
+function updateClientHintsForChromeMajor(value, major = DEFAULT_CHROME_MAJOR, full = DEFAULT_CHROME_FULL_VERSION) {
   const hints = value && typeof value === 'object' ? { ...value } : {};
-  const full = `${major}.0.0.0`;
   hints.chromeMajor = major;
   hints.ua_full_version = full;
   hints.uaFullVersion = full;
@@ -693,15 +693,25 @@ function migrateProfileToKernelChromeVersion(profile) {
   const fingerprint = { ...(privacy.fingerprint || {}) };
   const sourceUa = String(fingerprint.userAgent || normalized.userAgent || '').trim();
   const userAgent = /Chrome\/\d+/i.test(sourceUa)
-    ? sourceUa.replace(/(Chrome\/)\d+(?:\.\d+)*/i, `$1${DEFAULT_CHROME_FULL_VERSION}`)
+    ? sourceUa.replace(/(Chrome\/)\d+(?:\.\d+)*/i, `$1${DEFAULT_CHROME_UA_VERSION}`)
     : defaultUserAgentForProfile(normalized);
   fingerprint.chromeMajor = DEFAULT_CHROME_MAJOR;
   fingerprint.userAgent = userAgent;
   fingerprint.ua_full_version = DEFAULT_CHROME_FULL_VERSION;
-  fingerprint.clientHints = updateClientHintsForChromeMajor(fingerprint.clientHints, DEFAULT_CHROME_MAJOR);
+  fingerprint.uaFullVersion = DEFAULT_CHROME_FULL_VERSION;
+  fingerprint.fullVersion = DEFAULT_CHROME_FULL_VERSION;
+  fingerprint.clientHints = updateClientHintsForChromeMajor(fingerprint.clientHints);
+  if (privacy.clientHints && typeof privacy.clientHints === 'object') {
+    privacy.clientHints = updateClientHintsForChromeMajor(privacy.clientHints);
+  }
+  const proxyMeta = normalized.proxyMeta && typeof normalized.proxyMeta === 'object'
+    ? { ...normalized.proxyMeta }
+    : normalized.proxyMeta;
+  if (proxyMeta?.tlsChromeMajor != null) proxyMeta.tlsChromeMajor = DEFAULT_CHROME_MAJOR;
   return {
     ...normalized,
     userAgent,
+    proxyMeta,
     privacy: { ...privacy, fingerprint },
   };
 }
@@ -5481,16 +5491,50 @@ function updateEngineBadge(info) {
 async function initialize() {
   let migrateHostMode = true;
   try { migrateHostMode = localStorage.getItem(PROFILE_HOST_MODE_MIGRATION_KEY) !== '1'; } catch (_) {}
-  const useHostMode = (profile) => ({
-    ...profile,
-    privacy: {
-      ...(profile.privacy || {}), matchHostOs: true, deviceProfile: 'default',
-      canvas: 'real', webgl: 'real', webglMeta: 'real', webgpu: 'real',
-      audio: 'real', clientRects: 'real', media: 'real', mediaDevices: 'real',
-      battery: 'real', speech: 'real', deviceNameMode: 'real', webrtc: 'proxy',
-    },
-  });
+  const chromeMigrationPending = profileChromeMigrationPending();
+  const migrateChromeVersion = chromeMigrationPending || migrateHostMode;
+  const useHostMode = (profile) => {
+    const normalized = normalizeProfileSettings(profile);
+    const privacy = { ...(normalized.privacy || {}) };
+    delete privacy.clientHints;
+    const fingerprint = { ...(privacy.fingerprint || {}) };
+    for (const field of PROFILE_PLATFORM_FINGERPRINT_FIELDS) delete fingerprint[field];
+    for (const field of ['webglVendor', 'webglRenderer', 'webgl', 'webgpu', 'gpuVendor', 'gpuArchitecture', 'vendor', 'chromeMajor']) {
+      delete fingerprint[field];
+    }
+    fingerprint.seed = String(fingerprint.seed || normalized.fingerprintSeed || normalized.id || '').trim();
+    fingerprint.cores = null;
+    fingerprint.memory = null;
+    fingerprint.webglMeta = 'noise';
+    fingerprint.webgpu = 'blocked';
+    return {
+      ...normalized,
+      os: DEFAULT_PROFILE_OS,
+      userAgent: '',
+      privacy: {
+        ...privacy,
+        matchHostOs: true,
+        deviceProfile: 'persona',
+        personaVersion: 5,
+        canvas: 'noise',
+        webgl: 'noise',
+        webglMeta: 'noise',
+        webgpu: 'blocked',
+        audio: 'noise',
+        clientRects: 'noise',
+        media: 'noise',
+        mediaDevices: 'noise',
+        battery: 'noise',
+        speech: 'noise',
+        deviceNameMode: 'noise',
+        cores: null,
+        memory: null,
+        fingerprint,
+      },
+    };
+  };
   if (migrateHostMode) ui.profiles = ui.profiles.map(useHostMode);
+  if (migrateChromeVersion) ui.profiles = migrateProfilesToKernelChromeVersion(ui.profiles);
   refreshLocaleChrome();
   const info = await window.ops.getInfo();
   const appVersion = document.getElementById('app-version');
@@ -5553,6 +5597,7 @@ async function initialize() {
   if (migrateHostMode) ui.profiles = ui.profiles.map(useHostMode);
   save();
   engineProfiles = await window.ops.syncProfiles(ui.profiles);
+  if (migrateChromeVersion) markProfileChromeMigrationComplete();
   if (migrateHostMode) {
     try { localStorage.setItem(PROFILE_HOST_MODE_MIGRATION_KEY, '1'); } catch (_) {}
   }

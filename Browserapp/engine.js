@@ -32,7 +32,8 @@ const { fpLog, summarizeFp, LIVE_PROBE_EXPRESSION, logPath: fingerprintLogPath }
 
 const KERNEL_POLICY_VERSION = 4;
 const PROFILE_ISOLATION_VERSION = 1;
-const PROFILE_HOST_MODE_VERSION = 1;
+const PROFILE_HOST_MODE_VERSION = 3;
+const PROFILE_CHROME_VERSION_MIGRATION = FINGERPRINT_CHROMIUM_VERSION;
 const MAX_PROFILE_PROXY_LENGTH = 64 * 1024;
 
 function chromeVersionParts(value) {
@@ -54,9 +55,16 @@ function alignProfileChromeVersion(profile, kernelVersion) {
   const reduced = `${major}.0.0.0`;
   const privacy = { ...(profile.privacy || {}) };
   const fingerprint = { ...(privacy.fingerprint || {}) };
-  const updateUa = (value) => String(value || '').replace(/(Chrome\/)\d+(?:\.\d+)*/i, `$1${reduced}`);
-  const userAgent = updateUa(profile.userAgent);
-  const fpUserAgent = updateUa(fingerprint.userAgent);
+  const profileUa = String(profile.userAgent || '').trim();
+  const fingerprintUa = String(fingerprint.userAgent || '').trim();
+  const updateUa = (value) => value.replace(/(Chrome\/)\d+(?:\.\d+)*/i, `$1${reduced}`);
+  const os = String(profile.os || '').toLowerCase();
+  const uaToken = /windows/.test(os)
+    ? 'Windows NT 10.0; Win64; x64'
+    : (/linux/.test(os) ? 'X11; Linux x86_64' : 'Macintosh; Intel Mac OS X 10_15_7');
+  const fallbackUa = `Mozilla/5.0 (${uaToken}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${reduced} Safari/537.36`;
+  const userAgent = updateUa(profileUa || fingerprintUa) || fallbackUa;
+  const fpUserAgent = updateUa(fingerprintUa || profileUa) || fallbackUa;
   const updateHints = (value) => {
     const hints = value && typeof value === 'object' ? { ...value } : {};
     hints.chromeMajor = major;
@@ -91,6 +99,42 @@ function alignProfileChromeVersion(profile, kernelVersion) {
     || JSON.stringify(privacy.clientHints) !== JSON.stringify(profile.privacy?.clientHints)
     || (proxyMeta && proxyMeta.tlsChromeMajor !== profile.proxyMeta?.tlsChromeMajor);
   return { profile: { ...profile, userAgent, privacy, proxyMeta }, changed };
+}
+
+function alignProfileHostIsolation(profile) {
+  const privacy = { ...(profile.privacy || {}) };
+  delete privacy.clientHints;
+  const fingerprint = { ...(privacy.fingerprint || {}) };
+  for (const field of [
+    'os', 'platform', 'architecture', 'platformVersion', 'platform_version',
+    'userAgent', 'webglVendor', 'webglRenderer', 'webgl', 'webgpu',
+    'gpuVendor', 'gpuArchitecture', 'vendor', 'chromeMajor', 'clientHints',
+  ]) delete fingerprint[field];
+  fingerprint.seed = String(fingerprint.seed || profile.fingerprintSeed || profile.id || '').trim();
+  fingerprint.cores = null;
+  fingerprint.memory = null;
+  fingerprint.webglMeta = 'noise';
+  fingerprint.webgpu = 'blocked';
+  Object.assign(privacy, {
+    matchHostOs: true,
+    deviceProfile: 'persona',
+    personaVersion: 5,
+    canvas: 'noise',
+    webgl: 'noise',
+    webglMeta: 'noise',
+    webgpu: 'blocked',
+    audio: 'noise',
+    clientRects: 'noise',
+    media: 'noise',
+    mediaDevices: 'noise',
+    speech: 'noise',
+    battery: 'noise',
+    deviceNameMode: 'noise',
+    cores: null,
+    memory: null,
+    fingerprint,
+  });
+  return { ...profile, os: hostProfileOsLabel(), userAgent: '', privacy };
 }
 
 function isolatedProfileOs(profile) {
@@ -679,13 +723,19 @@ class BrowserEngine {
           } catch (_) {}
         }
       }
-      // Existing profile identities are persistent. Kernel versions are aligned
-      // at launch; loading state must not rewrite saved OS, UA, or graphics.
+      // Profile identities stay persistent except for explicit, versioned migrations.
       if (Number(saved.profileHostModeVersion) !== PROFILE_HOST_MODE_VERSION) {
         for (const [profileId, profile] of this.profiles) {
-          this.profiles.set(profileId, { ...profile, privacy: { ...profile.privacy, matchHostOs: true } });
+          this.profiles.set(profileId, alignProfileHostIsolation(profile));
         }
         migrateHostMode = true;
+      }
+      if (migrateHostMode || saved.profileChromeVersionMigration !== PROFILE_CHROME_VERSION_MIGRATION) {
+        for (const [profileId, profile] of this.profiles) {
+          const aligned = alignProfileChromeVersion(profile, PROFILE_CHROME_VERSION_MIGRATION);
+          this.profiles.set(profileId, aligned.profile);
+        }
+        migrateChromeVersion = true;
       }
       if (typeof saved.preferIndependentKernel === 'boolean') this.preferIndependentKernel = saved.preferIndependentKernel;
       if (saved.kernelPolicyVersion !== KERNEL_POLICY_VERSION) {
@@ -790,6 +840,7 @@ class BrowserEngine {
       kernelPolicyVersion: KERNEL_POLICY_VERSION,
       profileIsolationVersion: PROFILE_ISOLATION_VERSION,
       profileHostModeVersion: PROFILE_HOST_MODE_VERSION,
+      profileChromeVersionMigration: PROFILE_CHROME_VERSION_MIGRATION,
       preferIndependentKernel: this.preferIndependentKernel,
       allowSystemBrowserFallback: this.allowSystemBrowserFallback,
       systemBrowserPath: this.systemBrowserPath,
@@ -812,9 +863,14 @@ class BrowserEngine {
   }
 
   async ensureKernelBootstrap() {
-    if (this.kernelStatus().installed) return this.kernelStatus().kernel;
+    const status = this.kernelStatus();
+    const staleFingerprint = status.kernel?.source === SOURCE_FINGERPRINT_CHROMIUM
+      && status.kernel?.version !== FINGERPRINT_CHROMIUM_VERSION;
+    if (status.installed && !staleFingerprint) return status.kernel;
     if (!this.kernelBootstrapPromise) {
-      this.emit({ type: 'kernel-progress', phase: 'bootstrap', message: '首次启动：正在定位内置独立浏览器内核…' });
+      this.emit({ type: 'kernel-progress', phase: 'bootstrap', message: staleFingerprint
+        ? `正在切换到固定内核 Chrome ${FINGERPRINT_CHROMIUM_VERSION}…`
+        : '首次启动：正在定位内置独立浏览器内核…' });
       this.kernelBootstrapPromise = this.ensureIndependentKernel(false)
         .catch((error) => {
           this.emit({ type: 'kernel-error', message: '内置独立内核不可用：' + error.message });
@@ -1071,7 +1127,12 @@ class BrowserEngine {
     let assignmentsChanged = false;
     const incomingIds = new Set();
     for (const value of values) {
-      const sanitized = this.sanitizeProfile(value);
+      let sanitized = this.sanitizeProfile(value);
+      // Device-following profiles must always report the pinned kernel version,
+      // even when the renderer sends an older or intentionally blank UA cache.
+      if (sanitized.privacy?.matchHostOs !== false) {
+        sanitized = alignProfileChromeVersion(sanitized, FINGERPRINT_CHROMIUM_VERSION).profile;
+      }
       const previous = this.profiles.get(sanitized.id);
       let profile = sanitized;
       if (previous && sanitized.proxyId && previous.proxyId === sanitized.proxyId) {
@@ -2360,11 +2421,11 @@ class BrowserEngine {
       }
     }
     const timezone = resolveExitTimezone(profile, pageNetwork || {});
-    const profileForFingerprint = profile.privacy?.matchHostOs !== false
-      ? hostConsistentProfile(profile)
-      : profile;
     const nativeKernelFingerprint = browser?.source === SOURCE_FINGERPRINT_CHROMIUM
       && browser?.nativeFingerprint === true;
+    const profileForFingerprint = profile.privacy?.matchHostOs !== false
+      ? hostConsistentProfile(profile, { isolateSurfaces: nativeKernelFingerprint })
+      : profile;
     const fpForStart = (() => {
       try {
         return buildFingerprint({
@@ -3256,8 +3317,11 @@ class BrowserEngine {
     await this.persist();
     const extensions = this.assignedExtensions(profile.id);
     this.emitStartProgress(profile.id, 'kernel', 30, '正在准备浏览器内核…');
-    if (!this.kernelStatus().installed && this.preferIndependentKernel) {
-      // Resolve integrated seed only — never download a remote kernel at start time.
+    const kernelStatus = this.kernelStatus();
+    const staleFingerprint = kernelStatus.kernel?.source === SOURCE_FINGERPRINT_CHROMIUM
+      && kernelStatus.kernel?.version !== FINGERPRINT_CHROMIUM_VERSION;
+    if ((!kernelStatus.installed || staleFingerprint) && this.preferIndependentKernel) {
+      // Resolve the fixed native kernel, downloading it when the pinned version is missing.
       await this.ensureKernelBootstrap();
     }
     this.assertStartGenerationActive(profile.id, lifecycleGeneration);
@@ -3277,11 +3341,11 @@ class BrowserEngine {
     const restoreSession = profile.advanced.tabMode === 'restore' || profile.advanced.restoreSession;
     const pageNetwork = this.networkInfo.get(profile.id) || {};
     const allowSeedRefresh = profile.privacy.refreshFingerprintOnStart && profile.privacy.stabilityMode === 'off';
-    const profileForFingerprint = profile.privacy?.matchHostOs !== false
-      ? hostConsistentProfile(profile)
-      : profile;
     const nativeKernelFingerprint = browser.source === SOURCE_FINGERPRINT_CHROMIUM
       && browser.nativeFingerprint === true;
+    const profileForFingerprint = profile.privacy?.matchHostOs !== false
+      ? hostConsistentProfile(profile, { isolateSurfaces: nativeKernelFingerprint })
+      : profile;
     const fingerprint = buildFingerprint({
       ...profileForFingerprint,
       nativeKernelFingerprint,

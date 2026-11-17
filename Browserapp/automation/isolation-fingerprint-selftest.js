@@ -361,9 +361,9 @@ async function main() {
   assert.strictEqual(hostFp.speech.mode, 'real');
   assert.strictEqual(hostFp.speech.voices, null);
   assert.strictEqual(hostFp.uaProfile.chromeMajor, 157);
-  const nativeArgs = fingerprintChromiumArgs(hostFp, hostProfile, { kernelVersion: '150.0.7871.186', timezone: 'Asia/Singapore' });
+  const nativeArgs = fingerprintChromiumArgs(hostFp, hostProfile, { kernelVersion: '148.0.7778.215', timezone: 'Asia/Singapore' });
   assert.ok(nativeArgs.includes('--fingerprint-brand=Chrome'));
-  assert.ok(nativeArgs.includes('--fingerprint-brand-version=150.0.7871.186'));
+  assert.ok(nativeArgs.includes('--fingerprint-brand-version=148.0.7778.215'));
   assert.ok(nativeArgs.includes(`--fingerprint-platform=${process.platform === 'darwin' ? 'macos' : (process.platform === 'win32' ? 'windows' : 'linux')}`));
   assert.ok(nativeArgs.includes('--fingerprint-hardware-concurrency=' + require('os').cpus().length));
   assert.ok(nativeArgs.includes('--timezone=Asia/Singapore'));
