@@ -5,6 +5,7 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const os = require('os');
 const path = require('path');
+const http = require('http');
 const https = require('https');
 const { EventEmitter } = require('events');
 const { PassThrough } = require('stream');
@@ -31,6 +32,48 @@ const {
   PINNED_FINGERPRINT_CHROMIUM_RELEASE,
 } = require('./browser-kernel');
 const { BrowserEngine, systemBrowserCandidatesForPlatform } = require('../engine');
+const { proxyForUrl, requestUrl } = require('./http-proxy');
+
+const PROXY_ENV_KEYS = [
+  'OPENBROWSER_KERNEL_PROXY',
+  'HTTPS_PROXY', 'https_proxy',
+  'HTTP_PROXY', 'http_proxy',
+  'ALL_PROXY', 'all_proxy',
+  'NO_PROXY', 'no_proxy',
+];
+
+async function withoutProxyEnvironment(callback) {
+  const saved = new Map(PROXY_ENV_KEYS.map((key) => [key, process.env[key]]));
+  for (const key of PROXY_ENV_KEYS) delete process.env[key];
+  try {
+    return await callback();
+  } finally {
+    for (const [key, value] of saved) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+async function listen(server) {
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  return server.address().port;
+}
+
+async function closeServer(server) {
+  if (!server.listening) return;
+  await new Promise((resolve) => server.close(resolve));
+}
+
+async function responseBody(response) {
+  response.setEncoding('utf8');
+  let body = '';
+  for await (const chunk of response) body += chunk;
+  return body;
+}
 
 function cftBinary(root) {
   const platform = process.platform === 'darwin'
@@ -179,12 +222,73 @@ async function main() {
       return req;
     };
     try {
-      await downloadFile('https://download.wayfern.com/test/wayfern.zip', existingArchive);
+      await withoutProxyEnvironment(() => downloadFile('https://download.wayfern.com/test/wayfern.zip', existingArchive));
     } finally {
       https.get = originalGet;
     }
     assert.strictEqual(await fsp.readFile(existingArchive, 'utf8'), 'fresh bytes');
     console.log('  PASS  kernel download overwrites stale archive files');
+
+    const httpsTarget = new URL('https://download.wayfern.com/kernel.zip');
+    assert.strictEqual(proxyForUrl(httpsTarget, { HTTPS_PROXY: 'http://127.0.0.1:7890' }).port, '7890');
+    assert.strictEqual(proxyForUrl(httpsTarget, { https_proxy: '127.0.0.1:7891' }).hostname, '127.0.0.1');
+    assert.strictEqual(proxyForUrl(httpsTarget, { ALL_PROXY: 'http://127.0.0.1:7892' }).port, '7892');
+    assert.strictEqual(proxyForUrl(httpsTarget, {
+      OPENBROWSER_KERNEL_PROXY: 'http://127.0.0.1:7893',
+      HTTPS_PROXY: 'http://127.0.0.1:7894',
+    }).port, '7893');
+    assert.strictEqual(proxyForUrl(httpsTarget, {
+      HTTPS_PROXY: 'http://127.0.0.1:7890',
+      NO_PROXY: '.wayfern.com',
+    }), null);
+    assert.throws(
+      () => proxyForUrl(httpsTarget, { HTTPS_PROXY: 'socks5://127.0.0.1:7890' }),
+      /must be an HTTP or HTTPS forward proxy/,
+    );
+    console.log('  PASS  kernel proxy environment precedence and NO_PROXY');
+
+    const proxySeen = [];
+    const httpProxy = http.createServer((req, res) => {
+      proxySeen.push({ url: req.url, authorization: req.headers['proxy-authorization'] });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': '16' });
+      res.end('{"proxied":true}');
+    });
+    const httpProxyPort = await listen(httpProxy);
+    try {
+      const response = await requestUrl('http://download.wayfern.com/proxy-test.json', {
+        env: { HTTP_PROXY: `http://kernel:secret@127.0.0.1:${httpProxyPort}` },
+        timeout: 2000,
+      });
+      assert.strictEqual(response.statusCode, 200);
+      assert.strictEqual(await responseBody(response), '{"proxied":true}');
+      assert.strictEqual(proxySeen[0].url, 'http://download.wayfern.com/proxy-test.json');
+      assert.strictEqual(proxySeen[0].authorization, 'Basic ' + Buffer.from('kernel:secret').toString('base64'));
+    } finally {
+      await closeServer(httpProxy);
+    }
+    console.log('  PASS  HTTP download requests use the configured proxy');
+
+    let connectSeen = null;
+    const connectProxy = http.createServer();
+    connectProxy.on('connect', (req, socket) => {
+      connectSeen = { authority: req.url, authorization: req.headers['proxy-authorization'] };
+      socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    });
+    const connectProxyPort = await listen(connectProxy);
+    try {
+      await assert.rejects(
+        requestUrl('https://download.wayfern.com/kernel.zip', {
+          env: { HTTPS_PROXY: `http://tunnel:pass@127.0.0.1:${connectProxyPort}` },
+          timeout: 2000,
+        }),
+        /Proxy CONNECT failed.*502/,
+      );
+      assert.strictEqual(connectSeen.authority, 'download.wayfern.com:443');
+      assert.strictEqual(connectSeen.authorization, 'Basic ' + Buffer.from('tunnel:pass').toString('base64'));
+    } finally {
+      await closeServer(connectProxy);
+    }
+    console.log('  PASS  HTTPS downloads use authenticated CONNECT tunnels');
 
     if (process.platform !== 'win32') {
       const link = path.join(root, 'kernels', 'chrome-for-testing', 'linked-chrome');

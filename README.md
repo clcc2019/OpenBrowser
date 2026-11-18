@@ -103,6 +103,26 @@ Choose an independent Chromium executable under **Local settings**. OpenBrowser 
 
 Keep the custom kernel version aligned with the runtime. Mixing an older native kernel with a newer Chrome Stable version creates avoidable feature and Client Hints inconsistencies.
 
+### Kernel download proxy
+
+The in-app **Download / update fingerprint kernel** action and `npm run prepare:linux-kernel` support HTTP/HTTPS forward proxies. Set the proxy before starting the application:
+
+```bash
+export OPENBROWSER_KERNEL_PROXY=http://127.0.0.1:7890
+# Generic variables are also supported, falling back in HTTPS_PROXY > ALL_PROXY > HTTP_PROXY order
+export HTTPS_PROXY=http://127.0.0.1:7890
+npm start
+```
+
+Windows PowerShell:
+
+```powershell
+$env:OPENBROWSER_KERNEL_PROXY = 'http://127.0.0.1:7890'
+.\start-test.cmd
+```
+
+Authentication can be embedded in the proxy URL, for example `http://user:password@127.0.0.1:7890`; URL-encode special characters in the username or password. Use `NO_PROXY` / `no_proxy` to exclude hosts. Only HTTP/HTTPS forward proxies are supported; `socks5://` URLs are not. Restart OpenBrowser after changing the environment. A packaged app started from the desktop does not inherit variables exported in another terminal session.
+
 ## Packaging
 
 ```bash

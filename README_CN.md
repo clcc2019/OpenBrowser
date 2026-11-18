@@ -105,6 +105,26 @@ npm start
 
 自定义内核的版本需要与实际二进制一致。较高版本的 Google Chrome Stable 与较旧原生内核混用会产生版本、特性或 Client Hints 差异。
 
+### 内核下载代理
+
+应用内「下载 / 更新指纹内核」以及 `npm run prepare:linux-kernel` 支持 HTTP/HTTPS 正向代理。启动应用前设置环境变量：
+
+```bash
+export OPENBROWSER_KERNEL_PROXY=http://127.0.0.1:7890
+# 也可使用通用变量，应用会按 HTTPS_PROXY > ALL_PROXY > HTTP_PROXY 回退
+export HTTPS_PROXY=http://127.0.0.1:7890
+npm start
+```
+
+Windows PowerShell：
+
+```powershell
+$env:OPENBROWSER_KERNEL_PROXY = 'http://127.0.0.1:7890'
+.\start-test.cmd
+```
+
+代理需要认证时可直接写入 URL，例如 `http://user:password@127.0.0.1:7890`；用户名或密码中的特殊字符需要 URL 编码。`NO_PROXY` / `no_proxy` 可用于排除域名。当前只支持 HTTP/HTTPS 正向代理，不支持 `socks5://` 地址。修改环境变量后需要重启 OpenBrowser；从桌面图标启动的打包应用不会继承其他终端会话中的 `export`。
+
 ## 打包
 
 ```bash

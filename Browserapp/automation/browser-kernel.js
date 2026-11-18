@@ -13,13 +13,13 @@ const fsp = require('fs/promises');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const https = require('https');
 const http = require('http');
 const { execFile, spawn } = require('child_process');
 const { createWriteStream } = require('fs');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
 const { isSystemBrowserExecutable } = require('./isolation');
+const { requestUrl } = require('./http-proxy');
 const cdp = require('../cdp');
 const {
   CURRENT_VERSION: FINGERPRINT_CHROMIUM_VERSION,
@@ -567,108 +567,125 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function fetchJson(url, redirects = 0) {
-  if (redirects > MAX_REDIRECTS) return Promise.reject(new Error('Kernel metadata redirected too many times'));
+async function fetchJson(url, redirects = 0) {
+  if (redirects > MAX_REDIRECTS) throw new Error('Kernel metadata redirected too many times');
   const parsed = trustedKernelUrl(url);
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (handler, value) => {
-      if (settled) return;
-      settled = true;
-      handler(value);
-    };
-    const req = https.get(parsed, { headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' }, timeout: 30000 }, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        res.resume();
-        return fetchJson(new URL(res.headers.location, parsed).toString(), redirects + 1)
-          .then((value) => finish(resolve, value), (error) => finish(reject, error));
-      }
-      if (res.statusCode !== 200) {
-        res.resume();
-        return finish(reject, new Error('HTTP ' + res.statusCode + ' for ' + url));
-      }
-      const chunks = []; let size = 0;
-      res.on('data', (c) => {
-        if (settled) return;
-        size += c.length;
-        if (size > MAX_META_BYTES) {
-          const error = new Error('Kernel metadata exceeds 2 MiB');
-          finish(reject, error);
-          res.destroy(error);
-          req.destroy(error);
-        } else {
-          chunks.push(c);
-        }
-      });
-      res.on('error', (error) => finish(reject, error));
-      res.on('end', () => {
-        if (settled) return;
-        try { finish(resolve, JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-        catch (e) { finish(reject, e); }
-      });
-    });
-    req.on('timeout', () => req.destroy(new Error('Kernel metadata request timed out')));
-    req.on('error', (error) => finish(reject, error));
+  const res = await requestUrl(parsed, {
+    headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' },
+    timeout: 30000,
   });
-}
-
-function downloadFile(url, dest, onProgress) {
+  if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+    res.resume();
+    return fetchJson(new URL(res.headers.location, parsed).toString(), redirects + 1);
+  }
+  if (res.statusCode !== 200) {
+    res.resume();
+    throw new Error('HTTP ' + res.statusCode + ' for ' + url);
+  }
+  const total = Number(res.headers['content-length']) || 0;
+  if (total > MAX_META_BYTES) {
+    res.destroy();
+    throw new Error('Kernel metadata exceeds 2 MiB');
+  }
   return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
     let settled = false;
-    let activeOutput = null;
-    const succeed = (value) => {
-      if (settled) return;
-      settled = true;
-      resolve(value);
-    };
     const fail = (error) => {
       if (settled) return;
       settled = true;
-      if (activeOutput && !activeOutput.destroyed) activeOutput.destroy();
-      fsp.rm(dest, { force: true }).catch(() => {}).finally(() => reject(error));
+      res.destroy();
+      reject(error);
     };
-    const doGet = (value, redirects = 0) => {
+    res.on('data', (chunk) => {
       if (settled) return;
-      if (redirects > MAX_REDIRECTS) return fail(new Error('Kernel download redirected too many times'));
-      let parsed;
-      try { parsed = trustedKernelUrl(value); } catch (error) { return fail(error); }
-      const req = https.get(parsed, { headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' }, timeout: 60000 }, (res) => {
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          res.resume();
-          return doGet(new URL(res.headers.location, parsed).toString(), redirects + 1);
-        }
-        if (res.statusCode !== 200) {
-          res.resume();
-          return fail(new Error('Download HTTP ' + res.statusCode));
-        }
-        const total = Number(res.headers['content-length']) || 0;
-        if (total > MAX_KERNEL_BYTES) { res.resume(); return fail(new Error('Kernel archive exceeds 2 GiB')); }
-        let received = 0;
-        try { fs.rmSync(dest, { force: true }); } catch (_) {}
+      size += chunk.length;
+      if (size > MAX_META_BYTES) {
+        fail(new Error('Kernel metadata exceeds 2 MiB'));
+      } else {
+        chunks.push(chunk);
+      }
+    });
+    res.once('error', fail);
+    res.once('end', () => {
+      if (settled) return;
+      settled = true;
+      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
+      catch (error) { reject(error); }
+    });
+  });
+}
+
+async function downloadFile(url, dest, onProgress) {
+  let activeOutput = null;
+  try {
+    let currentUrl = url;
+    for (let redirects = 0; ; redirects += 1) {
+      if (redirects > MAX_REDIRECTS) throw new Error('Kernel download redirected too many times');
+      const parsed = trustedKernelUrl(currentUrl);
+      const res = await requestUrl(parsed, {
+        headers: { 'User-Agent': 'OpenBrowser/1.0 (kernel)' },
+        timeout: 60000,
+      });
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        currentUrl = new URL(res.headers.location, parsed).toString();
+        continue;
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        throw new Error('Download HTTP ' + res.statusCode);
+      }
+      const total = Number(res.headers['content-length']) || 0;
+      if (total > MAX_KERNEL_BYTES) {
+        res.resume();
+        throw new Error('Kernel archive exceeds 2 GiB');
+      }
+      try { fs.rmSync(dest, { force: true }); } catch (_) {}
+      let received = 0;
+      await new Promise((resolve, reject) => {
+        let settled = false;
         const out = createWriteStream(dest, { flags: 'w', mode: 0o600 });
         activeOutput = out;
+        const fail = (error) => {
+          if (settled) return;
+          settled = true;
+          if (!out.destroyed) out.destroy();
+          res.destroy();
+          reject(error);
+        };
         res.on('data', (chunk) => {
           if (settled) return;
           received += chunk.length;
           if (received > MAX_KERNEL_BYTES) {
-            const error = new Error('Kernel archive exceeds 2 GiB');
-            res.destroy(error);
-            req.destroy(error);
-            fail(error);
+            fail(new Error('Kernel archive exceeds 2 GiB'));
             return;
           }
-          if (onProgress && total) onProgress({ received, total, percent: Math.floor((received / total) * 100) });
+          if (onProgress && total) {
+            try { onProgress({ received, total, percent: Math.floor((received / total) * 100) }); }
+            catch (error) { fail(error); }
+          }
+        });
+        out.once('error', fail);
+        res.once('error', fail);
+        out.once('finish', () => {
+          if (settled) return;
+          out.close(() => {
+            if (settled) return;
+            settled = true;
+            activeOutput = null;
+            resolve();
+          });
         });
         res.pipe(out);
-        out.on('finish', () => out.close(() => succeed({ path: dest, bytes: received })));
-        out.on('error', fail);
-        res.on('error', fail);
       });
-      req.on('timeout', () => req.destroy(new Error('Kernel download timed out')));
-      req.on('error', fail);
-    };
-    doGet(url);
-  });
+      return { path: dest, bytes: received };
+    }
+  } catch (error) {
+    if (activeOutput && !activeOutput.destroyed) activeOutput.destroy();
+    await fsp.rm(dest, { force: true }).catch(() => {});
+    throw error;
+  }
 }
 
 function requestJson(url, timeout = 5000) {

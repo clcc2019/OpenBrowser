@@ -6,7 +6,7 @@
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
-const { spawn, execFileSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const {
   CHROME_STABLE_PACKAGES,
   downloadFile,
@@ -22,24 +22,6 @@ function assertLinuxX64() {
   if (process.platform !== 'linux' || process.arch !== 'x64') {
     throw new Error(`Linux kernel preparation requires linux/x64, got ${process.platform}/${process.arch}`);
   }
-}
-
-function configuredProxy() {
-  return String(process.env.https_proxy || process.env.HTTPS_PROXY || '').trim();
-}
-
-function downloadWithConfiguredProxy(url, destination, proxy) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('curl', [
-      '--fail', '--location', '--retry', '3', '--connect-timeout', '30', '--silent', '--show-error',
-      '--proxy', proxy, '--output', destination, url,
-    ], { stdio: 'inherit' });
-    child.on('error', (error) => reject(new Error(`Unable to start curl for proxy download: ${error.message}`)));
-    child.on('exit', (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new Error(`Proxy kernel download failed (exit=${code == null ? signal : code})`));
-    });
-  });
 }
 
 function packageVersion(archive) {
@@ -77,9 +59,7 @@ async function main() {
   const stage = path.join(kernelsRoot, `.chrome-stable-stage-${process.pid}`);
   try {
     console.log('[kernel] downloading Google Chrome Stable for linux-x64');
-    const proxy = configuredProxy();
-    if (proxy) await downloadWithConfiguredProxy(packageInfo.url, archive, proxy);
-    else await downloadFile(packageInfo.url, archive, ({ percent }) => console.log(`[kernel] download ${percent}%`));
+    await downloadFile(packageInfo.url, archive, ({ percent }) => console.log(`[kernel] download ${percent}%`));
 
     await fsp.mkdir(extracted, { recursive: true });
     await extractDeb(archive, extracted);
